@@ -1,6 +1,6 @@
 # Personal API (V1)
 
-Link to Lanyared api (JSON) : https://api.lanyard.rest/v1/users/118623730934087681
+Link to Lanyared api (JSON) : https://api.lanyard.rest/v1/users/{DISCORD_USER_ID}
 
 Private personal API built for Cloudflare Workers + D1.
 
@@ -30,6 +30,13 @@ All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 - `GET /v1/wakatime/hourly`
 - `POST /v1/wakatime/hourly/refresh`
 - `POST /v1/wakatime/hourly/backfill`
+- `GET /v1/github`
+- `POST /v1/github/refresh`
+- `POST /v1/github/backfill`
+- `GET /v1/wrapped/day`
+- `GET /v1/wrapped/week`
+- `GET /v1/wrapped/month`
+- `GET /v1/wrapped/2026`
 
 ## Data model
 
@@ -56,12 +63,15 @@ The API stores JSON fields as `*_json` text columns in D1.
    - `npx wrangler secret put WAKATIME_API_KEY`
 7) Set WakaTime timezone (optional, for hourly data):
    - `npx wrangler secret put WAKATIME_TIMEZONE`
-8) Deploy:
+8) Set GitHub username/token (optional, for wrapped stats):
+   - `npx wrangler secret put GITHUB_USERNAME`
+   - `npx wrangler secret put GITHUB_TOKEN`
+9) Deploy:
    - `npx wrangler deploy`
 
 ### Cron (optional)
 
-`wrangler.toml` includes a cron trigger to refresh status snapshots every 5 minutes and WakaTime daily/hourly.
+`wrangler.toml` includes a cron trigger to refresh status snapshots every 5 minutes and WakaTime daily/hourly. It also sets `API_VERSION`, returned by `/health`.
 
 ### Local dev (optional)
 

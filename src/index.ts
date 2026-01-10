@@ -6,6 +6,9 @@ export interface Env {
   LANYARD_USER_ID: string;
   WAKATIME_API_KEY: string;
   WAKATIME_TIMEZONE: string;
+  GITHUB_USERNAME: string;
+  GITHUB_TOKEN: string;
+  API_VERSION: string;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -585,6 +588,220 @@ async function refreshWakaTimeHourly(
   }
 }
 
+async function refreshGitHub(
+  env: Env,
+  start: string,
+  end: string
+): Promise<void> {
+  if (!env.GITHUB_USERNAME || !env.GITHUB_TOKEN) {
+    throw new Error("GITHUB_USERNAME or GITHUB_TOKEN not configured");
+  }
+
+  const query = `
+    query($username: String!, $from: DateTime!, $to: DateTime!) {
+      user(login: $username) {
+        contributionsCollection(from: $from, to: $to) {
+          contributionCalendar {
+            weeks {
+              contributionDays {
+                date
+                contributionCount
+              }
+            }
+          }
+          commitContributionsByRepository {
+            contributions {
+              totalCount
+            }
+            repository {
+              nameWithOwner
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const response = await fetch("https://api.github.com/graphql", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${env.GITHUB_TOKEN}`,
+      "content-type": "application/json",
+      "user-agent": "personal-api",
+    },
+    body: JSON.stringify({
+      query,
+      variables: {
+        username: env.GITHUB_USERNAME,
+        from: `${start}T00:00:00Z`,
+        to: `${end}T23:59:59Z`,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`GitHub request failed with ${response.status}`);
+  }
+
+  const payload = (await response.json()) as {
+    data?: {
+      user?: {
+        contributionsCollection?: {
+          contributionCalendar?: {
+            weeks?: Array<{
+              contributionDays?: Array<{
+                date?: string;
+                contributionCount?: number;
+              }>;
+            }>;
+          };
+          commitContributionsByRepository?: Array<{
+            contributions?: { totalCount?: number };
+            repository?: { nameWithOwner?: string };
+          }>;
+        };
+      };
+    };
+    errors?: Array<{ message?: string }>;
+  };
+
+  if (payload.errors && payload.errors.length > 0) {
+    const message = payload.errors
+      .map((error) => error.message)
+      .filter(Boolean)
+      .join(", ");
+    throw new Error(message || "GitHub GraphQL error");
+  }
+
+  const collection = payload.data?.user?.contributionsCollection;
+  const calendar = collection?.contributionCalendar;
+  const weeks = calendar?.weeks ?? [];
+  const createdAt = nowIso();
+
+  for (const week of weeks) {
+    const days = week.contributionDays ?? [];
+    for (const day of days) {
+      if (!day.date) {
+        continue;
+      }
+      await env.DB.prepare(
+        `INSERT INTO github_daily (date, count, created_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(date) DO UPDATE SET
+           count = excluded.count,
+           created_at = excluded.created_at`
+      )
+        .bind(day.date, day.contributionCount ?? 0, createdAt)
+        .run();
+    }
+  }
+
+  await env.DB.prepare(
+    "DELETE FROM github_repo_totals WHERE range_start = ? AND range_end = ?"
+  )
+    .bind(start, end)
+    .run();
+
+  const repos = collection?.commitContributionsByRepository ?? [];
+  for (const repo of repos) {
+    const name = repo.repository?.nameWithOwner;
+    if (!name) {
+      continue;
+    }
+    const count = repo.contributions?.totalCount ?? 0;
+    await env.DB.prepare(
+      `INSERT INTO github_repo_totals (range_start, range_end, repo, count)
+       VALUES (?, ?, ?, ?)`
+    )
+      .bind(start, end, name, count)
+      .run();
+  }
+}
+
+async function buildWrapped(
+  env: Env,
+  start: string,
+  end: string
+): Promise<JsonRecord> {
+  const [
+    codingTotal,
+    codingDaily,
+    topLanguages,
+    topProjects,
+    topEditors,
+    githubTotal,
+    githubDaily,
+    githubRepos,
+  ] = await Promise.all([
+    env.DB.prepare(
+      "SELECT SUM(total_seconds) AS total_seconds FROM wakatime_days WHERE date BETWEEN ? AND ?"
+    )
+      .bind(start, end)
+      .all(),
+    env.DB.prepare(
+      "SELECT date, total_seconds, total_minutes FROM wakatime_days WHERE date BETWEEN ? AND ? ORDER BY date ASC"
+    )
+      .bind(start, end)
+      .all(),
+    env.DB.prepare(
+      "SELECT name, SUM(total_seconds) AS total_seconds FROM wakatime_languages WHERE date BETWEEN ? AND ? GROUP BY name ORDER BY total_seconds DESC LIMIT 10"
+    )
+      .bind(start, end)
+      .all(),
+    env.DB.prepare(
+      "SELECT name, SUM(total_seconds) AS total_seconds FROM wakatime_projects WHERE date BETWEEN ? AND ? GROUP BY name ORDER BY total_seconds DESC LIMIT 10"
+    )
+      .bind(start, end)
+      .all(),
+    env.DB.prepare(
+      "SELECT name, SUM(total_seconds) AS total_seconds FROM wakatime_editors WHERE date BETWEEN ? AND ? GROUP BY name ORDER BY total_seconds DESC LIMIT 10"
+    )
+      .bind(start, end)
+      .all(),
+    env.DB.prepare(
+      "SELECT SUM(count) AS total_count FROM github_daily WHERE date BETWEEN ? AND ?"
+    )
+      .bind(start, end)
+      .all(),
+    env.DB.prepare(
+      "SELECT date, count FROM github_daily WHERE date BETWEEN ? AND ? ORDER BY date ASC"
+    )
+      .bind(start, end)
+      .all(),
+    env.DB.prepare(
+      "SELECT repo, count FROM github_repo_totals WHERE range_start = ? AND range_end = ? ORDER BY count DESC LIMIT 10"
+    )
+      .bind(start, end)
+      .all(),
+  ]);
+
+  const codingTotalSeconds =
+    codingTotal.results && codingTotal.results[0]
+      ? Number((codingTotal.results[0] as JsonRecord).total_seconds ?? 0)
+      : 0;
+
+  const githubTotalCount =
+    githubTotal.results && githubTotal.results[0]
+      ? Number((githubTotal.results[0] as JsonRecord).total_count ?? 0)
+      : 0;
+
+  return {
+    range: { start, end },
+    coding: {
+      total_seconds: codingTotalSeconds,
+      daily: codingDaily.results ?? [],
+      top_languages: topLanguages.results ?? [],
+      top_projects: topProjects.results ?? [],
+      top_editors: topEditors.results ?? [],
+    },
+    github: {
+      total_contributions: githubTotalCount,
+      daily: githubDaily.results ?? [],
+      top_repos: githubRepos.results ?? [],
+    },
+  };
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -596,7 +813,11 @@ export default {
         return authError;
       }
 
-      return jsonResponse({ status: "ok", timestamp: nowIso() });
+      return jsonResponse({
+        status: "ok",
+        version: env.API_VERSION ?? "unknown",
+        timestamp: nowIso(),
+      });
     }
 
     if (pathname === "/") {
@@ -1341,6 +1562,114 @@ export default {
       }
     }
 
+    if (pathname === "/v1/github") {
+      if (request.method === "GET") {
+        const startParam = url.searchParams.get("start");
+        const endParam = url.searchParams.get("end");
+        const end = endParam ?? dateOnly(new Date());
+        const start =
+          startParam ?? dateOnly(addDays(new Date(`${end}T00:00:00Z`), -29));
+
+        const [daily, repos] = await Promise.all([
+          env.DB.prepare(
+            "SELECT * FROM github_daily WHERE date BETWEEN ? AND ? ORDER BY date ASC"
+          )
+            .bind(start, end)
+            .all(),
+          env.DB.prepare(
+            "SELECT * FROM github_repo_totals WHERE range_start = ? AND range_end = ? ORDER BY count DESC"
+          )
+            .bind(start, end)
+            .all(),
+        ]);
+
+        return jsonResponse({
+          start,
+          end,
+          daily: daily.results ?? [],
+          repos: repos.results ?? [],
+        });
+      }
+
+      return errorResponse("Method not allowed", 405);
+    }
+
+    if (pathname === "/v1/github/refresh" && request.method === "POST") {
+      try {
+        const end = dateOnly(new Date());
+        const start = dateOnly(addDays(new Date(`${end}T00:00:00Z`), -29));
+        await refreshGitHub(env, start, end);
+        await markRefreshed(env, "github_refresh");
+        return jsonResponse({ ok: true, start, end }, 201);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "GitHub refresh failed";
+        return errorResponse(message, 502);
+      }
+    }
+
+    if (pathname === "/v1/github/backfill" && request.method === "POST") {
+      const body = await parseJson(request);
+      if (body === null) {
+        return errorResponse("Invalid JSON", 400);
+      }
+
+      const validation = validateBody(backfillSchema, body);
+      if (!validation.ok) {
+        return validation.response;
+      }
+
+      const { start, end } = validation.data;
+      if (start > end) {
+        return errorResponse("Start date must be before end date", 400);
+      }
+
+      if (daysBetween(start, end) > 370) {
+        return errorResponse("Backfill range too large", 400);
+      }
+
+      try {
+        await refreshGitHub(env, start, end);
+        await markRefreshed(env, "github_refresh");
+        return jsonResponse({ ok: true, start, end }, 201);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "GitHub backfill failed";
+        return errorResponse(message, 502);
+      }
+    }
+
+    if (pathname.startsWith("/v1/wrapped")) {
+      if (request.method !== "GET") {
+        return errorResponse("Method not allowed", 405);
+      }
+
+      const today = dateOnly(new Date());
+      if (pathname === "/v1/wrapped/day") {
+        const start = today;
+        const end = today;
+        return jsonResponse(await buildWrapped(env, start, end));
+      }
+
+      if (pathname === "/v1/wrapped/week") {
+        const end = today;
+        const start = dateOnly(addDays(new Date(`${end}T00:00:00Z`), -6));
+        return jsonResponse(await buildWrapped(env, start, end));
+      }
+
+      if (pathname === "/v1/wrapped/month") {
+        const end = today;
+        const start = dateOnly(addDays(new Date(`${end}T00:00:00Z`), -29));
+        return jsonResponse(await buildWrapped(env, start, end));
+      }
+
+      if (pathname === "/v1/wrapped/2026") {
+        return jsonResponse(await buildWrapped(env, "2026-01-01", "2026-12-31"));
+      }
+
+      return errorResponse("Not found", 404);
+    }
+
     if (pathname === "/v1/wakatime/backfill" && request.method === "POST") {
       const body = await parseJson(request);
       if (body === null) {
@@ -1429,6 +1758,8 @@ export default {
         wakaProjects,
         wakaEditors,
         wakaHourly,
+        githubDaily,
+        githubRepos,
       ] = await Promise.all([
         env.DB.prepare("SELECT * FROM profile WHERE id = 1").all(),
         env.DB.prepare("SELECT * FROM now_state WHERE id = 1").all(),
@@ -1458,6 +1789,10 @@ export default {
         ).all(),
         env.DB.prepare(
           "SELECT * FROM wakatime_hourly ORDER BY date ASC, hour ASC"
+        ).all(),
+        env.DB.prepare("SELECT * FROM github_daily ORDER BY date ASC").all(),
+        env.DB.prepare(
+          "SELECT * FROM github_repo_totals ORDER BY range_start ASC, count DESC"
         ).all(),
       ]);
 
@@ -1502,6 +1837,10 @@ export default {
           hourly: (wakaHourly.results ?? []).map((row) =>
             normalizeWakaTimeHourly(row as JsonRecord)
           ),
+        },
+        github: {
+          daily: githubDaily.results ?? [],
+          repos: githubRepos.results ?? [],
         },
       });
     }
@@ -1580,6 +1919,23 @@ export default {
         await refreshWakaTimeHourly(env, start, today);
         await markRefreshed(env, "wakatime_hourly");
       }
+    } catch {
+      return;
+    }
+
+    try {
+      if (!env.GITHUB_TOKEN || !env.GITHUB_USERNAME) {
+        return;
+      }
+
+      if (!(await shouldRefresh(env, "github_refresh", 1440))) {
+        return;
+      }
+
+      const end = dateOnly(new Date());
+      const start = dateOnly(addDays(new Date(`${end}T00:00:00Z`), -29));
+      await refreshGitHub(env, start, end);
+      await markRefreshed(env, "github_refresh");
     } catch {
       return;
     }
