@@ -7,7 +7,9 @@
     "dev": "wrangler dev src/index.ts",
     "deploy": "wrangler deploy src/index.ts"
   },
-  "dependencies": {},
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240208.0",
     "typescript": "^5.4.5",

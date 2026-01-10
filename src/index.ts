@@ -1,9 +1,63 @@
+import { z } from "zod";
+
 export interface Env {
   DB: D1Database;
   API_TOKEN: string;
 }
 
 type JsonRecord = Record<string, unknown>;
+
+type ValidationResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; response: Response };
+
+const dateString = z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
+  message: "Invalid date",
+});
+
+const profileSchema = z.object({
+  name: z.string().min(1).optional(),
+  bio: z.string().optional(),
+  handles: z.record(z.unknown()).optional(),
+  contact: z.record(z.unknown()).optional(),
+  timezone: z.string().optional(),
+  avatar_url: z.string().url().optional(),
+  location: z.string().optional(),
+});
+
+const nowSchema = z.object({
+  focus: z.string().optional(),
+  status: z.string().optional(),
+  availability: z.string().optional(),
+  mood: z.string().optional(),
+  current_song: z.string().optional(),
+});
+
+const settingsSchema = z.object({
+  public_fields: z.array(z.string()).optional(),
+  theme: z.string().optional(),
+  flags: z.record(z.unknown()).optional(),
+});
+
+const projectSchema = z.object({
+  title: z.string().min(1),
+  description: z.string().optional(),
+  links: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional(),
+  status: z.string().optional(),
+});
+
+const noteSchema = z.object({
+  title: z.string().optional(),
+  body: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+});
+
+const eventSchema = z.object({
+  type: z.string().min(1),
+  payload: z.record(z.unknown()).optional(),
+  occurred_at: dateString.optional(),
+});
 
 function jsonResponse(data: JsonRecord | JsonRecord[], status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -14,7 +68,10 @@ function jsonResponse(data: JsonRecord | JsonRecord[], status = 200): Response {
   });
 }
 
-function errorResponse(message: string, status: number): Response {
+function errorResponse(message: string, status: number, details?: unknown): Response {
+  if (details) {
+    return jsonResponse({ error: message, details }, status);
+  }
   return jsonResponse({ error: message }, status);
 }
 
@@ -36,17 +93,27 @@ async function requireAuth(request: Request, env: Env): Promise<Response | null>
   return null;
 }
 
-async function parseJson(request: Request): Promise<JsonRecord | null> {
+async function parseJson(request: Request): Promise<unknown | null> {
   try {
-    const body = await request.json();
-    if (body && typeof body === "object") {
-      return body as JsonRecord;
-    }
+    return await request.json();
   } catch {
     return null;
   }
+}
 
-  return null;
+function validateBody<T extends z.ZodTypeAny>(
+  schema: T,
+  body: unknown
+): ValidationResult<z.infer<T>> {
+  const result = schema.safeParse(body);
+  if (!result.success) {
+    return {
+      ok: false,
+      response: errorResponse("Validation error", 400, result.error.flatten()),
+    };
+  }
+
+  return { ok: true, data: result.data };
 }
 
 function nowIso(): string {
@@ -58,6 +125,63 @@ function mapJsonField(value: unknown): string | null {
     return null;
   }
   return JSON.stringify(value);
+}
+
+function parseStoredJson(value: unknown): unknown | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeProfile(row: JsonRecord): JsonRecord {
+  const { handles_json, contact_json, ...rest } = row;
+  return {
+    ...rest,
+    handles: parseStoredJson(handles_json),
+    contact: parseStoredJson(contact_json),
+  };
+}
+
+function normalizeSettings(row: JsonRecord): JsonRecord {
+  const { public_fields_json, flags_json, ...rest } = row;
+  return {
+    ...rest,
+    public_fields: parseStoredJson(public_fields_json),
+    flags: parseStoredJson(flags_json),
+  };
+}
+
+function normalizeProject(row: JsonRecord): JsonRecord {
+  const { links_json, tags_json, ...rest } = row;
+  return {
+    ...rest,
+    links: parseStoredJson(links_json),
+    tags: parseStoredJson(tags_json),
+  };
+}
+
+function normalizeNote(row: JsonRecord): JsonRecord {
+  const { tags_json, ...rest } = row;
+  return {
+    ...rest,
+    tags: parseStoredJson(tags_json),
+  };
+}
+
+function normalizeEvent(row: JsonRecord): JsonRecord {
+  const { payload_json, ...rest } = row;
+  return {
+    ...rest,
+    payload: parseStoredJson(payload_json),
+  };
 }
 
 export default {
@@ -78,15 +202,21 @@ export default {
 
     if (pathname === "/v1/profile") {
       if (request.method === "GET") {
-        const row = await env.DB.prepare("SELECT * FROM profile WHERE id = 1")
-          .all();
-        return jsonResponse(row.results[0] ?? {});
+        const row = await env.DB.prepare("SELECT * FROM profile WHERE id = 1").all();
+        return jsonResponse(
+          row.results[0] ? normalizeProfile(row.results[0] as JsonRecord) : {}
+        );
       }
 
       if (request.method === "PUT") {
         const body = await parseJson(request);
-        if (!body) {
+        if (body === null) {
           return errorResponse("Invalid JSON", 400);
+        }
+
+        const validation = validateBody(profileSchema, body);
+        if (!validation.ok) {
+          return validation.response;
         }
 
         const updatedAt = nowIso();
@@ -104,13 +234,13 @@ export default {
              updated_at = excluded.updated_at`
         )
           .bind(
-            body.name ?? null,
-            body.bio ?? null,
-            mapJsonField(body.handles),
-            mapJsonField(body.contact),
-            body.timezone ?? null,
-            body.avatar_url ?? null,
-            body.location ?? null,
+            validation.data.name ?? null,
+            validation.data.bio ?? null,
+            mapJsonField(validation.data.handles),
+            mapJsonField(validation.data.contact),
+            validation.data.timezone ?? null,
+            validation.data.avatar_url ?? null,
+            validation.data.location ?? null,
             updatedAt
           )
           .run();
@@ -123,15 +253,19 @@ export default {
 
     if (pathname === "/v1/now") {
       if (request.method === "GET") {
-        const row = await env.DB.prepare("SELECT * FROM now_state WHERE id = 1")
-          .all();
+        const row = await env.DB.prepare("SELECT * FROM now_state WHERE id = 1").all();
         return jsonResponse(row.results[0] ?? {});
       }
 
       if (request.method === "PUT") {
         const body = await parseJson(request);
-        if (!body) {
+        if (body === null) {
           return errorResponse("Invalid JSON", 400);
+        }
+
+        const validation = validateBody(nowSchema, body);
+        if (!validation.ok) {
+          return validation.response;
         }
 
         const updatedAt = nowIso();
@@ -147,11 +281,11 @@ export default {
              updated_at = excluded.updated_at`
         )
           .bind(
-            body.focus ?? null,
-            body.status ?? null,
-            body.availability ?? null,
-            body.mood ?? null,
-            body.current_song ?? null,
+            validation.data.focus ?? null,
+            validation.data.status ?? null,
+            validation.data.availability ?? null,
+            validation.data.mood ?? null,
+            validation.data.current_song ?? null,
             updatedAt
           )
           .run();
@@ -164,15 +298,21 @@ export default {
 
     if (pathname === "/v1/settings") {
       if (request.method === "GET") {
-        const row = await env.DB.prepare("SELECT * FROM settings WHERE id = 1")
-          .all();
-        return jsonResponse(row.results[0] ?? {});
+        const row = await env.DB.prepare("SELECT * FROM settings WHERE id = 1").all();
+        return jsonResponse(
+          row.results[0] ? normalizeSettings(row.results[0] as JsonRecord) : {}
+        );
       }
 
       if (request.method === "PUT") {
         const body = await parseJson(request);
-        if (!body) {
+        if (body === null) {
           return errorResponse("Invalid JSON", 400);
+        }
+
+        const validation = validateBody(settingsSchema, body);
+        if (!validation.ok) {
+          return validation.response;
         }
 
         const updatedAt = nowIso();
@@ -186,9 +326,9 @@ export default {
              updated_at = excluded.updated_at`
         )
           .bind(
-            mapJsonField(body.public_fields),
-            body.theme ?? null,
-            mapJsonField(body.flags),
+            mapJsonField(validation.data.public_fields),
+            validation.data.theme ?? null,
+            mapJsonField(validation.data.flags),
             updatedAt
           )
           .run();
@@ -204,13 +344,21 @@ export default {
         const rows = await env.DB.prepare(
           "SELECT * FROM projects ORDER BY created_at DESC"
         ).all();
-        return jsonResponse(rows.results ?? []);
+        const results = (rows.results ?? []).map((row) =>
+          normalizeProject(row as JsonRecord)
+        );
+        return jsonResponse(results);
       }
 
       if (request.method === "POST") {
         const body = await parseJson(request);
-        if (!body) {
+        if (body === null) {
           return errorResponse("Invalid JSON", 400);
+        }
+
+        const validation = validateBody(projectSchema, body);
+        if (!validation.ok) {
+          return validation.response;
         }
 
         const createdAt = nowIso();
@@ -219,11 +367,11 @@ export default {
            VALUES (?, ?, ?, ?, ?, ?, ?)`
         )
           .bind(
-            body.title ?? null,
-            body.description ?? null,
-            mapJsonField(body.links),
-            mapJsonField(body.tags),
-            body.status ?? null,
+            validation.data.title,
+            validation.data.description ?? null,
+            mapJsonField(validation.data.links),
+            mapJsonField(validation.data.tags),
+            validation.data.status ?? null,
             createdAt,
             createdAt
           )
@@ -240,13 +388,21 @@ export default {
         const rows = await env.DB.prepare(
           "SELECT * FROM notes ORDER BY created_at DESC"
         ).all();
-        return jsonResponse(rows.results ?? []);
+        const results = (rows.results ?? []).map((row) =>
+          normalizeNote(row as JsonRecord)
+        );
+        return jsonResponse(results);
       }
 
       if (request.method === "POST") {
         const body = await parseJson(request);
-        if (!body) {
+        if (body === null) {
           return errorResponse("Invalid JSON", 400);
+        }
+
+        const validation = validateBody(noteSchema, body);
+        if (!validation.ok) {
+          return validation.response;
         }
 
         const createdAt = nowIso();
@@ -255,9 +411,9 @@ export default {
            VALUES (?, ?, ?, ?)`
         )
           .bind(
-            body.title ?? null,
-            body.body ?? null,
-            mapJsonField(body.tags),
+            validation.data.title ?? null,
+            validation.data.body ?? null,
+            mapJsonField(validation.data.tags),
             createdAt
           )
           .run();
@@ -273,23 +429,31 @@ export default {
         const rows = await env.DB.prepare(
           "SELECT * FROM events ORDER BY occurred_at DESC"
         ).all();
-        return jsonResponse(rows.results ?? []);
+        const results = (rows.results ?? []).map((row) =>
+          normalizeEvent(row as JsonRecord)
+        );
+        return jsonResponse(results);
       }
 
       if (request.method === "POST") {
         const body = await parseJson(request);
-        if (!body) {
+        if (body === null) {
           return errorResponse("Invalid JSON", 400);
         }
 
-        const occurredAt = body.occurred_at ?? nowIso();
+        const validation = validateBody(eventSchema, body);
+        if (!validation.ok) {
+          return validation.response;
+        }
+
+        const occurredAt = validation.data.occurred_at ?? nowIso();
         await env.DB.prepare(
           `INSERT INTO events (type, payload_json, occurred_at)
            VALUES (?, ?, ?)`
         )
           .bind(
-            body.type ?? null,
-            mapJsonField(body.payload),
+            validation.data.type,
+            mapJsonField(validation.data.payload),
             occurredAt
           )
           .run();
@@ -311,12 +475,20 @@ export default {
       ]);
 
       return jsonResponse({
-        profile: profile.results[0] ?? {},
+        profile: profile.results[0]
+          ? normalizeProfile(profile.results[0] as JsonRecord)
+          : {},
         now: nowState.results[0] ?? {},
-        settings: settings.results[0] ?? {},
-        projects: projects.results ?? [],
-        notes: notes.results ?? [],
-        events: events.results ?? [],
+        settings: settings.results[0]
+          ? normalizeSettings(settings.results[0] as JsonRecord)
+          : {},
+        projects: (projects.results ?? []).map((row) =>
+          normalizeProject(row as JsonRecord)
+        ),
+        notes: (notes.results ?? []).map((row) => normalizeNote(row as JsonRecord)),
+        events: (events.results ?? []).map((row) =>
+          normalizeEvent(row as JsonRecord)
+        ),
       });
     }
 
