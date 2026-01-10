@@ -1,5 +1,7 @@
 # Personal API (V1)
 
+Link to Lanyared api (JSON) : https://api.lanyard.rest/v1/users/118623730934087681
+
 Private personal API built for Cloudflare Workers + D1.
 
 ## V1 endpoints
