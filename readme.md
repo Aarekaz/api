@@ -22,6 +22,12 @@ All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 - `GET /v1/events`
 - `POST /v1/events`
 - `GET /v1/export`
+- `GET /v1/status`
+- `POST /v1/status/refresh`
+- `GET /v1/wakatime`
+- `POST /v1/wakatime/refresh`
+- `GET /v1/wakatime/hourly`
+- `POST /v1/wakatime/hourly/refresh`
 
 ## Data model
 
@@ -42,8 +48,18 @@ The API stores JSON fields as `*_json` text columns in D1.
    - `npx wrangler d1 migrations apply personal_api --remote`
 4) Set secrets:
    - `npx wrangler secret put API_TOKEN`
-5) Deploy:
+5) Set Lanyard user id (optional, for status snapshots):
+   - `npx wrangler secret put LANYARD_USER_ID`
+6) Set WakaTime API key (optional, for activity snapshots):
+   - `npx wrangler secret put WAKATIME_API_KEY`
+7) Set WakaTime timezone (optional, for hourly data):
+   - `npx wrangler secret put WAKATIME_TIMEZONE`
+8) Deploy:
    - `npx wrangler deploy`
+
+### Cron (optional)
+
+`wrangler.toml` includes a cron trigger to refresh status snapshots every 5 minutes and WakaTime daily/hourly.
 
 ### Local dev (optional)
 
