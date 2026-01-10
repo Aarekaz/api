@@ -1737,6 +1737,109 @@ export default {
       }
     }
 
+    if (pathname === "/v1/refresh" && request.method === "POST") {
+      const results: JsonRecord = {};
+      const today = dateOnly(new Date());
+      const lastWeek = dateOnly(addDays(new Date(`${today}T00:00:00Z`), -6));
+      const lastMonth = dateOnly(addDays(new Date(`${today}T00:00:00Z`), -29));
+
+      if (env.LANYARD_USER_ID) {
+        try {
+          const response = await fetch(
+            `https://api.lanyard.rest/v1/users/${env.LANYARD_USER_ID}`
+          );
+          if (!response.ok) {
+            throw new Error(`Lanyard request failed with ${response.status}`);
+          }
+
+          const payload = (await response.json()) as {
+            data?: {
+              discord_status?: string;
+              activities?: unknown[];
+              spotify?: unknown;
+            };
+          };
+
+          const data = payload.data ?? {};
+          const activity = Array.isArray(data.activities) ? data.activities[0] : null;
+          const createdAt = nowIso();
+
+          await env.DB.prepare(
+            `INSERT INTO status_snapshots (discord_status, activity_json, spotify_json, payload_json, created_at)
+             VALUES (?, ?, ?, ?, ?)`
+          )
+            .bind(
+              data.discord_status ?? null,
+              mapJsonField(activity),
+              mapJsonField(data.spotify ?? null),
+              mapJsonField(payload),
+              createdAt
+            )
+            .run();
+
+          results.status = { ok: true, created_at: createdAt };
+        } catch (error) {
+          results.status = {
+            ok: false,
+            error: error instanceof Error ? error.message : "Status refresh failed",
+          };
+        }
+      } else {
+        results.status = { ok: false, error: "LANYARD_USER_ID not configured" };
+      }
+
+      if (env.WAKATIME_API_KEY) {
+        try {
+          await refreshWakaTime(env, lastWeek, today);
+          await markRefreshed(env, "wakatime_daily");
+          results.wakatime = { ok: true, start: lastWeek, end: today };
+        } catch (error) {
+          results.wakatime = {
+            ok: false,
+            error: error instanceof Error ? error.message : "WakaTime refresh failed",
+          };
+        }
+
+        try {
+          await refreshWakaTimeHourly(env, lastWeek, today);
+          await markRefreshed(env, "wakatime_hourly");
+          results.wakatime_hourly = { ok: true, start: lastWeek, end: today };
+        } catch (error) {
+          results.wakatime_hourly = {
+            ok: false,
+            error:
+              error instanceof Error ? error.message : "WakaTime hourly refresh failed",
+          };
+        }
+      } else {
+        results.wakatime = { ok: false, error: "WAKATIME_API_KEY not configured" };
+        results.wakatime_hourly = {
+          ok: false,
+          error: "WAKATIME_API_KEY not configured",
+        };
+      }
+
+      if (env.GITHUB_USERNAME && env.GITHUB_TOKEN) {
+        try {
+          await refreshGitHub(env, lastMonth, today);
+          await markRefreshed(env, "github_refresh");
+          results.github = { ok: true, start: lastMonth, end: today };
+        } catch (error) {
+          results.github = {
+            ok: false,
+            error: error instanceof Error ? error.message : "GitHub refresh failed",
+          };
+        }
+      } else {
+        results.github = {
+          ok: false,
+          error: "GITHUB_USERNAME or GITHUB_TOKEN not configured",
+        };
+      }
+
+      return jsonResponse(results);
+    }
+
     if (pathname === "/v1/export" && request.method === "GET") {
       const [
         profile,

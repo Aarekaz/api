@@ -1,7 +1,5 @@
 # Personal API (V1)
 
-Link to Lanyared api (JSON) : https://api.lanyard.rest/v1/users/{DISCORD_USER_ID}
-
 Private personal API built for Cloudflare Workers + D1.
 
 ## V1 endpoints
@@ -33,6 +31,7 @@ All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 - `GET /v1/github`
 - `POST /v1/github/refresh`
 - `POST /v1/github/backfill`
+- `POST /v1/refresh`
 - `GET /v1/wrapped/day`
 - `GET /v1/wrapped/week`
 - `GET /v1/wrapped/month`
@@ -42,7 +41,7 @@ All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 
 The API stores JSON fields as `*_json` text columns in D1.
 
-## Cloudflare setup (later)
+## Cloudflare setup
 
 ### Deploy guide (Workers + D1)
 
@@ -73,10 +72,11 @@ The API stores JSON fields as `*_json` text columns in D1.
 
 `wrangler.toml` includes a cron trigger to refresh status snapshots every 5 minutes and WakaTime daily/hourly. It also sets `API_VERSION`, returned by `/health`.
 
+Link to Lanyared api (JSON) : https://api.lanyard.rest/v1/users/{DISCORD_USER_ID}
+
 ### Local dev (optional)
 
 - `npx wrangler dev src/index.ts`
 
 ## Notes
 
-This repo still contains the old `main.py` FastAPI prototype; it can be removed once the new workers API is deployed.
