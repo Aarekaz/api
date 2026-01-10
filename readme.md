@@ -8,7 +8,7 @@ Private personal API built for Cloudflare Workers + D1.
 
 All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 
-- `GET /health`
+- `GET /health` (auth required)
 - `GET /v1/profile`
 - `PUT /v1/profile`
 - `GET /v1/now`
@@ -26,8 +26,10 @@ All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 - `POST /v1/status/refresh`
 - `GET /v1/wakatime`
 - `POST /v1/wakatime/refresh`
+- `POST /v1/wakatime/backfill`
 - `GET /v1/wakatime/hourly`
 - `POST /v1/wakatime/hourly/refresh`
+- `POST /v1/wakatime/hourly/backfill`
 
 ## Data model
 

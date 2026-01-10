@@ -62,6 +62,11 @@ const eventSchema = z.object({
   occurred_at: dateString.optional(),
 });
 
+const backfillSchema = z.object({
+  start: dateString,
+  end: dateString,
+});
+
 const postSchema = z.object({
   slug: z.string().min(1),
   title: z.string().min(1),
@@ -201,6 +206,15 @@ function addDays(value: Date, days: number): Date {
   const next = new Date(value);
   next.setUTCDate(next.getUTCDate() + days);
   return next;
+}
+
+function daysBetween(start: string, end: string): number {
+  const startDate = new Date(`${start}T00:00:00Z`).getTime();
+  const endDate = new Date(`${end}T00:00:00Z`).getTime();
+  if (Number.isNaN(startDate) || Number.isNaN(endDate)) {
+    return 0;
+  }
+  return Math.floor((endDate - startDate) / 86400000) + 1;
 }
 
 function hourInTimezone(timestampMs: number, timezone: string): number {
@@ -577,6 +591,11 @@ export default {
     const { pathname } = url;
 
     if (pathname === "/health") {
+      const authError = await requireAuth(request, env);
+      if (authError) {
+        return authError;
+      }
+
       return jsonResponse({ status: "ok", timestamp: nowIso() });
     }
 
@@ -1318,6 +1337,73 @@ export default {
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "WakaTime hourly refresh failed";
+        return errorResponse(message, 502);
+      }
+    }
+
+    if (pathname === "/v1/wakatime/backfill" && request.method === "POST") {
+      const body = await parseJson(request);
+      if (body === null) {
+        return errorResponse("Invalid JSON", 400);
+      }
+
+      const validation = validateBody(backfillSchema, body);
+      if (!validation.ok) {
+        return validation.response;
+      }
+
+      const { start, end } = validation.data;
+      if (start > end) {
+        return errorResponse("Start date must be before end date", 400);
+      }
+
+      if (daysBetween(start, end) > 370) {
+        return errorResponse("Backfill range too large", 400);
+      }
+
+      try {
+        await refreshWakaTime(env, start, end);
+        await markRefreshed(env, "wakatime_daily");
+        return jsonResponse({ ok: true, start, end }, 201);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "WakaTime backfill failed";
+        return errorResponse(message, 502);
+      }
+    }
+
+    if (
+      pathname === "/v1/wakatime/hourly/backfill" &&
+      request.method === "POST"
+    ) {
+      const body = await parseJson(request);
+      if (body === null) {
+        return errorResponse("Invalid JSON", 400);
+      }
+
+      const validation = validateBody(backfillSchema, body);
+      if (!validation.ok) {
+        return validation.response;
+      }
+
+      const { start, end } = validation.data;
+      if (start > end) {
+        return errorResponse("Start date must be before end date", 400);
+      }
+
+      if (daysBetween(start, end) > 90) {
+        return errorResponse("Hourly backfill range too large", 400);
+      }
+
+      try {
+        await refreshWakaTimeHourly(env, start, end);
+        await markRefreshed(env, "wakatime_hourly");
+        return jsonResponse({ ok: true, start, end }, 201);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "WakaTime hourly backfill failed";
         return errorResponse(message, 502);
       }
     }
