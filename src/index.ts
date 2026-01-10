@@ -59,6 +59,76 @@ const eventSchema = z.object({
   occurred_at: dateString.optional(),
 });
 
+const postSchema = z.object({
+  slug: z.string().min(1),
+  title: z.string().min(1),
+  summary: z.string().optional(),
+  content: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  published_at: dateString.optional(),
+  pinned: z.boolean().optional(),
+});
+
+const usesItemSchema = z.object({
+  category: z.string().min(1),
+  name: z.string().min(1),
+  url: z.string().url().optional(),
+  note: z.string().optional(),
+});
+
+const shelfItemSchema = z.object({
+  type: z.string().min(1),
+  title: z.string().optional(),
+  quote: z.string().optional(),
+  author: z.string().optional(),
+  source: z.string().optional(),
+  url: z.string().url().optional(),
+  note: z.string().optional(),
+  image_url: z.string().url().optional(),
+  drawer: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  date_added: dateString.optional(),
+});
+
+const experienceSchema = z.object({
+  company: z.string().min(1),
+  role: z.string().min(1),
+  location: z.string().optional(),
+  start_date: dateString.optional(),
+  end_date: dateString.optional(),
+  employment_type: z.string().optional(),
+  description: z.string().optional(),
+});
+
+const educationSchema = z.object({
+  institution: z.string().min(1),
+  degree: z.string().optional(),
+  field: z.string().optional(),
+  start_date: dateString.optional(),
+  end_date: dateString.optional(),
+  description: z.string().optional(),
+});
+
+const skillSchema = z.object({
+  category: z.string().min(1),
+  items: z.array(z.string()).optional(),
+});
+
+const photoSchema = z.object({
+  title: z.string().optional(),
+  description: z.string().optional(),
+  url: z.string().url(),
+  thumb_url: z.string().url().optional(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  shot_at: dateString.optional(),
+  camera: z.string().optional(),
+  lens: z.string().optional(),
+  settings: z.string().optional(),
+  location: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+});
+
 function jsonResponse(data: JsonRecord | JsonRecord[], status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -181,6 +251,39 @@ function normalizeEvent(row: JsonRecord): JsonRecord {
   return {
     ...rest,
     payload: parseStoredJson(payload_json),
+  };
+}
+
+function normalizePost(row: JsonRecord): JsonRecord {
+  const { tags_json, pinned, ...rest } = row;
+  return {
+    ...rest,
+    tags: parseStoredJson(tags_json),
+    pinned: Boolean(pinned),
+  };
+}
+
+function normalizeShelfItem(row: JsonRecord): JsonRecord {
+  const { tags_json, ...rest } = row;
+  return {
+    ...rest,
+    tags: parseStoredJson(tags_json),
+  };
+}
+
+function normalizeSkill(row: JsonRecord): JsonRecord {
+  const { items_json, ...rest } = row;
+  return {
+    ...rest,
+    items: parseStoredJson(items_json),
+  };
+}
+
+function normalizePhoto(row: JsonRecord): JsonRecord {
+  const { tags_json, ...rest } = row;
+  return {
+    ...rest,
+    tags: parseStoredJson(tags_json),
   };
 }
 
@@ -464,14 +567,336 @@ export default {
       return errorResponse("Method not allowed", 405);
     }
 
+    if (pathname === "/v1/posts") {
+      if (request.method === "GET") {
+        const rows = await env.DB.prepare(
+          "SELECT * FROM posts ORDER BY published_at DESC"
+        ).all();
+        const results = (rows.results ?? []).map((row) =>
+          normalizePost(row as JsonRecord)
+        );
+        return jsonResponse(results);
+      }
+
+      if (request.method === "POST") {
+        const body = await parseJson(request);
+        if (body === null) {
+          return errorResponse("Invalid JSON", 400);
+        }
+
+        const validation = validateBody(postSchema, body);
+        if (!validation.ok) {
+          return validation.response;
+        }
+
+        const updatedAt = nowIso();
+        await env.DB.prepare(
+          `INSERT INTO posts (slug, title, summary, content, tags_json, published_at, pinned, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+          .bind(
+            validation.data.slug,
+            validation.data.title,
+            validation.data.summary ?? null,
+            validation.data.content ?? null,
+            mapJsonField(validation.data.tags),
+            validation.data.published_at ?? null,
+            validation.data.pinned ? 1 : 0,
+            updatedAt
+          )
+          .run();
+
+        return jsonResponse({ ok: true, updated_at: updatedAt }, 201);
+      }
+
+      return errorResponse("Method not allowed", 405);
+    }
+
+    if (pathname === "/v1/uses") {
+      if (request.method === "GET") {
+        const rows = await env.DB.prepare(
+          "SELECT * FROM uses_items ORDER BY category, name"
+        ).all();
+        return jsonResponse(rows.results ?? []);
+      }
+
+      if (request.method === "POST") {
+        const body = await parseJson(request);
+        if (body === null) {
+          return errorResponse("Invalid JSON", 400);
+        }
+
+        const validation = validateBody(usesItemSchema, body);
+        if (!validation.ok) {
+          return validation.response;
+        }
+
+        const createdAt = nowIso();
+        await env.DB.prepare(
+          `INSERT INTO uses_items (category, name, url, note, created_at)
+           VALUES (?, ?, ?, ?, ?)`
+        )
+          .bind(
+            validation.data.category,
+            validation.data.name,
+            validation.data.url ?? null,
+            validation.data.note ?? null,
+            createdAt
+          )
+          .run();
+
+        return jsonResponse({ ok: true, created_at: createdAt }, 201);
+      }
+
+      return errorResponse("Method not allowed", 405);
+    }
+
+    if (pathname === "/v1/shelf") {
+      if (request.method === "GET") {
+        const rows = await env.DB.prepare(
+          "SELECT * FROM shelf_items ORDER BY date_added DESC"
+        ).all();
+        const results = (rows.results ?? []).map((row) =>
+          normalizeShelfItem(row as JsonRecord)
+        );
+        return jsonResponse(results);
+      }
+
+      if (request.method === "POST") {
+        const body = await parseJson(request);
+        if (body === null) {
+          return errorResponse("Invalid JSON", 400);
+        }
+
+        const validation = validateBody(shelfItemSchema, body);
+        if (!validation.ok) {
+          return validation.response;
+        }
+
+        const dateAdded = validation.data.date_added ?? nowIso();
+        await env.DB.prepare(
+          `INSERT INTO shelf_items (type, title, quote, author, source, url, note, image_url, drawer, tags_json, date_added)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+          .bind(
+            validation.data.type,
+            validation.data.title ?? null,
+            validation.data.quote ?? null,
+            validation.data.author ?? null,
+            validation.data.source ?? null,
+            validation.data.url ?? null,
+            validation.data.note ?? null,
+            validation.data.image_url ?? null,
+            validation.data.drawer ?? null,
+            mapJsonField(validation.data.tags),
+            dateAdded
+          )
+          .run();
+
+        return jsonResponse({ ok: true, date_added: dateAdded }, 201);
+      }
+
+      return errorResponse("Method not allowed", 405);
+    }
+
+    if (pathname === "/v1/experience") {
+      if (request.method === "GET") {
+        const rows = await env.DB.prepare(
+          "SELECT * FROM experience ORDER BY start_date DESC"
+        ).all();
+        return jsonResponse(rows.results ?? []);
+      }
+
+      if (request.method === "POST") {
+        const body = await parseJson(request);
+        if (body === null) {
+          return errorResponse("Invalid JSON", 400);
+        }
+
+        const validation = validateBody(experienceSchema, body);
+        if (!validation.ok) {
+          return validation.response;
+        }
+
+        await env.DB.prepare(
+          `INSERT INTO experience (company, role, location, start_date, end_date, employment_type, description)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+          .bind(
+            validation.data.company,
+            validation.data.role,
+            validation.data.location ?? null,
+            validation.data.start_date ?? null,
+            validation.data.end_date ?? null,
+            validation.data.employment_type ?? null,
+            validation.data.description ?? null
+          )
+          .run();
+
+        return jsonResponse({ ok: true }, 201);
+      }
+
+      return errorResponse("Method not allowed", 405);
+    }
+
+    if (pathname === "/v1/education") {
+      if (request.method === "GET") {
+        const rows = await env.DB.prepare(
+          "SELECT * FROM education ORDER BY start_date DESC"
+        ).all();
+        return jsonResponse(rows.results ?? []);
+      }
+
+      if (request.method === "POST") {
+        const body = await parseJson(request);
+        if (body === null) {
+          return errorResponse("Invalid JSON", 400);
+        }
+
+        const validation = validateBody(educationSchema, body);
+        if (!validation.ok) {
+          return validation.response;
+        }
+
+        await env.DB.prepare(
+          `INSERT INTO education (institution, degree, field, start_date, end_date, description)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+          .bind(
+            validation.data.institution,
+            validation.data.degree ?? null,
+            validation.data.field ?? null,
+            validation.data.start_date ?? null,
+            validation.data.end_date ?? null,
+            validation.data.description ?? null
+          )
+          .run();
+
+        return jsonResponse({ ok: true }, 201);
+      }
+
+      return errorResponse("Method not allowed", 405);
+    }
+
+    if (pathname === "/v1/skills") {
+      if (request.method === "GET") {
+        const rows = await env.DB.prepare(
+          "SELECT * FROM skills ORDER BY category"
+        ).all();
+        const results = (rows.results ?? []).map((row) =>
+          normalizeSkill(row as JsonRecord)
+        );
+        return jsonResponse(results);
+      }
+
+      if (request.method === "POST") {
+        const body = await parseJson(request);
+        if (body === null) {
+          return errorResponse("Invalid JSON", 400);
+        }
+
+        const validation = validateBody(skillSchema, body);
+        if (!validation.ok) {
+          return validation.response;
+        }
+
+        const updatedAt = nowIso();
+        await env.DB.prepare(
+          `INSERT INTO skills (category, items_json, updated_at)
+           VALUES (?, ?, ?)`
+        )
+          .bind(
+            validation.data.category,
+            mapJsonField(validation.data.items),
+            updatedAt
+          )
+          .run();
+
+        return jsonResponse({ ok: true, updated_at: updatedAt }, 201);
+      }
+
+      return errorResponse("Method not allowed", 405);
+    }
+
+    if (pathname === "/v1/photos") {
+      if (request.method === "GET") {
+        const rows = await env.DB.prepare(
+          "SELECT * FROM photos ORDER BY shot_at DESC, created_at DESC"
+        ).all();
+        const results = (rows.results ?? []).map((row) =>
+          normalizePhoto(row as JsonRecord)
+        );
+        return jsonResponse(results);
+      }
+
+      if (request.method === "POST") {
+        const body = await parseJson(request);
+        if (body === null) {
+          return errorResponse("Invalid JSON", 400);
+        }
+
+        const validation = validateBody(photoSchema, body);
+        if (!validation.ok) {
+          return validation.response;
+        }
+
+        const createdAt = nowIso();
+        await env.DB.prepare(
+          `INSERT INTO photos (title, description, url, thumb_url, width, height, shot_at, camera, lens, settings, location, tags_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+          .bind(
+            validation.data.title ?? null,
+            validation.data.description ?? null,
+            validation.data.url,
+            validation.data.thumb_url ?? null,
+            validation.data.width ?? null,
+            validation.data.height ?? null,
+            validation.data.shot_at ?? null,
+            validation.data.camera ?? null,
+            validation.data.lens ?? null,
+            validation.data.settings ?? null,
+            validation.data.location ?? null,
+            mapJsonField(validation.data.tags),
+            createdAt
+          )
+          .run();
+
+        return jsonResponse({ ok: true, created_at: createdAt }, 201);
+      }
+
+      return errorResponse("Method not allowed", 405);
+    }
+
     if (pathname === "/v1/export" && request.method === "GET") {
-      const [profile, nowState, settings, projects, notes, events] = await Promise.all([
+      const [
+        profile,
+        nowState,
+        settings,
+        projects,
+        notes,
+        events,
+        posts,
+        usesItems,
+        shelfItems,
+        experience,
+        education,
+        skills,
+        photos,
+      ] = await Promise.all([
         env.DB.prepare("SELECT * FROM profile WHERE id = 1").all(),
         env.DB.prepare("SELECT * FROM now_state WHERE id = 1").all(),
         env.DB.prepare("SELECT * FROM settings WHERE id = 1").all(),
         env.DB.prepare("SELECT * FROM projects ORDER BY created_at DESC").all(),
         env.DB.prepare("SELECT * FROM notes ORDER BY created_at DESC").all(),
         env.DB.prepare("SELECT * FROM events ORDER BY occurred_at DESC").all(),
+        env.DB.prepare("SELECT * FROM posts ORDER BY published_at DESC").all(),
+        env.DB.prepare("SELECT * FROM uses_items ORDER BY category, name").all(),
+        env.DB.prepare("SELECT * FROM shelf_items ORDER BY date_added DESC").all(),
+        env.DB.prepare("SELECT * FROM experience ORDER BY start_date DESC").all(),
+        env.DB.prepare("SELECT * FROM education ORDER BY start_date DESC").all(),
+        env.DB.prepare("SELECT * FROM skills ORDER BY category").all(),
+        env.DB.prepare("SELECT * FROM photos ORDER BY shot_at DESC, created_at DESC").all(),
       ]);
 
       return jsonResponse({
@@ -488,6 +913,21 @@ export default {
         notes: (notes.results ?? []).map((row) => normalizeNote(row as JsonRecord)),
         events: (events.results ?? []).map((row) =>
           normalizeEvent(row as JsonRecord)
+        ),
+        posts: (posts.results ?? []).map((row) =>
+          normalizePost(row as JsonRecord)
+        ),
+        uses: usesItems.results ?? [],
+        shelf: (shelfItems.results ?? []).map((row) =>
+          normalizeShelfItem(row as JsonRecord)
+        ),
+        experience: experience.results ?? [],
+        education: education.results ?? [],
+        skills: (skills.results ?? []).map((row) =>
+          normalizeSkill(row as JsonRecord)
+        ),
+        photos: (photos.results ?? []).map((row) =>
+          normalizePhoto(row as JsonRecord)
         ),
       });
     }

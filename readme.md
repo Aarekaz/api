@@ -27,9 +27,25 @@ The API stores JSON fields as `*_json` text columns in D1.
 
 ## Cloudflare setup (later)
 
-1) Create a D1 database and replace `database_id` in `wrangler.toml`.
-2) Apply migrations from `migrations/`.
-3) Set `API_TOKEN` as a secret.
+### Deploy guide (Workers + D1)
+
+1) Install Wrangler and login:
+   - `npm install`
+   - `npx wrangler login`
+2) Create a D1 database:
+   - `npx wrangler d1 create personal_api`
+   - Copy the `database_id` into `wrangler.toml`.
+3) Run migrations:
+   - `npx wrangler d1 migrations apply personal_api --local`
+   - `npx wrangler d1 migrations apply personal_api --remote`
+4) Set secrets:
+   - `npx wrangler secret put API_TOKEN`
+5) Deploy:
+   - `npx wrangler deploy`
+
+### Local dev (optional)
+
+- `npx wrangler dev src/index.ts`
 
 ## Notes
 
