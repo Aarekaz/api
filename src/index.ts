@@ -296,6 +296,16 @@ export default {
       return jsonResponse({ status: "ok", timestamp: nowIso() });
     }
 
+    if (pathname === "/") {
+      return jsonResponse({
+        title: "Personal API",
+        author: "Anurag Dhungana",
+        version: "v1",
+        status: "ok",
+        timestamp: nowIso(),
+      });
+    }
+
     if (pathname.startsWith("/v1")) {
       const authError = await requireAuth(request, env);
       if (authError) {
