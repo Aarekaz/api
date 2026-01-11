@@ -37,7 +37,7 @@ openApiRegistry.registerPath({
 // Route handlers
 app.get("/", async (c) => {
   const rows = await c.env.DB.prepare(
-    "SELECT * FROM uses ORDER BY category ASC, name ASC"
+    "SELECT * FROM uses_items ORDER BY category ASC, name ASC"
   ).all();
   return c.json(rows.results ?? []);
 });
@@ -55,7 +55,7 @@ app.post("/", async (c) => {
 
   const createdAt = nowIso();
   await c.env.DB.prepare(
-    `INSERT INTO uses (category, name, url, note, created_at)
+    `INSERT INTO uses_items (category, name, url, note, created_at)
      VALUES (?, ?, ?, ?, ?)`
   )
     .bind(

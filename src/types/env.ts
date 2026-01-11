@@ -9,4 +9,5 @@ export interface Env {
   GITHUB_TOKEN: string;
   API_VERSION: string;
   R2_PUBLIC_BASE_URL: string;
+  API_BASE_URL?: string;
 }

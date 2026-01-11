@@ -39,7 +39,7 @@ openApiRegistry.registerPath({
 // Route handlers
 app.get("/", async (c) => {
   const rows = await c.env.DB.prepare(
-    "SELECT * FROM shelf ORDER BY date_added DESC"
+    "SELECT * FROM shelf_items ORDER BY date_added DESC"
   ).all();
   const results = (rows.results ?? []).map((row) =>
     normalizeShelfItem(row as JsonRecord)
@@ -60,7 +60,7 @@ app.post("/", async (c) => {
 
   const dateAdded = validation.data.date_added ?? nowIso();
   await c.env.DB.prepare(
-    `INSERT INTO shelf (type, title, quote, author, source, url, note, image_url, drawer, tags_json, date_added)
+    `INSERT INTO shelf_items (type, title, quote, author, source, url, note, image_url, drawer, tags_json, date_added)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
