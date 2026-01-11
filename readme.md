@@ -10,6 +10,7 @@ Private personal API built for Cloudflare Workers + D1.
 
 All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 
+- `GET /openapi.json` (no auth)
 - `GET /health` (auth required)
 - `GET /v1/profile`
 - `PUT /v1/profile`
