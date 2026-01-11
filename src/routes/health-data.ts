@@ -229,39 +229,6 @@ app.post("/", async (c) => {
   return c.json({ ok: true, date: validation.data.date, updated_at: now }, 201);
 });
 
-// Get specific day
-app.get("/:date", async (c) => {
-  const date = c.req.param("date");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return c.json({ error: "Invalid date format" }, 400);
-  }
-
-  const row = await c.env.DB.prepare(
-    "SELECT * FROM apple_health_daily WHERE date = ?"
-  )
-    .bind(date)
-    .all();
-
-  if (!row.results || row.results.length === 0) {
-    return c.json({ error: "No data found for this date" }, 404);
-  }
-
-  return c.json(row.results[0] as JsonRecord);
-});
-
-// Delete specific day
-app.delete("/:date", async (c) => {
-  const date = c.req.param("date");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return c.json({ error: "Invalid date format" }, 400);
-  }
-
-  await c.env.DB.prepare("DELETE FROM apple_health_daily WHERE date = ?")
-    .bind(date)
-    .run();
-  return c.json({ ok: true, deleted: date });
-});
-
 // Heart rate samples
 app.get("/heart-rate", async (c) => {
   const startParam = c.req.query("start");
@@ -350,7 +317,7 @@ app.get("/sleep", async (c) => {
     startParam ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
   const rows = await c.env.DB.prepare(
-    "SELECT * FROM apple_health_sleep WHERE start_at BETWEEN ? AND ? ORDER BY start_at DESC"
+    "SELECT * FROM apple_health_sleep_sessions WHERE start_at BETWEEN ? AND ? ORDER BY start_at DESC"
   )
     .bind(start, end)
     .all();
@@ -376,7 +343,7 @@ app.post("/sleep", async (c) => {
 
   const now = nowIso();
   await c.env.DB.prepare(
-    `INSERT INTO apple_health_sleep (
+    `INSERT INTO apple_health_sleep_sessions (
       start_at, end_at, duration_minutes, deep_minutes, core_minutes,
       rem_minutes, awake_minutes, sleep_quality_score, respiratory_rate_avg,
       heart_rate_avg, hrv_avg, created_at
@@ -472,21 +439,22 @@ app.post("/workouts", async (c) => {
 
 // Summary
 app.get("/summary", async (c) => {
-  const latest = await c.env.DB.prepare(
-    "SELECT * FROM apple_health_daily ORDER BY date DESC LIMIT 1"
-  ).all();
+  const [latestDaily, recentSleepData, recentWorkoutsData] = await Promise.all([
+    c.env.DB.prepare(
+      "SELECT * FROM apple_health_daily ORDER BY date DESC LIMIT 7"
+    ).all(),
+    c.env.DB.prepare(
+      "SELECT * FROM apple_health_sleep_sessions ORDER BY start_at DESC LIMIT 7"
+    ).all(),
+    c.env.DB.prepare(
+      "SELECT * FROM apple_health_workouts ORDER BY start_at DESC LIMIT 10"
+    ).all(),
+  ]);
 
-  const dailyData = await c.env.DB.prepare(
-    "SELECT * FROM apple_health_daily WHERE date >= date('now', '-7 days') ORDER BY date DESC"
-  ).all();
-
-  const recentSleep = await c.env.DB.prepare(
-    "SELECT * FROM apple_health_sleep WHERE start_at >= datetime('now', '-7 days') ORDER BY start_at DESC LIMIT 10"
-  ).all();
-
-  const recentWorkouts = await c.env.DB.prepare(
-    "SELECT * FROM apple_health_workouts WHERE start_at >= datetime('now', '-7 days') ORDER BY start_at DESC LIMIT 10"
-  ).all();
+  const dailyData = latestDaily.results ?? [];
+  const latest = dailyData[0] as JsonRecord | undefined;
+  const recentSleep = recentSleepData;
+  const recentWorkouts = recentWorkoutsData;
 
   const avgSteps =
     dailyData.results && dailyData.results.length > 0
@@ -518,6 +486,39 @@ app.get("/summary", async (c) => {
     recent_sleep: recentSleep.results ?? [],
     recent_workouts: recentWorkouts.results ?? [],
   });
+});
+
+// Get specific day (must be after specific routes like /heart-rate, /sleep, etc.)
+app.get("/:date", async (c) => {
+  const date = c.req.param("date");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return c.json({ error: "Invalid date format" }, 400);
+  }
+
+  const row = await c.env.DB.prepare(
+    "SELECT * FROM apple_health_daily WHERE date = ?"
+  )
+    .bind(date)
+    .all();
+
+  if (!row.results || row.results.length === 0) {
+    return c.json({ error: "No data found for this date" }, 404);
+  }
+
+  return c.json(row.results[0] as JsonRecord);
+});
+
+// Delete specific day (must be after specific routes)
+app.delete("/:date", async (c) => {
+  const date = c.req.param("date");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return c.json({ error: "Invalid date format" }, 400);
+  }
+
+  await c.env.DB.prepare("DELETE FROM apple_health_daily WHERE date = ?")
+    .bind(date)
+    .run();
+  return c.json({ ok: true, deleted: date });
 });
 
 export default app;

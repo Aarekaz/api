@@ -27,6 +27,7 @@ import wrappedRoute from "./routes/wrapped";
 import refreshRoute from "./routes/refresh";
 import exportRoute from "./routes/export";
 import healthDataRoute from "./routes/health-data";
+import locationRoute from "./routes/location";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -48,7 +49,7 @@ app.get("/", (c) => {
 });
 
 app.get("/openapi.json", (c) => {
-  return c.json(getOpenApiDocument(c.env.API_VERSION));
+  return c.json(getOpenApiDocument(c.env.API_VERSION, c.env.API_BASE_URL));
 });
 
 // Health check (requires auth)
@@ -77,6 +78,7 @@ app.route("/v1/wrapped", wrappedRoute);
 app.route("/v1/refresh", refreshRoute);
 app.route("/v1/export", exportRoute);
 app.route("/v1/health", healthDataRoute);
+app.route("/v1/location", locationRoute);
 
 // Export Cloudflare Worker handlers
 export default {

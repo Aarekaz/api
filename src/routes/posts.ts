@@ -37,7 +37,6 @@ openApiRegistry.registerPath({
         tags: ["meta"],
         published_at: "2025-01-01T00:00:00.000Z",
         pinned: false,
-        created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
       },
     ]),
@@ -57,7 +56,7 @@ openApiRegistry.registerPath({
 // Route handlers
 app.get("/", async (c) => {
   const rows = await c.env.DB.prepare(
-    "SELECT * FROM posts ORDER BY published_at DESC, created_at DESC"
+    "SELECT * FROM posts ORDER BY published_at DESC, updated_at DESC"
   ).all();
   const results = (rows.results ?? []).map((row) =>
     normalizePost(row as JsonRecord)
@@ -76,10 +75,10 @@ app.post("/", async (c) => {
     return validation.response;
   }
 
-  const createdAt = nowIso();
+  const updatedAt = nowIso();
   await c.env.DB.prepare(
-    `INSERT INTO posts (slug, title, summary, content, tags_json, published_at, pinned, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO posts (slug, title, summary, content, tags_json, published_at, pinned, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       validation.data.slug,
@@ -89,12 +88,11 @@ app.post("/", async (c) => {
       mapJsonField(validation.data.tags),
       validation.data.published_at ?? null,
       validation.data.pinned ? 1 : 0,
-      createdAt,
-      createdAt
+      updatedAt
     )
     .run();
 
-  return c.json({ ok: true, created_at: createdAt }, 201);
+  return c.json({ ok: true, updated_at: updatedAt }, 201);
 });
 
 export default app;

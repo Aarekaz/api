@@ -159,8 +159,14 @@ openApiRegistry.registerComponent("securitySchemes", "bearerAuth", {
 export const authSecurity = [{ bearerAuth: [] as string[] }];
 
 // OpenAPI document generator
-export function getOpenApiDocument(version: string) {
+export function getOpenApiDocument(version: string, baseUrl?: string) {
   const generator = new OpenApiGeneratorV3(openApiRegistry.definitions);
+  
+  // Use provided base URL or default to relative path
+  const servers = baseUrl 
+    ? [{ url: baseUrl, description: "API Server" }]
+    : [{ url: "/", description: "Relative path (configure API_BASE_URL)" }];
+  
   return generator.generateDocument({
     openapi: "3.0.0",
     info: {
@@ -168,6 +174,6 @@ export function getOpenApiDocument(version: string) {
       title: "Personal API",
       description: "Personal API for tracking activities, health data, and more",
     },
-    servers: [{ url: "/" }],
+    servers,
   });
 }
