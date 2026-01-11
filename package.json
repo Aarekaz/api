@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.4",
+    "hono": "^4.11.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {
