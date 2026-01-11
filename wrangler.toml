@@ -1,0 +1,19 @@
+name = "api"
+main = "src/index.ts"
+compatibility_date = "2024-08-01"
+
+[vars]
+API_VERSION = "v1.6.4"
+R2_PUBLIC_BASE_URL = ""
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "personal_api"
+database_id = "f83dc86f-521f-4880-b54e-e3238baf861f"
+
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "api-media"

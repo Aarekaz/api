@@ -1,0 +1,4 @@
+venv
+.wrangler
+node_modules
+.env
