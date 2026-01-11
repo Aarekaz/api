@@ -1,3 +1,8 @@
+import {
+  extendZodWithOpenApi,
+  OpenAPIRegistry,
+  OpenApiGeneratorV3,
+} from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 
 export interface Env {
@@ -18,6 +23,8 @@ type JsonRecord = Record<string, unknown>;
 type ValidationResult<T> =
   | { ok: true; data: T }
   | { ok: false; response: Response };
+
+extendZodWithOpenApi(z);
 
 const dateString = z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
   message: "Invalid date",
@@ -141,6 +148,596 @@ const photoSchema = z.object({
   location: z.string().optional(),
   tags: z.array(z.string()).optional(),
 });
+
+const openApiRegistry = new OpenAPIRegistry();
+const dateTimeSchema = z.string().openapi({ format: "date-time" });
+const dateSchema = z.string().openapi({ format: "date" });
+const genericObjectSchema = z.record(z.unknown());
+const genericArraySchema = z.array(z.record(z.unknown()));
+const imageUploadSchema = z.string().openapi({ format: "binary" });
+
+const errorSchema = z.object({
+  error: z.string(),
+  details: z.unknown().optional(),
+});
+
+const okSchema = z.object({ ok: z.boolean() });
+const okUpdatedSchema = z.object({ ok: z.boolean(), updated_at: dateTimeSchema });
+const okCreatedSchema = z.object({ ok: z.boolean(), created_at: dateTimeSchema });
+const okOccurredSchema = z.object({ ok: z.boolean(), occurred_at: dateTimeSchema });
+const okDateAddedSchema = z.object({ ok: z.boolean(), date_added: dateTimeSchema });
+const okDateRangeSchema = z.object({
+  ok: z.boolean(),
+  start: dateSchema,
+  end: dateSchema,
+});
+const photoUploadResponseSchema = z.object({
+  ok: z.boolean(),
+  key: z.string(),
+  url: z.string(),
+  content_type: z.string(),
+});
+const statusRefreshResponseSchema = z.object({
+  ok: z.boolean(),
+  created_at: dateTimeSchema,
+  discord_status: z.string().nullable().optional(),
+  activity: z.unknown().nullable().optional(),
+  spotify: z.unknown().nullable().optional(),
+});
+const healthResponseSchema = z.object({
+  status: z.string(),
+  version: z.string(),
+  timestamp: dateTimeSchema,
+});
+const rangeQuerySchema = z.object({
+  start: dateString.optional(),
+  end: dateString.optional(),
+});
+
+const openApiJsonContent = (schema: z.ZodTypeAny) => ({
+  "application/json": { schema },
+});
+
+const openApiJsonContentWithExample = (
+  schema: z.ZodTypeAny,
+  example: unknown
+) => ({
+  "application/json": { schema, example },
+});
+
+const openApiJsonRequestBody = (schema: z.ZodTypeAny, description?: string) => ({
+  description,
+  content: openApiJsonContent(schema),
+});
+
+const openApiResponse = (schema: z.ZodTypeAny, description: string) => ({
+  description,
+  content: openApiJsonContent(schema),
+});
+
+const openApiResponseWithExample = (
+  schema: z.ZodTypeAny,
+  description: string,
+  example: unknown
+) => ({
+  description,
+  content: openApiJsonContentWithExample(schema, example),
+});
+
+const errorResponses = {
+  400: openApiResponse(errorSchema, "Bad request"),
+  401: openApiResponse(errorSchema, "Unauthorized"),
+  403: openApiResponse(errorSchema, "Forbidden"),
+  500: openApiResponse(errorSchema, "Server error"),
+};
+
+const okResponses = (schema: z.ZodTypeAny, description = "OK") => ({
+  200: openApiResponse(schema, description),
+  ...errorResponses,
+});
+
+const createdResponses = (schema: z.ZodTypeAny, description = "Created") => ({
+  201: openApiResponse(schema, description),
+  ...errorResponses,
+});
+
+const authSecurity = [{ bearerAuth: [] as string[] }];
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/health",
+  summary: "Health check",
+  security: authSecurity,
+  responses: okResponses(healthResponseSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/openapi.json",
+  summary: "OpenAPI document",
+  security: [],
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/profile",
+  summary: "Fetch profile",
+  security: authSecurity,
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "put",
+  path: "/v1/profile",
+  summary: "Update profile",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(profileSchema) },
+  responses: okResponses(okUpdatedSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/now",
+  summary: "Fetch current status",
+  security: authSecurity,
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "put",
+  path: "/v1/now",
+  summary: "Update current status",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(nowSchema) },
+  responses: okResponses(okUpdatedSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/settings",
+  summary: "Fetch settings",
+  security: authSecurity,
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "put",
+  path: "/v1/settings",
+  summary: "Update settings",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(settingsSchema) },
+  responses: okResponses(okUpdatedSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/projects",
+  summary: "List projects",
+  security: authSecurity,
+  responses: {
+    200: openApiResponseWithExample(genericArraySchema, "OK", [
+      {
+        id: 1,
+        title: "Personal API",
+        description: "Cloudflare Worker + D1.",
+        links: ["https://api.example.com", "https://github.com/user/repo"],
+        tags: ["cloudflare", "typescript"],
+        status: "active",
+        created_at: "2025-01-05T12:34:56.000Z",
+        updated_at: "2025-01-05T12:34:56.000Z",
+      },
+    ]),
+    ...errorResponses,
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/projects",
+  summary: "Create project",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(projectSchema) },
+  responses: createdResponses(okCreatedSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/notes",
+  summary: "List notes",
+  security: authSecurity,
+  responses: okResponses(genericArraySchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/notes",
+  summary: "Create note",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(noteSchema) },
+  responses: createdResponses(okCreatedSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/events",
+  summary: "List events",
+  security: authSecurity,
+  responses: okResponses(genericArraySchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/events",
+  summary: "Create event",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(eventSchema) },
+  responses: createdResponses(okOccurredSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/posts",
+  summary: "List posts",
+  security: authSecurity,
+  responses: {
+    200: openApiResponseWithExample(genericArraySchema, "OK", [
+      {
+        id: 10,
+        slug: "launch-notes",
+        title: "Launch Notes",
+        summary: "Short summary",
+        content: "Full content",
+        tags: ["release", "notes"],
+        published_at: "2024-10-01T00:00:00.000Z",
+        pinned: true,
+        updated_at: "2024-10-01T00:00:00.000Z",
+      },
+    ]),
+    ...errorResponses,
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/posts",
+  summary: "Create post",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(postSchema) },
+  responses: createdResponses(okUpdatedSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/uses",
+  summary: "List uses",
+  security: authSecurity,
+  responses: okResponses(genericArraySchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/uses",
+  summary: "Create uses item",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(usesItemSchema) },
+  responses: createdResponses(okCreatedSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/shelf",
+  summary: "List shelf items",
+  security: authSecurity,
+  responses: {
+    200: openApiResponseWithExample(genericArraySchema, "OK", [
+      {
+        id: 7,
+        type: "book",
+        title: "The Pragmatic Programmer",
+        quote: "Care about your craft.",
+        author: "Andy Hunt",
+        source: "Addison-Wesley",
+        url: "https://example.com/book",
+        note: "Re-read yearly",
+        image_url: "https://example.com/cover.jpg",
+        drawer: "reading",
+        tags: ["software", "career"],
+        date_added: "2025-02-14T12:00:00.000Z",
+      },
+    ]),
+    ...errorResponses,
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/shelf",
+  summary: "Create shelf item",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(shelfItemSchema) },
+  responses: createdResponses(okDateAddedSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/experience",
+  summary: "List experience",
+  security: authSecurity,
+  responses: okResponses(genericArraySchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/experience",
+  summary: "Create experience",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(experienceSchema) },
+  responses: createdResponses(okSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/education",
+  summary: "List education",
+  security: authSecurity,
+  responses: okResponses(genericArraySchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/education",
+  summary: "Create education",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(educationSchema) },
+  responses: createdResponses(okSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/skills",
+  summary: "List skills",
+  security: authSecurity,
+  responses: okResponses(genericArraySchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/skills",
+  summary: "Create skill",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(skillSchema) },
+  responses: createdResponses(okUpdatedSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/photos",
+  summary: "List photos",
+  security: authSecurity,
+  responses: {
+    200: openApiResponseWithExample(genericArraySchema, "OK", [
+      {
+        id: 42,
+        title: "Ocean",
+        description: "Sunset shot.",
+        url: "https://cdn.example.com/photos/abc.jpg",
+        thumb_url: "https://cdn.example.com/photos/abc_thumb.jpg",
+        width: 2048,
+        height: 1365,
+        shot_at: "2024-08-12T18:30:00.000Z",
+        camera: "Sony A7C",
+        lens: "35mm",
+        settings: "f/2.8 1/200 ISO 100",
+        location: "San Diego, CA",
+        tags: ["sunset", "ocean"],
+        created_at: "2024-08-12T18:45:00.000Z",
+      },
+    ]),
+    ...errorResponses,
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/photos",
+  summary: "Create photo",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(photoSchema) },
+  responses: createdResponses(okCreatedSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/photos/upload",
+  summary: "Upload photo to R2",
+  security: authSecurity,
+  request: {
+    body: {
+      description: "Raw image bytes with an image/* content type.",
+      content: {
+        "image/*": { schema: imageUploadSchema },
+      },
+    },
+  },
+  responses: createdResponses(photoUploadResponseSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/status",
+  summary: "Fetch latest status snapshot",
+  security: authSecurity,
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/status/refresh",
+  summary: "Refresh status snapshot",
+  security: authSecurity,
+  responses: createdResponses(statusRefreshResponseSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/wakatime",
+  summary: "Fetch WakaTime daily summaries",
+  security: authSecurity,
+  request: { query: rangeQuerySchema },
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/wakatime/refresh",
+  summary: "Refresh WakaTime daily data",
+  security: authSecurity,
+  responses: createdResponses(okDateRangeSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/wakatime/backfill",
+  summary: "Backfill WakaTime daily data",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(backfillSchema) },
+  responses: createdResponses(okDateRangeSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/wakatime/hourly",
+  summary: "Fetch WakaTime hourly data",
+  security: authSecurity,
+  request: { query: rangeQuerySchema },
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/wakatime/hourly/refresh",
+  summary: "Refresh WakaTime hourly data",
+  security: authSecurity,
+  responses: createdResponses(okDateRangeSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/wakatime/hourly/backfill",
+  summary: "Backfill WakaTime hourly data",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(backfillSchema) },
+  responses: createdResponses(okDateRangeSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/github",
+  summary: "Fetch GitHub contributions",
+  security: authSecurity,
+  request: { query: rangeQuerySchema },
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/github/refresh",
+  summary: "Refresh GitHub contributions",
+  security: authSecurity,
+  responses: createdResponses(okDateRangeSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/github/backfill",
+  summary: "Backfill GitHub contributions",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(backfillSchema) },
+  responses: createdResponses(okDateRangeSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/refresh",
+  summary: "Refresh status, WakaTime, and GitHub",
+  security: authSecurity,
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/wrapped/day",
+  summary: "Fetch daily wrapped stats",
+  security: authSecurity,
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/wrapped/week",
+  summary: "Fetch weekly wrapped stats",
+  security: authSecurity,
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/wrapped/month",
+  summary: "Fetch monthly wrapped stats",
+  security: authSecurity,
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/wrapped/2026",
+  summary: "Fetch 2026 wrapped stats",
+  security: authSecurity,
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/export",
+  summary: "Export all data",
+  security: authSecurity,
+  responses: okResponses(genericObjectSchema),
+});
+
+const openApiDocument = new OpenApiGeneratorV3(
+  openApiRegistry.definitions
+).generateDocument({
+  openapi: "3.1.0",
+  info: {
+    title: "Personal API",
+    version: "v1",
+  },
+  components: {
+    securitySchemes: {
+      bearerAuth: {
+        type: "http",
+        scheme: "bearer",
+        bearerFormat: "API token",
+      },
+    },
+  },
+  security: authSecurity,
+});
+
+function getOpenApiDocument(apiVersion?: string): JsonRecord {
+  if (!apiVersion) {
+    return openApiDocument as JsonRecord;
+  }
+
+  return {
+    ...openApiDocument,
+    info: {
+      ...openApiDocument.info,
+      version: apiVersion,
+    },
+  } as JsonRecord;
+}
 
 function jsonResponse(data: JsonRecord | JsonRecord[], status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -825,6 +1422,10 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const { pathname } = url;
+
+    if (pathname === "/openapi.json") {
+      return jsonResponse(getOpenApiDocument(env.API_VERSION));
+    }
 
     if (pathname === "/health") {
       const authError = await requireAuth(request, env);
