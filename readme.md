@@ -10,40 +10,85 @@ Private personal API built for Cloudflare Workers + D1.
 
 All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 
+### Core
+
 - `GET /openapi.json` (no auth)
 - `GET /health` (auth required)
+- `GET /v1/export`
+
+### Profile & Settings
+
 - `GET /v1/profile`
 - `PUT /v1/profile`
 - `GET /v1/now`
 - `PUT /v1/now`
 - `GET /v1/settings`
 - `PUT /v1/settings`
+
+### Content
+
 - `GET /v1/projects`
 - `POST /v1/projects`
 - `GET /v1/notes`
 - `POST /v1/notes`
 - `GET /v1/events`
 - `POST /v1/events`
+- `GET /v1/posts`
+- `POST /v1/posts`
 - `GET /v1/photos`
 - `POST /v1/photos`
 - `POST /v1/photos/upload`
-- `GET /v1/export`
-- `GET /v1/status`
-- `POST /v1/status/refresh`
-- `GET /v1/wakatime`
-- `POST /v1/wakatime/refresh`
-- `POST /v1/wakatime/backfill`
-- `GET /v1/wakatime/hourly`
-- `POST /v1/wakatime/hourly/refresh`
-- `POST /v1/wakatime/hourly/backfill`
-- `GET /v1/github`
-- `POST /v1/github/refresh`
-- `POST /v1/github/backfill`
-- `POST /v1/refresh`
-- `GET /v1/wrapped/day`
-- `GET /v1/wrapped/week`
-- `GET /v1/wrapped/month`
-- `GET /v1/wrapped/2026`
+
+### Portfolio
+
+- `GET /v1/experience`
+- `POST /v1/experience`
+- `GET /v1/education`
+- `POST /v1/education`
+- `GET /v1/skills`
+- `POST /v1/skills`
+- `GET /v1/uses`
+- `POST /v1/uses`
+- `GET /v1/shelf`
+- `POST /v1/shelf`
+
+### Apple Health Data
+
+- `GET /v1/health` - Get daily health metrics (date range)
+- `POST /v1/health` - Submit daily health metrics
+- `GET /v1/health/{date}` - Get health data for specific date
+- `DELETE /v1/health/{date}` - Delete health data for specific date
+- `GET /v1/health/heart-rate` - Get heart rate samples
+- `POST /v1/health/heart-rate` - Submit heart rate samples (single or batch)
+- `GET /v1/health/sleep` - Get sleep sessions
+- `POST /v1/health/sleep` - Submit sleep session
+- `GET /v1/health/workouts` - Get workout sessions
+- `POST /v1/health/workouts` - Submit workout
+- `GET /v1/health/summary` - Get health summary with recent data and averages
+
+See [APPLE_HEALTH_EXPORT.md](docs/APPLE_HEALTH_EXPORT.md) for detailed health API documentation.
+
+### External Integrations
+
+- `GET /v1/status` - Latest Lanyard/Discord status
+- `POST /v1/status/refresh` - Refresh status snapshot
+- `GET /v1/wakatime` - WakaTime daily summaries
+- `POST /v1/wakatime/refresh` - Refresh WakaTime daily data
+- `POST /v1/wakatime/backfill` - Backfill WakaTime daily data
+- `GET /v1/wakatime/hourly` - WakaTime hourly data
+- `POST /v1/wakatime/hourly/refresh` - Refresh WakaTime hourly data
+- `POST /v1/wakatime/hourly/backfill` - Backfill WakaTime hourly data
+- `GET /v1/github` - GitHub contributions
+- `POST /v1/github/refresh` - Refresh GitHub contributions
+- `POST /v1/github/backfill` - Backfill GitHub contributions
+- `POST /v1/refresh` - Refresh all (status, WakaTime, GitHub)
+
+### Analytics & Wrapped
+
+- `GET /v1/wrapped/day` - Daily wrapped stats
+- `GET /v1/wrapped/week` - Weekly wrapped stats
+- `GET /v1/wrapped/month` - Monthly wrapped stats
+- `GET /v1/wrapped/2026` - 2026 wrapped stats
 
 ## Data model
 

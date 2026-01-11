@@ -278,6 +278,71 @@ const rangeQuerySchema = z.object({
   end: dateString.optional(),
 });
 
+// Apple Health response schemas
+const healthDailyRangeResponseSchema = z.object({
+  start: dateSchema,
+  end: dateSchema,
+  days: genericArraySchema,
+});
+
+const healthDailyUpdateResponseSchema = z.object({
+  ok: z.boolean(),
+  date: dateSchema,
+  updated_at: dateTimeSchema,
+});
+
+const healthDailyDeleteResponseSchema = z.object({
+  ok: z.boolean(),
+  deleted: dateSchema,
+});
+
+const healthHeartRateRangeResponseSchema = z.object({
+  start: dateTimeSchema,
+  end: dateTimeSchema,
+  count: z.number(),
+  samples: genericArraySchema,
+});
+
+const healthHeartRateBatchResponseSchema = z.object({
+  ok: z.boolean(),
+  inserted: z.number(),
+  created_at: dateTimeSchema,
+});
+
+const healthSleepRangeResponseSchema = z.object({
+  start: dateTimeSchema,
+  end: dateTimeSchema,
+  count: z.number(),
+  sessions: genericArraySchema,
+});
+
+const healthWorkoutsRangeResponseSchema = z.object({
+  start: dateTimeSchema,
+  end: dateTimeSchema,
+  count: z.number(),
+  workouts: genericArraySchema,
+});
+
+const healthSummaryResponseSchema = genericObjectSchema;
+
+const healthQuerySchema = z.object({
+  start: dateString.optional(),
+  end: dateString.optional(),
+});
+
+const healthHeartRateQuerySchema = z.object({
+  start: dateString.optional(),
+  end: dateString.optional(),
+  limit: z.string().optional(),
+});
+
+const healthWorkoutsQuerySchema = z.object({
+  start: dateString.optional(),
+  end: dateString.optional(),
+  type: z.string().optional(),
+  limit: z.string().optional(),
+});
+
 const openApiJsonContent = (schema: z.ZodTypeAny) => ({
   "application/json": { schema },
 });
@@ -323,6 +388,12 @@ const okResponses = (schema: z.ZodTypeAny, description = "OK") => ({
 const createdResponses = (schema: z.ZodTypeAny, description = "Created") => ({
   201: openApiResponse(schema, description),
   ...errorResponses,
+});
+
+openApiRegistry.registerComponent("securitySchemes", "bearerAuth", {
+  type: "http",
+  scheme: "bearer",
+  bearerFormat: "API token",
 });
 
 const authSecurity = [{ bearerAuth: [] as string[] }];
@@ -789,6 +860,132 @@ openApiRegistry.registerPath({
   responses: okResponses(genericObjectSchema),
 });
 
+// Apple Health Endpoints
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/health",
+  summary: "Get daily health data",
+  security: authSecurity,
+  request: { query: healthQuerySchema },
+  responses: okResponses(healthDailyRangeResponseSchema, "Daily health data for date range"),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/health",
+  summary: "Submit daily health metrics",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(appleHealthDailySchema, "Daily health metrics") },
+  responses: createdResponses(healthDailyUpdateResponseSchema, "Health data created/updated"),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/health/{date}",
+  summary: "Get health data for specific date",
+  security: authSecurity,
+  request: {
+    params: z.object({
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date in YYYY-MM-DD format"),
+    }),
+  },
+  responses: {
+    200: openApiResponse(genericObjectSchema, "Health data for specific date"),
+    404: openApiResponse(errorSchema, "No data found for this date"),
+    ...errorResponses,
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "delete",
+  path: "/v1/health/{date}",
+  summary: "Delete health data for specific date",
+  security: authSecurity,
+  request: {
+    params: z.object({
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date in YYYY-MM-DD format"),
+    }),
+  },
+  responses: okResponses(healthDailyDeleteResponseSchema, "Health data deleted"),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/health/heart-rate",
+  summary: "Get heart rate samples",
+  security: authSecurity,
+  request: { query: healthHeartRateQuerySchema },
+  responses: okResponses(healthHeartRateRangeResponseSchema, "Heart rate samples"),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/health/heart-rate",
+  summary: "Submit heart rate samples (single or batch)",
+  security: authSecurity,
+  request: {
+    body: {
+      description: "Single heart rate sample or batch of samples",
+      content: {
+        "application/json": {
+          schema: z.union([appleHealthHeartRateSchema, appleHealthHeartRateBatchSchema]),
+        },
+      },
+    },
+  },
+  responses: {
+    201: openApiResponse(
+      z.union([okCreatedSchema, healthHeartRateBatchResponseSchema]),
+      "Heart rate sample(s) created"
+    ),
+    ...errorResponses,
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/health/sleep",
+  summary: "Get sleep sessions",
+  security: authSecurity,
+  request: { query: healthQuerySchema },
+  responses: okResponses(healthSleepRangeResponseSchema, "Sleep sessions"),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/health/sleep",
+  summary: "Submit sleep session",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(appleHealthSleepSessionSchema, "Sleep session data") },
+  responses: createdResponses(okCreatedSchema, "Sleep session created"),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/health/workouts",
+  summary: "Get workout sessions",
+  security: authSecurity,
+  request: { query: healthWorkoutsQuerySchema },
+  responses: okResponses(healthWorkoutsRangeResponseSchema, "Workout sessions"),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/health/workouts",
+  summary: "Submit workout",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(appleHealthWorkoutSchema, "Workout data") },
+  responses: createdResponses(okCreatedSchema, "Workout created"),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/health/summary",
+  summary: "Get health summary with recent data and averages",
+  security: authSecurity,
+  responses: okResponses(healthSummaryResponseSchema, "Health data summary"),
+});
+
 const openApiDocument = new OpenApiGeneratorV3(
   openApiRegistry.definitions
 ).generateDocument({
@@ -796,15 +993,6 @@ const openApiDocument = new OpenApiGeneratorV3(
   info: {
     title: "Personal API",
     version: "v1",
-  },
-  components: {
-    securitySchemes: {
-      bearerAuth: {
-        type: "http",
-        scheme: "bearer",
-        bearerFormat: "API token",
-      },
-    },
   },
   security: authSecurity,
 });
