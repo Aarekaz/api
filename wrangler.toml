@@ -3,7 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2024-08-01"
 
 [vars]
-API_VERSION = "v1.6.1"
+API_VERSION = "v1.6.3"
 
 [triggers]
 crons = ["*/5 * * * *"]

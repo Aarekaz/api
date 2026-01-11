@@ -1,5 +1,9 @@
 # Personal API (V1)
 
+![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
+![Cloudflare D1](https://img.shields.io/badge/Cloudflare-D1-F38020?logo=cloudflare&logoColor=white)
+![API Version](https://img.shields.io/endpoint?url=https%3A%2F%2Fapi.anuragd.me%2F)
+
 Private personal API built for Cloudflare Workers + D1.
 
 ## V1 endpoints
@@ -41,6 +45,23 @@ All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 
 The API stores JSON fields as `*_json` text columns in D1.
 
+## Quickstart
+
+Example request:
+
+```bash
+curl -H "Authorization: Bearer $API_TOKEN" https://api.anuragd.me/health
+```
+
+## Refresh & backfill
+
+- `POST /v1/refresh` refreshes status, WakaTime (daily + hourly), and GitHub if configured.
+- Backfill endpoints accept JSON like:
+
+```json
+{ "start": "2025-01-01", "end": "2025-12-31" }
+```
+
 ## Cloudflare setup
 
 ### Deploy guide (Workers + D1)
@@ -72,11 +93,14 @@ The API stores JSON fields as `*_json` text columns in D1.
 
 `wrangler.toml` includes a cron trigger to refresh status snapshots every 5 minutes and WakaTime daily/hourly. It also sets `API_VERSION`, returned by `/health`.
 
-Link to Lanyared api (JSON) : https://api.lanyard.rest/v1/users/{DISCORD_USER_ID}
+Link to Lanyard api (JSON): https://api.lanyard.rest/v1/users/{DISCORD_USER_ID}
+
+### Secrets
+
+Use `.env.example` for local values. Never commit real secrets; set them with `wrangler secret put`.
 
 ### Local dev (optional)
 
 - `npx wrangler dev src/index.ts`
 
 ## Notes
-

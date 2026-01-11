@@ -821,12 +821,18 @@ export default {
     }
 
     if (pathname === "/") {
+      const version = env.API_VERSION ?? "unknown";
       return jsonResponse({
         title: "Personal API",
         author: "Anurag Dhungana",
-        version: "v1",
+        website: "https://www.anuragd.me",
+        version,
         status: "ok",
         timestamp: nowIso(),
+        schemaVersion: 1,
+        label: "api",
+        message: version,
+        color: "blue",
       });
     }
 
