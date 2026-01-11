@@ -11,11 +11,12 @@ export function normalizeProfile(row: JsonRecord): JsonRecord {
 }
 
 export function normalizeSettings(row: JsonRecord): JsonRecord {
-  const { public_fields_json, flags_json, ...rest } = row;
+  const { public_fields_json, flags_json, shelf_config_json, ...rest } = row;
   return {
     ...rest,
     public_fields: parseStoredJson(public_fields_json),
     flags: parseStoredJson(flags_json),
+    shelf_config: parseStoredJson(shelf_config_json),
   };
 }
 

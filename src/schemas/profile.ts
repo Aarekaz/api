@@ -18,10 +18,22 @@ export const nowSchema = z.object({
   current_song: z.string().optional(),
 });
 
+// Shelf config schema for type safety
+export const shelfConfigSchema = z.object({
+  sections: z.object({
+    links: z.object({ visible: z.boolean() }).optional(),
+    quotes: z.object({ visible: z.boolean() }).optional(),
+    visuals: z.object({ visible: z.boolean() }).optional(),
+    wallpapers: z.object({ visible: z.boolean() }).optional(),
+  }).optional(),
+  hiddenItems: z.array(z.number()).optional(),
+});
+
 export const settingsSchema = z.object({
   public_fields: z.array(z.string()).optional(),
   theme: z.string().optional(),
   flags: z.record(z.unknown()).optional(),
+  shelf_config: shelfConfigSchema.optional(),
 });
 
 export const experienceSchema = z.object({

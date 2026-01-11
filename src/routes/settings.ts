@@ -38,9 +38,24 @@ openApiRegistry.registerPath({
 // Route handlers
 app.get("/", async (c) => {
   const row = await c.env.DB.prepare("SELECT * FROM settings WHERE id = 1").all();
-  return c.json(
-    row.results[0] ? normalizeSettings(row.results[0] as JsonRecord) : {}
-  );
+  if (!row.results[0]) {
+    // Return default settings with shelf config
+    return c.json({
+      public_fields: [],
+      theme: null,
+      flags: {},
+      shelf_config: {
+        sections: {
+          links: { visible: true },
+          quotes: { visible: true },
+          visuals: { visible: false },
+          wallpapers: { visible: false },
+        },
+        hiddenItems: [],
+      },
+    });
+  }
+  return c.json(normalizeSettings(row.results[0] as JsonRecord));
 });
 
 app.put("/", async (c) => {
@@ -56,18 +71,20 @@ app.put("/", async (c) => {
 
   const updatedAt = nowIso();
   await c.env.DB.prepare(
-    `INSERT INTO settings (id, public_fields_json, theme, flags_json, updated_at)
-     VALUES (1, ?, ?, ?, ?)
+    `INSERT INTO settings (id, public_fields_json, theme, flags_json, shelf_config_json, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        public_fields_json = excluded.public_fields_json,
        theme = excluded.theme,
        flags_json = excluded.flags_json,
+       shelf_config_json = excluded.shelf_config_json,
        updated_at = excluded.updated_at`
   )
     .bind(
       mapJsonField(validation.data.public_fields),
       validation.data.theme ?? null,
       mapJsonField(validation.data.flags),
+      mapJsonField(validation.data.shelf_config),
       updatedAt
     )
     .run();
