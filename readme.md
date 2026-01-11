@@ -23,6 +23,9 @@ All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 - `POST /v1/notes`
 - `GET /v1/events`
 - `POST /v1/events`
+- `GET /v1/photos`
+- `POST /v1/photos`
+- `POST /v1/photos/upload`
 - `GET /v1/export`
 - `GET /v1/status`
 - `POST /v1/status/refresh`
@@ -86,7 +89,11 @@ curl -H "Authorization: Bearer $API_TOKEN" https://api.anuragd.me/health
 8) Set GitHub username/token (optional, for wrapped stats):
    - `npx wrangler secret put GITHUB_USERNAME`
    - `npx wrangler secret put GITHUB_TOKEN`
-9) Deploy:
+9) Configure R2 (optional, for photo uploads):
+   - Create an R2 bucket (example: `personal-api-photos`).
+   - Set the bucket name in `wrangler.toml` under `[[r2_buckets]]` for `R2_BUCKET`.
+   - Set `R2_PUBLIC_BASE_URL` in `wrangler.toml` (or as a secret) to your public bucket URL.
+10) Deploy:
    - `npx wrangler deploy`
 
 ### Cron (optional)
@@ -104,3 +111,16 @@ Use `.env.example` for local values. Never commit real secrets; set them with `w
 - `npx wrangler dev src/index.ts`
 
 ## Notes
+
+### Photo uploads (R2)
+
+`POST /v1/photos/upload` expects raw image bytes with an `image/*` content type.
+
+Example:
+
+```bash
+curl -X POST https://api.anuragd.me/v1/photos/upload \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Content-Type: image/jpeg" \
+  --data-binary "@./photo.jpg"
+```

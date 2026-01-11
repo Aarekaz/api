@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export interface Env {
   DB: D1Database;
+  R2_BUCKET: R2Bucket;
   API_TOKEN: string;
   LANYARD_USER_ID: string;
   WAKATIME_API_KEY: string;
@@ -9,6 +10,7 @@ export interface Env {
   GITHUB_USERNAME: string;
   GITHUB_TOKEN: string;
   API_VERSION: string;
+  R2_PUBLIC_BASE_URL: string;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -199,6 +201,23 @@ function validateBody<T extends z.ZodTypeAny>(
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function fileExtensionForContentType(contentType: string): string {
+  const normalized = contentType.split(";")[0].trim().toLowerCase();
+  if (normalized === "image/jpeg" || normalized === "image/jpg") {
+    return "jpg";
+  }
+  if (normalized === "image/png") {
+    return "png";
+  }
+  if (normalized === "image/webp") {
+    return "webp";
+  }
+  if (normalized === "image/avif") {
+    return "avif";
+  }
+  return "bin";
 }
 
 function dateOnly(value: Date): string {
@@ -1406,6 +1425,42 @@ export default {
       }
 
       return errorResponse("Method not allowed", 405);
+    }
+
+    if (pathname === "/v1/photos/upload" && request.method === "POST") {
+      const contentType = request.headers.get("content-type") ?? "";
+      if (!contentType.startsWith("image/")) {
+        return errorResponse("Unsupported content type", 415);
+      }
+
+      const contentLength = request.headers.get("content-length");
+      if (contentLength && Number(contentLength) > 10 * 1024 * 1024) {
+        return errorResponse("File too large", 413);
+      }
+
+      if (!request.body) {
+        return errorResponse("Missing body", 400);
+      }
+
+      const ext = fileExtensionForContentType(contentType);
+      const key = `photos/${crypto.randomUUID()}.${ext}`;
+
+      await env.R2_BUCKET.put(key, request.body, {
+        httpMetadata: { contentType },
+      });
+
+      const baseUrl = env.R2_PUBLIC_BASE_URL?.replace(/\/$/, "");
+      const url = baseUrl ? `${baseUrl}/${key}` : key;
+
+      return jsonResponse(
+        {
+          ok: true,
+          key,
+          url,
+          content_type: contentType,
+        },
+        201
+      );
     }
 
     if (pathname === "/v1/status") {
