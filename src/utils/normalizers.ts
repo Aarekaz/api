@@ -95,3 +95,46 @@ export function normalizeWakaTimeHourly(row: JsonRecord): JsonRecord {
     languages: parseStoredJson(languages_json) ?? {},
   };
 }
+
+export function normalizeCustomExercise(row: JsonRecord): JsonRecord {
+  const { muscles_json, equipment_json, ...rest } = row;
+  return {
+    ...rest,
+    muscles: parseStoredJson(muscles_json),
+    equipment: parseStoredJson(equipment_json),
+  };
+}
+
+export function normalizeCustomWorkoutTemplate(row: JsonRecord): JsonRecord {
+  const { exercises_json, ...rest } = row;
+  return {
+    ...rest,
+    exercises: parseStoredJson(exercises_json),
+  };
+}
+
+export function normalizeCustomWorkoutSchedule(row: JsonRecord): JsonRecord {
+  const { days_of_week_json, exceptions_json, ...rest } = row;
+  return {
+    ...rest,
+    days_of_week: parseStoredJson(days_of_week_json),
+    exceptions: parseStoredJson(exceptions_json),
+  };
+}
+
+export function normalizeCustomWorkoutSet(row: JsonRecord): JsonRecord {
+  const { done, ...rest } = row;
+  return {
+    ...rest,
+    done: done == null ? null : Boolean(done),
+  };
+}
+
+export function normalizeLogDay(row: JsonRecord): JsonRecord {
+  const { entries_json, tags_json, ...rest } = row;
+  return {
+    ...rest,
+    entries: parseStoredJson(entries_json),
+    tags: parseStoredJson(tags_json),
+  };
+}
