@@ -39,6 +39,38 @@ All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 - `POST /v1/photos`
 - `POST /v1/photos/upload`
 
+### Custom Workouts & Logs
+
+- `GET /v1/custom/exercises`
+- `POST /v1/custom/exercises`
+- `GET /v1/custom/exercises/{id}`
+- `PUT /v1/custom/exercises/{id}`
+- `DELETE /v1/custom/exercises/{id}`
+- `GET /v1/custom/workout-templates`
+- `POST /v1/custom/workout-templates`
+- `GET /v1/custom/workout-templates/{id}`
+- `PUT /v1/custom/workout-templates/{id}`
+- `DELETE /v1/custom/workout-templates/{id}`
+- `GET /v1/custom/workout-schedules`
+- `POST /v1/custom/workout-schedules`
+- `GET /v1/custom/workout-schedules/{id}`
+- `PUT /v1/custom/workout-schedules/{id}`
+- `DELETE /v1/custom/workout-schedules/{id}`
+- `GET /v1/custom/workout-sessions`
+- `POST /v1/custom/workout-sessions`
+- `GET /v1/custom/workout-sessions/{id}`
+- `PUT /v1/custom/workout-sessions/{id}`
+- `DELETE /v1/custom/workout-sessions/{id}`
+- `GET /v1/custom/workout-sessions/{id}/sets`
+- `POST /v1/custom/workout-sessions/{id}/sets`
+- `PATCH /v1/custom/workout-sessions/{id}/sets/{set_id}`
+- `DELETE /v1/custom/workout-sessions/{id}/sets/{set_id}`
+- `GET /v1/logs`
+- `POST /v1/logs`
+- `GET /v1/logs/{id}`
+- `PUT /v1/logs/{id}`
+- `DELETE /v1/logs/{id}`
+
 ### Portfolio
 
 - `GET /v1/experience`
