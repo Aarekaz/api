@@ -20,6 +20,7 @@ import {
   customWorkoutScheduleSchema,
   customWorkoutSessionInputSchema,
   customWorkoutSessionSchema,
+  workoutSetBulkInputSchema,
   workoutSetInputSchema,
   workoutSetPatchSchema,
   workoutSetSchema,
@@ -27,6 +28,7 @@ import {
   customWorkoutTemplatesQuerySchema,
   customWorkoutSchedulesQuerySchema,
   customWorkoutSessionsQuerySchema,
+  customWorkoutSetsQuerySchema,
 } from "../schemas/custom";
 import {
   openApiRegistry,
@@ -42,6 +44,12 @@ const app = new Hono<{ Bindings: Env }>();
 const okCreatedWithIdSchema = z.object({
   ok: z.boolean(),
   id: z.number(),
+  created_at: z.string(),
+});
+
+const okBulkCreatedSchema = z.object({
+  ok: z.boolean(),
+  inserted: z.number(),
   created_at: z.string(),
 });
 
@@ -252,12 +260,30 @@ openApiRegistry.registerPath({
 });
 
 openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/custom/workout-sets",
+  summary: "List workout sets by exercise",
+  security: authSecurity,
+  request: { query: customWorkoutSetsQuerySchema },
+  responses: okResponses(workoutSetsListSchema),
+});
+
+openApiRegistry.registerPath({
   method: "post",
   path: "/v1/custom/workout-sessions/{id}/sets",
   summary: "Create workout set",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(workoutSetInputSchema) },
   responses: createdResponses(okCreatedWithIdSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/custom/workout-sessions/{id}/sets/bulk",
+  summary: "Create workout sets in bulk",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(workoutSetBulkInputSchema) },
+  responses: createdResponses(okBulkCreatedSchema),
 });
 
 openApiRegistry.registerPath({
@@ -875,6 +901,33 @@ app.get("/workout-sessions/:id/sets", async (c) => {
   return c.json({ count: results.length, sets: results });
 });
 
+app.get("/workout-sets", async (c) => {
+  const query = c.req.query();
+  const validation = validateQuery(customWorkoutSetsQuerySchema, query);
+  if (!validation.ok) {
+    return validation.response;
+  }
+
+  const exerciseId = Number(validation.data.exercise_id);
+  if (!Number.isInteger(exerciseId) || exerciseId <= 0) {
+    return c.json({ error: "Invalid exercise_id" }, 400);
+  }
+
+  const limit = Math.min(Number(validation.data.limit) || 1, 100);
+
+  const rows = await c.env.DB.prepare(
+    "SELECT * FROM custom_workout_sets WHERE exercise_id = ? ORDER BY COALESCE(performed_at, created_at) DESC LIMIT ?"
+  )
+    .bind(exerciseId, limit)
+    .all();
+
+  const results = (rows.results ?? []).map((row) =>
+    normalizeCustomWorkoutSet(row as JsonRecord)
+  );
+
+  return c.json({ count: results.length, sets: results });
+});
+
 app.post("/workout-sessions/:id/sets", async (c) => {
   const id = parseId(c.req.param("id"));
   if (!id) {
@@ -914,6 +967,52 @@ app.post("/workout-sessions/:id/sets", async (c) => {
     .run();
 
   return c.json({ ok: true, id: result.meta.last_row_id, created_at: createdAt }, 201);
+});
+
+app.post("/workout-sessions/:id/sets/bulk", async (c) => {
+  const id = parseId(c.req.param("id"));
+  if (!id) {
+    return c.json({ error: "Invalid id" }, 400);
+  }
+
+  const body = await parseJson(c.req.raw);
+  if (body === null) {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+
+  const validation = validateBody(workoutSetBulkInputSchema, body);
+  if (!validation.ok) {
+    return validation.response;
+  }
+
+  const createdAt = nowIso();
+  let inserted = 0;
+
+  for (const set of validation.data.sets) {
+    await c.env.DB.prepare(
+      `INSERT INTO custom_workout_sets (
+        session_id, exercise_id, set_number, reps, weight, weight_unit, rpe, done, notes, performed_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+      .bind(
+        id,
+        set.exercise_id,
+        set.set_number,
+        set.reps ?? null,
+        set.weight ?? null,
+        set.weight_unit ?? null,
+        set.rpe ?? null,
+        typeof set.done === "boolean" ? (set.done ? 1 : 0) : null,
+        set.notes ?? null,
+        set.performed_at ?? null,
+        createdAt,
+        createdAt
+      )
+      .run();
+    inserted++;
+  }
+
+  return c.json({ ok: true, inserted, created_at: createdAt }, 201);
 });
 
 app.patch("/workout-sessions/:id/sets/:set_id", async (c) => {
