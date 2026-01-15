@@ -28,6 +28,8 @@ import refreshRoute from "./routes/refresh";
 import exportRoute from "./routes/export";
 import healthDataRoute from "./routes/health-data";
 import locationRoute from "./routes/location";
+import customRoute from "./routes/custom";
+import logsRoute from "./routes/logs";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -79,6 +81,8 @@ app.route("/v1/refresh", refreshRoute);
 app.route("/v1/export", exportRoute);
 app.route("/v1/health", healthDataRoute);
 app.route("/v1/location", locationRoute);
+app.route("/v1/custom", customRoute);
+app.route("/v1/logs", logsRoute);
 
 // Export Cloudflare Worker handlers
 export default {

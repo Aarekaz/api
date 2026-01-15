@@ -3,7 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2024-08-01"
 
 [vars]
-API_VERSION = "v1.7.0"
+API_VERSION = "v1.7.1"
 R2_PUBLIC_BASE_URL = ""
 API_BASE_URL = "https://api.anuragd.me"
 
