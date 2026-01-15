@@ -25,6 +25,11 @@ export const errorSchema = z.object({
 export const okSchema = z.object({ ok: z.boolean() });
 export const okUpdatedSchema = z.object({ ok: z.boolean(), updated_at: dateTimeSchema });
 export const okCreatedSchema = z.object({ ok: z.boolean(), created_at: dateTimeSchema });
+export const okDeletedSchema = z.object({
+  ok: z.boolean(),
+  deleted_at: dateTimeSchema,
+  id: z.number().optional(),
+});
 export const okOccurredSchema = z.object({ ok: z.boolean(), occurred_at: dateTimeSchema });
 export const okDateAddedSchema = z.object({ ok: z.boolean(), date_added: dateTimeSchema });
 export const okDateRangeSchema = z.object({

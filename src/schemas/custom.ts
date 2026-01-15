@@ -99,6 +99,10 @@ export const workoutSetInputSchema = z.object({
   performed_at: dateString.optional(),
 });
 
+export const workoutSetBulkInputSchema = z.object({
+  sets: z.array(workoutSetInputSchema).min(1),
+});
+
 export const workoutSetPatchSchema = workoutSetInputSchema
   .partial()
   .refine((data) => Object.keys(data).length > 0, {
@@ -135,4 +139,9 @@ export const customWorkoutSessionsQuerySchema = z.object({
   end: dateString.optional(),
   status: z.string().optional(),
   template_id: z.string().optional(),
+});
+
+export const customWorkoutSetsQuerySchema = z.object({
+  exercise_id: z.string(),
+  limit: z.string().optional(),
 });

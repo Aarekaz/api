@@ -10,6 +10,8 @@ Private personal API built for Cloudflare Workers + D1.
 
 All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 
+List endpoints support `?limit&offset&search&sort&tags&start&end` where applicable.
+
 ### Core
 
 - `GET /openapi.json` (no auth)
@@ -28,15 +30,35 @@ All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 ### Content
 
 - `GET /v1/projects`
+- `GET /v1/projects/{id}`
 - `POST /v1/projects`
+- `PUT /v1/projects/{id}`
+- `PATCH /v1/projects/{id}`
+- `DELETE /v1/projects/{id}`
 - `GET /v1/notes`
+- `GET /v1/notes/{id}`
 - `POST /v1/notes`
+- `PUT /v1/notes/{id}`
+- `PATCH /v1/notes/{id}`
+- `DELETE /v1/notes/{id}`
 - `GET /v1/events`
+- `GET /v1/events/{id}`
 - `POST /v1/events`
+- `PUT /v1/events/{id}`
+- `PATCH /v1/events/{id}`
+- `DELETE /v1/events/{id}`
 - `GET /v1/posts`
+- `GET /v1/posts/{id}`
 - `POST /v1/posts`
+- `PUT /v1/posts/{id}`
+- `PATCH /v1/posts/{id}`
+- `DELETE /v1/posts/{id}`
 - `GET /v1/photos`
+- `GET /v1/photos/{id}`
 - `POST /v1/photos`
+- `PUT /v1/photos/{id}`
+- `PATCH /v1/photos/{id}`
+- `DELETE /v1/photos/{id}`
 - `POST /v1/photos/upload`
 
 ### Custom Workouts & Logs
@@ -63,8 +85,10 @@ All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 - `DELETE /v1/custom/workout-sessions/{id}`
 - `GET /v1/custom/workout-sessions/{id}/sets`
 - `POST /v1/custom/workout-sessions/{id}/sets`
+- `POST /v1/custom/workout-sessions/{id}/sets/bulk`
 - `PATCH /v1/custom/workout-sessions/{id}/sets/{set_id}`
 - `DELETE /v1/custom/workout-sessions/{id}/sets/{set_id}`
+- `GET /v1/custom/workout-sets`
 - `GET /v1/logs`
 - `POST /v1/logs`
 - `GET /v1/logs/{id}`
@@ -74,15 +98,45 @@ All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 ### Portfolio
 
 - `GET /v1/experience`
+- `GET /v1/experience/{id}`
 - `POST /v1/experience`
+- `PUT /v1/experience/{id}`
+- `PATCH /v1/experience/{id}`
+- `DELETE /v1/experience/{id}`
 - `GET /v1/education`
+- `GET /v1/education/{id}`
 - `POST /v1/education`
+- `PUT /v1/education/{id}`
+- `PATCH /v1/education/{id}`
+- `DELETE /v1/education/{id}`
 - `GET /v1/skills`
+- `GET /v1/skills/{id}`
 - `POST /v1/skills`
+- `PUT /v1/skills/{id}`
+- `PATCH /v1/skills/{id}`
+- `DELETE /v1/skills/{id}`
 - `GET /v1/uses`
+- `GET /v1/uses/{id}`
 - `POST /v1/uses`
+- `PUT /v1/uses/{id}`
+- `PATCH /v1/uses/{id}`
+- `DELETE /v1/uses/{id}`
 - `GET /v1/shelf`
+- `GET /v1/shelf/{id}`
 - `POST /v1/shelf`
+- `PUT /v1/shelf/{id}`
+- `PATCH /v1/shelf/{id}`
+- `DELETE /v1/shelf/{id}`
+
+### Location
+
+- `GET /v1/location`
+- `GET /v1/location/{id}`
+- `POST /v1/location`
+- `PUT /v1/location/{id}`
+- `PATCH /v1/location/{id}`
+- `DELETE /v1/location/{id}`
+- `GET /v1/location/latest`
 
 ### Apple Health Data
 
@@ -96,6 +150,10 @@ All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 - `POST /v1/health/sleep` - Submit sleep session
 - `GET /v1/health/workouts` - Get workout sessions
 - `POST /v1/health/workouts` - Submit workout
+- `GET /v1/health/workouts/{id}` - Get workout
+- `PUT /v1/health/workouts/{id}` - Update workout
+- `PATCH /v1/health/workouts/{id}` - Patch workout
+- `DELETE /v1/health/workouts/{id}` - Delete workout
 - `GET /v1/health/summary` - Get health summary with recent data and averages
 
 See [APPLE_HEALTH_EXPORT.md](docs/APPLE_HEALTH_EXPORT.md) for detailed health API documentation.
