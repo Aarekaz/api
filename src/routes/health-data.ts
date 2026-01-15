@@ -4,6 +4,7 @@ import type { JsonRecord } from "../types/common";
 import { nowIso, dateOnly, addDays } from "../utils/date";
 import { parseJson } from "../utils/json";
 import { validateBody } from "../utils/validation";
+import { parseId } from "../utils/query";
 import {
   appleHealthDailySchema,
   appleHealthHeartRateSchema,
@@ -14,6 +15,8 @@ import {
 import {
   openApiRegistry,
   genericObjectSchema,
+  okUpdatedSchema,
+  okDeletedSchema,
   healthDailyRangeResponseSchema,
   healthDailyUpdateResponseSchema,
   healthDailyDeleteResponseSchema,
@@ -29,6 +32,12 @@ import {
 } from "../schemas/openapi";
 
 const app = new Hono<{ Bindings: Env }>();
+
+const workoutPatchSchema = appleHealthWorkoutSchema
+  .partial()
+  .refine((data) => Object.keys(data).length > 0, {
+    message: "At least one field must be provided",
+  });
 
 // OpenAPI registrations
 openApiRegistry.registerPath({
@@ -97,6 +106,40 @@ openApiRegistry.registerPath({
   security: authSecurity,
   request: { body: openApiJsonRequestBody(appleHealthWorkoutSchema) },
   responses: createdResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/health/workouts/{id}",
+  summary: "Get workout",
+  security: authSecurity,
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "put",
+  path: "/v1/health/workouts/{id}",
+  summary: "Update workout",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(appleHealthWorkoutSchema) },
+  responses: okResponses(okUpdatedSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "patch",
+  path: "/v1/health/workouts/{id}",
+  summary: "Patch workout",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(workoutPatchSchema) },
+  responses: okResponses(okUpdatedSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "delete",
+  path: "/v1/health/workouts/{id}",
+  summary: "Delete workout",
+  security: authSecurity,
+  responses: okResponses(okDeletedSchema),
 });
 
 openApiRegistry.registerPath({
@@ -415,8 +458,8 @@ app.post("/workouts", async (c) => {
   await c.env.DB.prepare(
     `INSERT INTO apple_health_workouts (
       workout_type, start_at, end_at, duration_minutes, active_energy,
-      heart_rate_avg, heart_rate_max, distance, elevation_gain, source, notes, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      heart_rate_avg, heart_rate_max, distance, elevation_gain, source, notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       validation.data.workout_type,
@@ -430,11 +473,177 @@ app.post("/workouts", async (c) => {
       validation.data.elevation_gain ?? null,
       validation.data.source ?? null,
       validation.data.notes ?? null,
+      now,
       now
     )
     .run();
 
   return c.json({ ok: true, created_at: now }, 201);
+});
+
+app.get("/workouts/:id", async (c) => {
+  const id = parseId(c.req.param("id"));
+  if (!id) {
+    return c.json({ error: "Invalid id" }, 400);
+  }
+
+  const row = await c.env.DB.prepare(
+    "SELECT * FROM apple_health_workouts WHERE id = ?"
+  )
+    .bind(id)
+    .all();
+
+  if (!row.results || row.results.length === 0) {
+    return c.json({ error: "Workout not found" }, 404);
+  }
+
+  return c.json(row.results[0] as JsonRecord);
+});
+
+app.put("/workouts/:id", async (c) => {
+  const id = parseId(c.req.param("id"));
+  if (!id) {
+    return c.json({ error: "Invalid id" }, 400);
+  }
+
+  const body = await parseJson(c.req.raw);
+  if (body === null) {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+
+  const validation = validateBody(appleHealthWorkoutSchema, body);
+  if (!validation.ok) {
+    return validation.response;
+  }
+
+  const updatedAt = nowIso();
+  const result = await c.env.DB.prepare(
+    `UPDATE apple_health_workouts
+     SET workout_type = ?, start_at = ?, end_at = ?, duration_minutes = ?, active_energy = ?,
+         heart_rate_avg = ?, heart_rate_max = ?, distance = ?, elevation_gain = ?, source = ?, notes = ?, updated_at = ?
+     WHERE id = ?`
+  )
+    .bind(
+      validation.data.workout_type,
+      validation.data.start_at,
+      validation.data.end_at,
+      validation.data.duration_minutes ?? null,
+      validation.data.active_energy ?? null,
+      validation.data.heart_rate_avg ?? null,
+      validation.data.heart_rate_max ?? null,
+      validation.data.distance ?? null,
+      validation.data.elevation_gain ?? null,
+      validation.data.source ?? null,
+      validation.data.notes ?? null,
+      updatedAt,
+      id
+    )
+    .run();
+
+  if (result.meta.changes === 0) {
+    return c.json({ error: "Workout not found" }, 404);
+  }
+
+  return c.json({ ok: true, updated_at: updatedAt });
+});
+
+app.patch("/workouts/:id", async (c) => {
+  const id = parseId(c.req.param("id"));
+  if (!id) {
+    return c.json({ error: "Invalid id" }, 400);
+  }
+
+  const body = await parseJson(c.req.raw);
+  if (body === null) {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+
+  const validation = validateBody(workoutPatchSchema, body);
+  if (!validation.ok) {
+    return validation.response;
+  }
+
+  const updates: string[] = [];
+  const params: (string | number | null)[] = [];
+
+  if (Object.prototype.hasOwnProperty.call(validation.data, "workout_type")) {
+    updates.push("workout_type = ?");
+    params.push(validation.data.workout_type ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "start_at")) {
+    updates.push("start_at = ?");
+    params.push(validation.data.start_at ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "end_at")) {
+    updates.push("end_at = ?");
+    params.push(validation.data.end_at ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "duration_minutes")) {
+    updates.push("duration_minutes = ?");
+    params.push(validation.data.duration_minutes ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "active_energy")) {
+    updates.push("active_energy = ?");
+    params.push(validation.data.active_energy ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "heart_rate_avg")) {
+    updates.push("heart_rate_avg = ?");
+    params.push(validation.data.heart_rate_avg ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "heart_rate_max")) {
+    updates.push("heart_rate_max = ?");
+    params.push(validation.data.heart_rate_max ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "distance")) {
+    updates.push("distance = ?");
+    params.push(validation.data.distance ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "elevation_gain")) {
+    updates.push("elevation_gain = ?");
+    params.push(validation.data.elevation_gain ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "source")) {
+    updates.push("source = ?");
+    params.push(validation.data.source ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "notes")) {
+    updates.push("notes = ?");
+    params.push(validation.data.notes ?? null);
+  }
+
+  const updatedAt = nowIso();
+  updates.push("updated_at = ?");
+  params.push(updatedAt);
+
+  const sql = `UPDATE apple_health_workouts SET ${updates.join(", ")} WHERE id = ?`;
+  params.push(id);
+
+  const result = await c.env.DB.prepare(sql).bind(...params).run();
+
+  if (result.meta.changes === 0) {
+    return c.json({ error: "Workout not found" }, 404);
+  }
+
+  return c.json({ ok: true, updated_at: updatedAt });
+});
+
+app.delete("/workouts/:id", async (c) => {
+  const id = parseId(c.req.param("id"));
+  if (!id) {
+    return c.json({ error: "Invalid id" }, 400);
+  }
+
+  const result = await c.env.DB.prepare(
+    "DELETE FROM apple_health_workouts WHERE id = ?"
+  )
+    .bind(id)
+    .run();
+
+  if (result.meta.changes === 0) {
+    return c.json({ error: "Workout not found" }, 404);
+  }
+
+  return c.json({ ok: true, id, deleted_at: nowIso() });
 });
 
 // Summary

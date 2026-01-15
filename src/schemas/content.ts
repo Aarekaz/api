@@ -38,6 +38,8 @@ export const usesItemSchema = z.object({
   note: z.string().optional(),
 });
 
+const shelfTagsSchema = z.union([z.array(z.string()), z.record(z.unknown())]);
+
 export const shelfItemSchema = z.object({
   type: z.string().min(1),
   title: z.string().optional(),
@@ -48,7 +50,7 @@ export const shelfItemSchema = z.object({
   note: z.string().optional(),
   image_url: z.string().url().optional(),
   drawer: z.string().optional(),
-  tags: z.array(z.string()).optional(),
+  tags: shelfTagsSchema.optional(),
   date_added: dateString.optional(),
 });
 

@@ -14,6 +14,16 @@ export const rangeQuerySchema = z.object({
   end: dateString.optional(),
 });
 
+export const listQuerySchema = z.object({
+  limit: z.string().optional(),
+  offset: z.string().optional(),
+  search: z.string().optional(),
+  sort: z.string().optional(),
+  tags: z.string().optional(),
+  start: dateString.optional(),
+  end: dateString.optional(),
+});
+
 // Location schemas
 export const locationSchema = z.object({
   latitude: z.number().min(-90).max(90),
@@ -38,4 +48,5 @@ export const locationQuerySchema = z.object({
   end: dateString.optional(),
   label: z.string().optional(),
   limit: z.string().optional(),
+  offset: z.string().optional(),
 });
