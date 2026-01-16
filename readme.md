@@ -6,6 +6,24 @@
 
 Private personal API built for Cloudflare Workers + D1.
 
+## Documentation
+
+Interactive API documentation is available at **[https://api.anuragd.me/docs](https://api.anuragd.me/docs)** (requires Bearer token authentication).
+
+The Swagger UI interface provides:
+- Complete API reference with all 149+ endpoints
+- Interactive "Try it out" functionality to test endpoints directly
+- Request/response schemas and validation rules
+- Authentication testing with Bearer token
+
+To use the interactive documentation:
+1. Navigate to `/docs` in your browser (no authentication required to view)
+2. Browse all endpoints and their documentation
+3. When you want to test endpoints, click the "Authorize" button and enter your Bearer token
+4. Explore and test endpoints with live API calls
+
+The OpenAPI 3.0 specification is also available at `/openapi.json` for programmatic access.
+
 ## V1 endpoints
 
 All `/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
@@ -14,7 +32,8 @@ List endpoints support `?limit&offset&search&sort&tags&start&end` where applicab
 
 ### Core
 
-- `GET /openapi.json` (no auth)
+- `GET /openapi.json` (no auth) - OpenAPI 3.0 specification
+- `GET /docs` (no auth) - Interactive API documentation (Swagger UI)
 - `GET /health` (auth required)
 - `GET /v1/export`
 
