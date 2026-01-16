@@ -3,6 +3,7 @@ import type { Env } from "./types/env";
 import { nowIso } from "./utils/date";
 import { requireAuth } from "./middleware/auth";
 import { getOpenApiDocument } from "./schemas/openapi";
+import { getSwaggerUiHtml } from "./utils/swagger";
 import { handleScheduled } from "./scheduled";
 
 // Import route modules
@@ -52,6 +53,12 @@ app.get("/", (c) => {
 
 app.get("/openapi.json", (c) => {
   return c.json(getOpenApiDocument(c.env.API_VERSION, c.env.API_BASE_URL));
+});
+
+// API documentation (public - authorize within Swagger UI to test endpoints)
+app.get("/docs", (c) => {
+  const openapiUrl = `${c.env.API_BASE_URL || ''}/openapi.json`;
+  return c.html(getSwaggerUiHtml(openapiUrl));
 });
 
 // Health check (requires auth)
