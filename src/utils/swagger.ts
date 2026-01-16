@@ -16,39 +16,10 @@ export function getSwaggerUiHtml(openapiUrl: string): string {
     body {
       margin: 0;
       padding: 0;
-      background: #fafafa;
-    }
-    .swagger-ui .topbar {
-      display: none;
-    }
-    #swagger-ui {
-      max-width: 1460px;
-      margin: 0 auto;
-    }
-    .custom-header {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      padding: 2rem;
-      text-align: center;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
-    .custom-header h1 {
-      margin: 0 0 0.5rem 0;
-      font-size: 2rem;
-      font-weight: 600;
-    }
-    .custom-header p {
-      margin: 0;
-      opacity: 0.9;
-      font-size: 1.1rem;
     }
   </style>
 </head>
 <body>
-  <div class="custom-header">
-    <h1>Personal API Documentation</h1>
-    <p>Interactive API documentation with live testing capabilities</p>
-  </div>
   <div id="swagger-ui"></div>
 
   <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
