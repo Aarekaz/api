@@ -666,32 +666,32 @@ app.get("/summary", async (c) => {
   const recentWorkouts = recentWorkoutsData;
 
   const avgSteps =
-    dailyData.results && dailyData.results.length > 0
+    dailyData && dailyData.length > 0
       ? Math.round(
-          dailyData.results
+          dailyData
             .filter((d) => (d as JsonRecord).steps != null)
             .reduce((sum, d) => sum + Number((d as JsonRecord).steps ?? 0), 0) /
-            dailyData.results.filter((d) => (d as JsonRecord).steps != null).length || 1
+            dailyData.filter((d) => (d as JsonRecord).steps != null).length || 1
         )
       : null;
 
   const avgRestingHR =
-    dailyData.results && dailyData.results.length > 0
+    dailyData && dailyData.length > 0
       ? Math.round(
-          dailyData.results
+          dailyData
             .filter((d) => (d as JsonRecord).resting_heart_rate != null)
             .reduce((sum, d) => sum + Number((d as JsonRecord).resting_heart_rate ?? 0), 0) /
-            dailyData.results.filter((d) => (d as JsonRecord).resting_heart_rate != null).length || 1
+            dailyData.filter((d) => (d as JsonRecord).resting_heart_rate != null).length || 1
         )
       : null;
 
   return c.json({
-    latest: latest.results?.[0] ?? null,
+    latest: latest ?? null,
     averages_7_days: {
       steps: avgSteps,
       resting_heart_rate: avgRestingHR,
     },
-    recent_days: dailyData.results ?? [],
+    recent_days: dailyData ?? [],
     recent_sleep: recentSleep.results ?? [],
     recent_workouts: recentWorkouts.results ?? [],
   });
