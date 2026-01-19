@@ -2,7 +2,7 @@
 
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
 ![Cloudflare D1](https://img.shields.io/badge/Cloudflare-D1-F38020?logo=cloudflare&logoColor=white)
-![API Version](https://img.shields.io/endpoint?url=https%3A%2F%2Fapi.anuragd.me%2F)
+![API Version](https://img.shields.io/endpoint?url=https%3A%2F%2Fapi.anuragd.me%2Fbadge)
 
 Private personal API built for Cloudflare Workers + D1.
 
@@ -52,6 +52,35 @@ flowchart TB
     CRON --> Services
     CRON --> D1
 ```
+
+### Request Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant RL as Request Logger
+    participant EH as Error Handler
+    participant A as Auth
+    participant R as Route Handler
+    participant DB as D1 Database
+
+    C->>RL: HTTPS Request
+    RL->>RL: Generate Request ID
+    RL->>EH: Pass through
+    EH->>A: Pass through
+    
+    alt No Auth Header
+        A-->>C: 401 Unauthorized
+    else Invalid Token
+        A-->>C: 403 Forbidden
+    else Valid Token
+        A->>R: Proceed
+        R->>DB: Query/Mutation
+        DB-->>R: Result
+        R-->>C: JSON Response + X-Request-ID
+    end
+```
+
 
 ## Documentation
 

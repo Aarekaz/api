@@ -57,6 +57,17 @@ app.get("/", (c) => {
   });
 });
 
+// Shields.io badge endpoint (returns only the required fields)
+app.get("/badge", (c) => {
+  const version = c.env.API_VERSION ?? "unknown";
+  return c.json({
+    schemaVersion: 1,
+    label: "api",
+    message: version,
+    color: "blue",
+  });
+});
+
 app.get("/openapi.json", (c) => {
   return c.json(getOpenApiDocument(c.env.API_VERSION, c.env.API_BASE_URL));
 });
