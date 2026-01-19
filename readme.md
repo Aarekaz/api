@@ -6,6 +6,53 @@
 
 Private personal API built for Cloudflare Workers + D1.
 
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph Client
+        REQ[HTTP Request]
+    end
+
+    subgraph CF[Cloudflare Workers]
+        subgraph Middleware
+            RL[Request Logger]
+            EH[Error Handler]
+            AUTH[Auth Middleware]
+        end
+
+        subgraph Routes[Route Handlers]
+            HEALTH[Health Data]
+            CONTENT[Content]
+            PORTFOLIO[Portfolio]
+            INTEGRATIONS[Integrations]
+            CUSTOM[Workouts]
+        end
+
+        subgraph Services[External APIs]
+            WAKATIME[WakaTime]
+            GITHUB[GitHub]
+            LANYARD[Discord]
+        end
+    end
+
+    subgraph Storage
+        D1[D1 Database]
+        R2[R2 Bucket]
+    end
+
+    subgraph Scheduled[Cron Job]
+        CRON[Refresh Data]
+    end
+
+    REQ --> RL --> EH --> AUTH --> Routes
+    Routes --> D1
+    Routes --> R2
+    Routes --> Services
+    CRON --> Services
+    CRON --> D1
+```
+
 ## Documentation
 
 Interactive API documentation is available at **[https://api.anuragd.me/docs](https://api.anuragd.me/docs)** (requires Bearer token authentication).
