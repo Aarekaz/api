@@ -45,6 +45,9 @@ export const appleHealthDailySchema = z.object({
   notes: z.string().optional(),
 });
 
+// Infer type from schema for type safety
+export type AppleHealthDaily = z.infer<typeof appleHealthDailySchema>;
+
 export const appleHealthHeartRateSchema = z.object({
   recorded_at: dateString,
   heart_rate: z.number().positive(),
@@ -52,9 +55,13 @@ export const appleHealthHeartRateSchema = z.object({
   source: z.string().optional(),
 });
 
+export type AppleHealthHeartRate = z.infer<typeof appleHealthHeartRateSchema>;
+
 export const appleHealthHeartRateBatchSchema = z.object({
   samples: z.array(appleHealthHeartRateSchema).min(1).max(1000),
 });
+
+export type AppleHealthHeartRateBatch = z.infer<typeof appleHealthHeartRateBatchSchema>;
 
 export const appleHealthSleepSessionSchema = z.object({
   start_at: dateString,
@@ -70,6 +77,8 @@ export const appleHealthSleepSessionSchema = z.object({
   hrv_avg: z.number().nonnegative().optional(),
 });
 
+export type AppleHealthSleepSession = z.infer<typeof appleHealthSleepSessionSchema>;
+
 export const appleHealthWorkoutSchema = z.object({
   workout_type: z.string().min(1),
   start_at: dateString,
@@ -83,6 +92,8 @@ export const appleHealthWorkoutSchema = z.object({
   source: z.string().optional(),
   notes: z.string().optional(),
 });
+
+export type AppleHealthWorkout = z.infer<typeof appleHealthWorkoutSchema>;
 
 export const healthQuerySchema = z.object({
   start: dateString.optional(),
