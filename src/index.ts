@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import type { Env } from "./types/env";
 import { nowIso } from "./utils/date";
 import { requireAuth } from "./middleware/auth";
+import { errorHandler } from "./middleware/error-handler";
+import { requestLogger } from "./middleware/request-logger";
 import { getOpenApiDocument } from "./schemas/openapi";
 import { getSwaggerUiHtml } from "./utils/swagger";
 import { handleScheduled } from "./scheduled";
@@ -34,6 +36,10 @@ import logsRoute from "./routes/logs";
 
 const app = new Hono<{ Bindings: Env }>();
 
+// Global middleware (applied to all routes)
+app.use("*", requestLogger);
+app.use("*", errorHandler);
+
 // Public routes
 app.get("/", (c) => {
   const version = c.env.API_VERSION ?? "unknown";
@@ -44,6 +50,17 @@ app.get("/", (c) => {
     version,
     status: "ok",
     timestamp: nowIso(),
+    schemaVersion: 1,
+    label: "api",
+    message: version,
+    color: "blue",
+  });
+});
+
+// Shields.io badge endpoint (returns only the required fields)
+app.get("/badge", (c) => {
+  const version = c.env.API_VERSION ?? "unknown";
+  return c.json({
     schemaVersion: 1,
     label: "api",
     message: version,
