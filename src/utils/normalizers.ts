@@ -2,11 +2,22 @@ import type { JsonRecord } from "../types/common";
 import { parseStoredJson } from "./json";
 
 export function normalizeProfile(row: JsonRecord): JsonRecord {
-  const { handles_json, contact_json, ...rest } = row;
+  const { handles_json, contact_json, summary_json, ...rest } = row;
   return {
     ...rest,
     handles: parseStoredJson(handles_json),
     contact: parseStoredJson(contact_json),
+    summary: parseStoredJson(summary_json),
+  };
+}
+
+export function normalizeNow(row: JsonRecord): JsonRecord {
+  const { learning_json, projects_json, life_json, ...rest } = row;
+  return {
+    ...rest,
+    learning: parseStoredJson(learning_json),
+    projects: parseStoredJson(projects_json),
+    life: parseStoredJson(life_json),
   };
 }
 
