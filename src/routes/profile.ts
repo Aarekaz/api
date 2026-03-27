@@ -56,8 +56,8 @@ app.put("/", async (c) => {
 
   const updatedAt = nowIso();
   await c.env.DB.prepare(
-    `INSERT INTO profile (id, name, bio, handles_json, contact_json, timezone, avatar_url, location, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO profile (id, name, bio, handles_json, contact_json, timezone, avatar_url, location, email, website, image_url, image_alt, summary_json, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name,
        bio = excluded.bio,
@@ -66,6 +66,11 @@ app.put("/", async (c) => {
        timezone = excluded.timezone,
        avatar_url = excluded.avatar_url,
        location = excluded.location,
+       email = excluded.email,
+       website = excluded.website,
+       image_url = excluded.image_url,
+       image_alt = excluded.image_alt,
+       summary_json = excluded.summary_json,
        updated_at = excluded.updated_at`
   )
     .bind(
@@ -76,6 +81,11 @@ app.put("/", async (c) => {
       validation.data.timezone ?? null,
       validation.data.avatar_url ?? null,
       validation.data.location ?? null,
+      validation.data.email ?? null,
+      validation.data.website ?? null,
+      validation.data.image_url ?? null,
+      validation.data.image_alt ?? null,
+      mapJsonField(validation.data.summary),
       updatedAt
     )
     .run();

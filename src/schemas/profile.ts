@@ -8,6 +8,11 @@ export const profileSchema = z.object({
   timezone: z.string().optional(),
   avatar_url: z.string().url().optional(),
   location: z.string().optional(),
+  email: z.string().optional(),
+  website: z.string().optional(),
+  image_url: z.string().optional(),
+  image_alt: z.string().optional(),
+  summary: z.array(z.string()).optional(),
 });
 
 export const nowSchema = z.object({
@@ -16,6 +21,11 @@ export const nowSchema = z.object({
   availability: z.string().optional(),
   mood: z.string().optional(),
   current_song: z.string().optional(),
+  learning: z.array(z.string()).optional(),
+  projects: z.array(z.record(z.unknown())).optional(),
+  life: z.array(z.string()).optional(),
+  reading_goal: z.string().optional(),
+  last_updated: z.string().optional(),
 });
 
 // Shelf config schema for type safety
