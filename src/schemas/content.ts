@@ -7,6 +7,7 @@ export const projectSchema = z.object({
   links: z.array(z.string()).optional(),
   tags: z.array(z.string()).optional(),
   status: z.string().optional(),
+  sort_order: z.number().int().optional(),
 });
 
 export const noteSchema = z.object({
