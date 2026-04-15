@@ -57,11 +57,13 @@ export function normalizeEvent(row: JsonRecord): JsonRecord {
 }
 
 export function normalizePost(row: JsonRecord): JsonRecord {
-  const { tags_json, pinned, ...rest } = row;
+  const { tags_json, pinned, published_at, ...rest } = row;
   return {
     ...rest,
     tags: parseStoredJson(tags_json),
     pinned: Boolean(pinned),
+    published_at,
+    published: published_at != null,
   };
 }
 
