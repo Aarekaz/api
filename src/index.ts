@@ -46,8 +46,8 @@ app.options("/v1/photos/upload-presigned", (c) => {
     status: 204,
     headers: {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "PUT, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, X-Upload-Token",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Upload-Token",
       "Access-Control-Max-Age": "600",
     },
   });
