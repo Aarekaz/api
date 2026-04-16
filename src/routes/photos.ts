@@ -37,6 +37,49 @@ import {
 
 const app = new Hono<{ Bindings: Env }>();
 
+/* ── Presigned upload HMAC helpers ──────────────────────────────────── */
+
+async function signUploadToken(
+  key: string,
+  contentType: string,
+  secret: string,
+): Promise<string> {
+  const payload = JSON.stringify({
+    key,
+    contentType,
+    exp: Date.now() + 5 * 60 * 1000,
+  });
+  const enc = new TextEncoder();
+  const hmacKey = await crypto.subtle.importKey(
+    "raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", hmacKey, enc.encode(payload));
+  const sigHex = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return btoa(payload) + "." + sigHex;
+}
+
+async function verifyUploadToken(
+  token: string,
+  secret: string,
+): Promise<{ key: string; contentType: string } | null> {
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const payload = atob(parts[0]);
+  const sigHex = parts[1];
+  const enc = new TextEncoder();
+  const hmacKey = await crypto.subtle.importKey(
+    "raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"],
+  );
+  const sigBytes = new Uint8Array(sigHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)));
+  const valid = await crypto.subtle.verify("HMAC", hmacKey, sigBytes, enc.encode(payload));
+  if (!valid) return null;
+  const data = JSON.parse(payload);
+  if (typeof data.exp !== "number" || Date.now() > data.exp) return null;
+  return { key: data.key, contentType: data.contentType };
+}
+
+/* ── Schemas ────────────────────────────────────────────────────────── */
+
 const photoPatchSchema = photoSchema.partial().refine((data) => Object.keys(data).length > 0, {
   message: "At least one field must be provided",
 });
@@ -198,6 +241,53 @@ app.post("/", async (c) => {
     .run();
 
   return c.json({ ok: true, created_at: createdAt }, 201);
+});
+
+// ── Presigned upload (must be before /:id routes) ────────────────────
+app.post("/presign", async (c) => {
+  const contentType = c.req.header("x-content-type") || "image/jpeg";
+  if (!contentType.startsWith("image/")) {
+    return c.json({ error: "Unsupported content type" }, 415);
+  }
+
+  const ext = fileExtensionForContentType(contentType);
+  const key = `photos/${crypto.randomUUID()}.${ext}`;
+
+  const uploadToken = await signUploadToken(key, contentType, c.env.API_TOKEN);
+  const apiBase = c.env.API_BASE_URL?.replace(/\/$/, "") || "https://api.anuragd.me";
+
+  return c.json({
+    ok: true,
+    key,
+    uploadToken,
+    uploadUrl: `${apiBase}/v1/photos/upload-presigned`,
+    expiresIn: 300,
+  });
+});
+
+app.put("/upload-presigned", async (c) => {
+  const token = c.req.header("x-upload-token");
+  if (!token) {
+    return c.json({ error: "Missing upload token" }, 401);
+  }
+
+  const claim = await verifyUploadToken(token, c.env.API_TOKEN);
+  if (!claim) {
+    return c.json({ error: "Invalid or expired upload token" }, 403);
+  }
+
+  if (!c.req.raw.body) {
+    return c.json({ error: "Missing body" }, 400);
+  }
+
+  await c.env.R2_BUCKET.put(claim.key, c.req.raw.body, {
+    httpMetadata: { contentType: claim.contentType },
+  });
+
+  const baseUrl = c.env.R2_PUBLIC_BASE_URL?.replace(/\/$/, "");
+  const url = baseUrl ? `${baseUrl}/${claim.key}` : claim.key;
+
+  return c.json({ ok: true, key: claim.key, url, content_type: claim.contentType }, 201);
 });
 
 app.put("/:id", async (c) => {
@@ -381,146 +471,6 @@ app.post("/upload", async (c) => {
       content_type: contentType,
     },
     201
-  );
-});
-
-/* ------------------------------------------------------------------ */
-/*  Presigned upload flow — browser uploads directly to the API,       */
-/*  bypassing Vercel's 4.5 MB body limit.                              */
-/*                                                                     */
-/*  1. POST /presign  (requires API_TOKEN) → { key, uploadToken, ... } */
-/*  2. PUT  /upload-presigned (requires uploadToken) → stores in R2    */
-/* ------------------------------------------------------------------ */
-
-async function signUploadToken(
-  key: string,
-  contentType: string,
-  secret: string,
-): Promise<string> {
-  const payload = JSON.stringify({
-    key,
-    contentType,
-    exp: Date.now() + 5 * 60 * 1000, // 5 minutes
-  });
-  const enc = new TextEncoder();
-  const hmacKey = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", hmacKey, enc.encode(payload));
-  const sigHex = [...new Uint8Array(sig)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  return btoa(payload) + "." + sigHex;
-}
-
-async function verifyUploadToken(
-  token: string,
-  secret: string,
-): Promise<{ key: string; contentType: string } | null> {
-  const parts = token.split(".");
-  if (parts.length !== 2) return null;
-
-  const payload = atob(parts[0]);
-  const sigHex = parts[1];
-
-  const enc = new TextEncoder();
-  const hmacKey = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["verify"],
-  );
-  const sigBytes = new Uint8Array(
-    sigHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)),
-  );
-  const valid = await crypto.subtle.verify(
-    "HMAC",
-    hmacKey,
-    sigBytes,
-    enc.encode(payload),
-  );
-  if (!valid) return null;
-
-  const data = JSON.parse(payload);
-  if (typeof data.exp !== "number" || Date.now() > data.exp) return null;
-
-  return { key: data.key, contentType: data.contentType };
-}
-
-// Step 1: Get a presigned upload token (authenticated)
-app.post("/presign", async (c) => {
-  const contentType = c.req.header("x-content-type") || "image/jpeg";
-  if (!contentType.startsWith("image/")) {
-    return c.json({ error: "Unsupported content type" }, 415);
-  }
-
-  const ext = fileExtensionForContentType(contentType);
-  const key = `photos/${crypto.randomUUID()}.${ext}`;
-
-  const uploadToken = await signUploadToken(key, contentType, c.env.API_TOKEN);
-  const apiBase = c.env.API_BASE_URL?.replace(/\/$/, "") || "https://api.anuragd.me";
-
-  return c.json({
-    ok: true,
-    key,
-    uploadToken,
-    uploadUrl: `${apiBase}/v1/photos/upload-presigned`,
-    expiresIn: 300,
-  });
-});
-
-// CORS preflight for presigned upload
-app.options("/upload-presigned", (c) => {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Upload-Token",
-      "Access-Control-Max-Age": "600",
-    },
-  });
-});
-
-// Step 2: Direct upload with token (no API_TOKEN needed, CORS-friendly)
-app.put("/upload-presigned", async (c) => {
-  const corsHeaders = { "Access-Control-Allow-Origin": "*" };
-
-  const token = c.req.header("x-upload-token");
-  if (!token) {
-    return c.json({ error: "Missing upload token" }, 401, corsHeaders);
-  }
-
-  const claim = await verifyUploadToken(token, c.env.API_TOKEN);
-  if (!claim) {
-    return c.json({ error: "Invalid or expired upload token" }, 403, corsHeaders);
-  }
-
-  if (!c.req.raw.body) {
-    return c.json({ error: "Missing body" }, 400, corsHeaders);
-  }
-
-  await c.env.R2_BUCKET.put(claim.key, c.req.raw.body, {
-    httpMetadata: { contentType: claim.contentType },
-  });
-
-  const baseUrl = c.env.R2_PUBLIC_BASE_URL?.replace(/\/$/, "");
-  const url = baseUrl ? `${baseUrl}/${claim.key}` : claim.key;
-
-  return c.json(
-    {
-      ok: true,
-      key: claim.key,
-      url,
-      content_type: claim.contentType,
-    },
-    201,
-    corsHeaders,
   );
 });
 
