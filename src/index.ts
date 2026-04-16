@@ -40,6 +40,19 @@ const app = new Hono<{ Bindings: Env }>();
 app.use("*", requestLogger);
 app.use("*", errorHandler);
 
+// CORS for presigned upload (must be before auth middleware)
+app.options("/v1/photos/upload-presigned", (c) => {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "PUT, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, X-Upload-Token",
+      "Access-Control-Max-Age": "600",
+    },
+  });
+});
+
 // Public routes
 app.get("/", (c) => {
   const version = c.env.API_VERSION ?? "unknown";
