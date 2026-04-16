@@ -40,17 +40,24 @@ const app = new Hono<{ Bindings: Env }>();
 app.use("*", requestLogger);
 app.use("*", errorHandler);
 
-// CORS for presigned upload (must be before auth middleware)
-app.options("/v1/photos/upload-presigned", (c) => {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Upload-Token",
-      "Access-Control-Max-Age": "600",
-    },
-  });
+// CORS for presigned upload — middleware adds headers to ALL responses on this path
+app.use("/v1/photos/upload-presigned", async (c, next) => {
+  // Handle preflight
+  if (c.req.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "PUT, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, X-Upload-Token",
+        "Access-Control-Max-Age": "600",
+      },
+    });
+  }
+
+  // Run the handler, then add CORS headers to whatever it returns
+  await next();
+  c.res.headers.set("Access-Control-Allow-Origin", "*");
 });
 
 // Public routes
