@@ -30,6 +30,7 @@ import {
   addSearchFilter,
   addTagsFilter,
   addDateRangeFilter,
+  addPublishedFilter,
   buildWhereClause,
   parseSort,
   parseId,
@@ -172,6 +173,7 @@ app.get("/", async (c) => {
   ]);
   addTagsFilter(filters, tags);
   addDateRangeFilter(filters, "COALESCE(shot_at, created_at)", start, end);
+  addPublishedFilter(filters, query);
 
   const orderBy = parseSort(
     sort,
@@ -195,8 +197,14 @@ app.get("/:id", async (c) => {
     return c.json({ error: "Invalid id" }, 400);
   }
 
-  const row = await c.env.DB.prepare("SELECT * FROM photos WHERE id = ?")
-    .bind(id)
+  const query = c.req.query();
+  const filters = createFilterBuilder();
+  filters.clauses.push("id = ?");
+  filters.params.push(id);
+  addPublishedFilter(filters, query);
+
+  const row = await c.env.DB.prepare(`SELECT * FROM photos${buildWhereClause(filters)}`)
+    .bind(...filters.params)
     .all();
 
   if (!row.results || row.results.length === 0) {
@@ -219,8 +227,8 @@ app.post("/", async (c) => {
 
   const createdAt = nowIso();
   await c.env.DB.prepare(
-    `INSERT INTO photos (title, description, url, thumb_url, width, height, shot_at, camera, lens, settings, location, tags_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO photos (title, description, url, thumb_url, width, height, shot_at, camera, lens, settings, location, tags_json, published, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       validation.data.title ?? null,
@@ -235,6 +243,7 @@ app.post("/", async (c) => {
       validation.data.settings ?? null,
       validation.data.location ?? null,
       mapJsonField(validation.data.tags),
+      validation.data.published === false ? 0 : 1,
       createdAt,
       createdAt
     )
@@ -309,7 +318,7 @@ app.put("/:id", async (c) => {
   const updatedAt = nowIso();
   const result = await c.env.DB.prepare(
     `UPDATE photos
-     SET title = ?, description = ?, url = ?, thumb_url = ?, width = ?, height = ?, shot_at = ?, camera = ?, lens = ?, settings = ?, location = ?, tags_json = ?, updated_at = ?
+     SET title = ?, description = ?, url = ?, thumb_url = ?, width = ?, height = ?, shot_at = ?, camera = ?, lens = ?, settings = ?, location = ?, tags_json = ?, published = ?, updated_at = ?
      WHERE id = ?`
   )
     .bind(
@@ -325,6 +334,7 @@ app.put("/:id", async (c) => {
       validation.data.settings ?? null,
       validation.data.location ?? null,
       mapJsonField(validation.data.tags),
+      validation.data.published === false ? 0 : 1,
       updatedAt,
       id
     )
@@ -403,6 +413,10 @@ app.patch("/:id", async (c) => {
   if (Object.prototype.hasOwnProperty.call(validation.data, "tags")) {
     updates.push("tags_json = ?");
     params.push(mapJsonField(validation.data.tags));
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "published")) {
+    updates.push("published = ?");
+    params.push(validation.data.published === false ? 0 : 1);
   }
 
   const updatedAt = nowIso();

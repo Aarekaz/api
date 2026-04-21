@@ -22,6 +22,7 @@ import {
   createFilterBuilder,
   addSearchFilter,
   addDateRangeFilter,
+  addPublishedFilter,
   buildWhereClause,
   parseSort,
   parseId,
@@ -96,6 +97,7 @@ app.get("/", async (c) => {
 
   addSearchFilter(filters, search, ["institution", "degree", "field", "description"]);
   addDateRangeFilter(filters, "start_date", start, end);
+  addPublishedFilter(filters, query);
 
   const orderBy = parseSort(
     sort,
@@ -116,8 +118,14 @@ app.get("/:id", async (c) => {
     return c.json({ error: "Invalid id" }, 400);
   }
 
-  const row = await c.env.DB.prepare("SELECT * FROM education WHERE id = ?")
-    .bind(id)
+  const query = c.req.query();
+  const filters = createFilterBuilder();
+  filters.clauses.push("id = ?");
+  filters.params.push(id);
+  addPublishedFilter(filters, query);
+
+  const row = await c.env.DB.prepare(`SELECT * FROM education${buildWhereClause(filters)}`)
+    .bind(...filters.params)
     .all();
 
   if (!row.results || row.results.length === 0) {
@@ -140,8 +148,8 @@ app.post("/", async (c) => {
 
   const createdAt = nowIso();
   await c.env.DB.prepare(
-    `INSERT INTO education (institution, degree, field, start_date, end_date, description, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO education (institution, degree, field, start_date, end_date, description, published, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       validation.data.institution,
@@ -150,6 +158,7 @@ app.post("/", async (c) => {
       validation.data.start_date ?? null,
       validation.data.end_date ?? null,
       validation.data.description ?? null,
+      validation.data.published === false ? 0 : 1,
       createdAt,
       createdAt
     )
@@ -177,7 +186,7 @@ app.put("/:id", async (c) => {
   const updatedAt = nowIso();
   const result = await c.env.DB.prepare(
     `UPDATE education
-     SET institution = ?, degree = ?, field = ?, start_date = ?, end_date = ?, description = ?, updated_at = ?
+     SET institution = ?, degree = ?, field = ?, start_date = ?, end_date = ?, description = ?, published = ?, updated_at = ?
      WHERE id = ?`
   )
     .bind(
@@ -187,6 +196,7 @@ app.put("/:id", async (c) => {
       validation.data.start_date ?? null,
       validation.data.end_date ?? null,
       validation.data.description ?? null,
+      validation.data.published === false ? 0 : 1,
       updatedAt,
       id
     )
@@ -241,6 +251,10 @@ app.patch("/:id", async (c) => {
   if (Object.prototype.hasOwnProperty.call(validation.data, "description")) {
     updates.push("description = ?");
     params.push(validation.data.description ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "published")) {
+    updates.push("published = ?");
+    params.push(validation.data.published === false ? 0 : 1);
   }
 
   const updatedAt = nowIso();
