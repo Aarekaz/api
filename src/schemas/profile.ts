@@ -54,6 +54,7 @@ export const experienceSchema = z.object({
   end_date: z.string().optional(),
   employment_type: z.string().optional(),
   description: z.string().optional(),
+  published: z.boolean().optional(),
 });
 
 export const educationSchema = z.object({
@@ -63,9 +64,11 @@ export const educationSchema = z.object({
   start_date: z.string().optional(),
   end_date: z.string().optional(),
   description: z.string().optional(),
+  published: z.boolean().optional(),
 });
 
 export const skillSchema = z.object({
   category: z.string().min(1),
   items: z.array(z.string()).optional(),
+  published: z.boolean().optional(),
 });

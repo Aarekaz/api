@@ -27,6 +27,7 @@ import {
   addSearchFilter,
   addTagsFilter,
   addDateRangeFilter,
+  addPublishedFilter,
   buildWhereClause,
   parseSort,
   parseId,
@@ -114,6 +115,7 @@ app.get("/", async (c) => {
   addSearchFilter(filters, search, ["title", "description", "status"]);
   addTagsFilter(filters, tags);
   addDateRangeFilter(filters, "created_at", start, end);
+  addPublishedFilter(filters, query);
 
   const orderBy = parseSort(
     sort,
@@ -137,8 +139,14 @@ app.get("/:id", async (c) => {
     return c.json({ error: "Invalid id" }, 400);
   }
 
-  const row = await c.env.DB.prepare("SELECT * FROM projects WHERE id = ?")
-    .bind(id)
+  const query = c.req.query();
+  const filters = createFilterBuilder();
+  filters.clauses.push("id = ?");
+  filters.params.push(id);
+  addPublishedFilter(filters, query);
+
+  const row = await c.env.DB.prepare(`SELECT * FROM projects${buildWhereClause(filters)}`)
+    .bind(...filters.params)
     .all();
 
   if (!row.results || row.results.length === 0) {
@@ -161,8 +169,8 @@ app.post("/", async (c) => {
 
   const createdAt = nowIso();
   await c.env.DB.prepare(
-    `INSERT INTO projects (title, description, links_json, tags_json, status, sort_order, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO projects (title, description, links_json, tags_json, status, sort_order, published, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       validation.data.title,
@@ -171,6 +179,7 @@ app.post("/", async (c) => {
       mapJsonField(validation.data.tags),
       validation.data.status ?? null,
       validation.data.sort_order ?? 0,
+      validation.data.published === false ? 0 : 1,
       createdAt,
       createdAt
     )
@@ -198,7 +207,7 @@ app.put("/:id", async (c) => {
   const updatedAt = nowIso();
   const result = await c.env.DB.prepare(
     `UPDATE projects
-     SET title = ?, description = ?, links_json = ?, tags_json = ?, status = ?, sort_order = ?, updated_at = ?
+     SET title = ?, description = ?, links_json = ?, tags_json = ?, status = ?, sort_order = ?, published = ?, updated_at = ?
      WHERE id = ?`
   )
     .bind(
@@ -208,6 +217,7 @@ app.put("/:id", async (c) => {
       mapJsonField(validation.data.tags),
       validation.data.status ?? null,
       validation.data.sort_order ?? 0,
+      validation.data.published === false ? 0 : 1,
       updatedAt,
       id
     )
@@ -262,6 +272,10 @@ app.patch("/:id", async (c) => {
   if (Object.prototype.hasOwnProperty.call(validation.data, "sort_order")) {
     updates.push("sort_order = ?");
     params.push(validation.data.sort_order ?? 0);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "published")) {
+    updates.push("published = ?");
+    params.push(validation.data.published === false ? 0 : 1);
   }
 
   const updatedAt = nowIso();

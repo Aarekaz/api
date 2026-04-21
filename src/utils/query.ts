@@ -76,6 +76,21 @@ export function addTagsFilter(
   });
 }
 
+// Adds `published = 1` to the filter unless the caller passes
+// `?include_unpublished=true`. Both the public site and the OS
+// authenticate with the same token; the distinction is a query param.
+export function addPublishedFilter(
+  builder: FilterBuilder,
+  query: Record<string, string | undefined>,
+  column = "published"
+): void {
+  const raw = query.include_unpublished?.toLowerCase();
+  const includeAll = raw === "true" || raw === "1" || raw === "yes";
+  if (!includeAll) {
+    builder.clauses.push(`${column} = 1`);
+  }
+}
+
 export function addDateRangeFilter(
   builder: FilterBuilder,
   column: string,

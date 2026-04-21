@@ -8,6 +8,7 @@ export const projectSchema = z.object({
   tags: z.array(z.string()).optional(),
   status: z.string().optional(),
   sort_order: z.number().int().optional(),
+  published: z.boolean().optional(),
 });
 
 export const noteSchema = z.object({
@@ -37,6 +38,7 @@ export const usesItemSchema = z.object({
   name: z.string().min(1),
   url: z.string().url().optional(),
   note: z.string().optional(),
+  published: z.boolean().optional(),
 });
 
 const shelfTagsSchema = z.union([z.array(z.string()), z.record(z.unknown())]);
@@ -53,6 +55,7 @@ export const shelfItemSchema = z.object({
   drawer: z.string().optional(),
   tags: shelfTagsSchema.optional(),
   date_added: dateString.optional(),
+  published: z.boolean().optional(),
 });
 
 export const photoSchema = z.object({
@@ -68,4 +71,5 @@ export const photoSchema = z.object({
   settings: z.string().optional(),
   location: z.string().optional(),
   tags: z.array(z.string()).optional(),
+  published: z.boolean().optional(),
 });

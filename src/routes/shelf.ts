@@ -26,6 +26,7 @@ import {
   addSearchFilter,
   addTagsFilter,
   addDateRangeFilter,
+  addPublishedFilter,
   buildWhereClause,
   parseSort,
   parseId,
@@ -103,6 +104,7 @@ app.get("/", async (c) => {
   addSearchFilter(filters, search, ["title", "author", "source", "quote", "note"]);
   addTagsFilter(filters, tags);
   addDateRangeFilter(filters, "date_added", start, end);
+  addPublishedFilter(filters, query);
 
   if (query.type) {
     filters.clauses.push("type = ?");
@@ -131,8 +133,14 @@ app.get("/:id", async (c) => {
     return c.json({ error: "Invalid id" }, 400);
   }
 
-  const row = await c.env.DB.prepare("SELECT * FROM shelf_items WHERE id = ?")
-    .bind(id)
+  const query = c.req.query();
+  const filters = createFilterBuilder();
+  filters.clauses.push("id = ?");
+  filters.params.push(id);
+  addPublishedFilter(filters, query);
+
+  const row = await c.env.DB.prepare(`SELECT * FROM shelf_items${buildWhereClause(filters)}`)
+    .bind(...filters.params)
     .all();
 
   if (!row.results || row.results.length === 0) {
@@ -156,8 +164,8 @@ app.post("/", async (c) => {
   const createdAt = nowIso();
   const dateAdded = validation.data.date_added ?? createdAt;
   await c.env.DB.prepare(
-    `INSERT INTO shelf_items (type, title, quote, author, source, url, note, image_url, drawer, tags_json, date_added, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO shelf_items (type, title, quote, author, source, url, note, image_url, drawer, tags_json, date_added, published, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       validation.data.type,
@@ -171,6 +179,7 @@ app.post("/", async (c) => {
       validation.data.drawer ?? null,
       mapJsonField(validation.data.tags),
       dateAdded,
+      validation.data.published === false ? 0 : 1,
       createdAt,
       createdAt
     )
@@ -198,7 +207,7 @@ app.put("/:id", async (c) => {
   const updatedAt = nowIso();
   const result = await c.env.DB.prepare(
     `UPDATE shelf_items
-     SET type = ?, title = ?, quote = ?, author = ?, source = ?, url = ?, note = ?, image_url = ?, drawer = ?, tags_json = ?, date_added = ?, updated_at = ?
+     SET type = ?, title = ?, quote = ?, author = ?, source = ?, url = ?, note = ?, image_url = ?, drawer = ?, tags_json = ?, date_added = ?, published = ?, updated_at = ?
      WHERE id = ?`
   )
     .bind(
@@ -213,6 +222,7 @@ app.put("/:id", async (c) => {
       validation.data.drawer ?? null,
       mapJsonField(validation.data.tags),
       validation.data.date_added ?? null,
+      validation.data.published === false ? 0 : 1,
       updatedAt,
       id
     )
@@ -287,6 +297,10 @@ app.patch("/:id", async (c) => {
   if (Object.prototype.hasOwnProperty.call(validation.data, "date_added")) {
     updates.push("date_added = ?");
     params.push(validation.data.date_added ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "published")) {
+    updates.push("published = ?");
+    params.push(validation.data.published === false ? 0 : 1);
   }
 
   const updatedAt = nowIso();

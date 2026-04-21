@@ -22,6 +22,7 @@ import {
   createFilterBuilder,
   addSearchFilter,
   addDateRangeFilter,
+  addPublishedFilter,
   buildWhereClause,
   parseSort,
   parseId,
@@ -94,6 +95,7 @@ app.get("/", async (c) => {
 
   addSearchFilter(filters, search, ["category", "name", "note"]);
   addDateRangeFilter(filters, "created_at", start, end);
+  addPublishedFilter(filters, query);
 
   const orderBy = parseSort(
     sort,
@@ -114,8 +116,14 @@ app.get("/:id", async (c) => {
     return c.json({ error: "Invalid id" }, 400);
   }
 
-  const row = await c.env.DB.prepare("SELECT * FROM uses_items WHERE id = ?")
-    .bind(id)
+  const query = c.req.query();
+  const filters = createFilterBuilder();
+  filters.clauses.push("id = ?");
+  filters.params.push(id);
+  addPublishedFilter(filters, query);
+
+  const row = await c.env.DB.prepare(`SELECT * FROM uses_items${buildWhereClause(filters)}`)
+    .bind(...filters.params)
     .all();
 
   if (!row.results || row.results.length === 0) {
@@ -138,14 +146,15 @@ app.post("/", async (c) => {
 
   const createdAt = nowIso();
   await c.env.DB.prepare(
-    `INSERT INTO uses_items (category, name, url, note, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO uses_items (category, name, url, note, published, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       validation.data.category,
       validation.data.name,
       validation.data.url ?? null,
       validation.data.note ?? null,
+      validation.data.published === false ? 0 : 1,
       createdAt,
       createdAt
     )
@@ -173,7 +182,7 @@ app.put("/:id", async (c) => {
   const updatedAt = nowIso();
   const result = await c.env.DB.prepare(
     `UPDATE uses_items
-     SET category = ?, name = ?, url = ?, note = ?, updated_at = ?
+     SET category = ?, name = ?, url = ?, note = ?, published = ?, updated_at = ?
      WHERE id = ?`
   )
     .bind(
@@ -181,6 +190,7 @@ app.put("/:id", async (c) => {
       validation.data.name,
       validation.data.url ?? null,
       validation.data.note ?? null,
+      validation.data.published === false ? 0 : 1,
       updatedAt,
       id
     )
@@ -227,6 +237,10 @@ app.patch("/:id", async (c) => {
   if (Object.prototype.hasOwnProperty.call(validation.data, "note")) {
     updates.push("note = ?");
     params.push(validation.data.note ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "published")) {
+    updates.push("published = ?");
+    params.push(validation.data.published === false ? 0 : 1);
   }
 
   const updatedAt = nowIso();
