@@ -181,8 +181,11 @@ export async function refreshWakaTimeHourly(
     cursor = addDays(cursor, 1)
   ) {
     const dateStr = dateOnly(cursor);
+    // slice_by=language makes WakaTime return language-sliced duration
+    // entries (each with a `language` field). Without this param the
+    // default is slice_by=project and language info is omitted entirely.
     const response = await fetch(
-      `https://wakatime.com/api/v1/users/current/durations?date=${dateStr}`,
+      `https://wakatime.com/api/v1/users/current/durations?date=${dateStr}&slice_by=language`,
       {
         headers: {
           authorization: authHeader,
