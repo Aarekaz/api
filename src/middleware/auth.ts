@@ -2,7 +2,10 @@ import { Context, Next } from "hono";
 import type { Env } from "../types/env";
 
 // Paths that use their own token validation (e.g. presigned upload)
-const AUTH_SKIP_PATHS = ["/v1/photos/upload-presigned"];
+const AUTH_SKIP_PATHS = [
+  "/v1/photos/upload-presigned",
+  "/v1/blog-images/upload-presigned",
+];
 
 export async function requireAuth(c: Context<{ Bindings: Env }>, next: Next) {
   // Skip auth for paths that handle their own token validation
