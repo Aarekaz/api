@@ -23,6 +23,7 @@ import experienceRoute from "./routes/experience";
 import educationRoute from "./routes/education";
 import skillsRoute from "./routes/skills";
 import photosRoute from "./routes/photos";
+import blogImagesRoute from "./routes/blog-images";
 import statusRoute from "./routes/status";
 import wakatimeRoute from "./routes/wakatime";
 import githubRoute from "./routes/github";
@@ -41,24 +42,30 @@ app.use("*", requestLogger);
 app.use("*", errorHandler);
 
 // CORS for presigned upload — middleware adds headers to ALL responses on this path
-app.use("/v1/photos/upload-presigned", async (c, next) => {
-  // Handle preflight
-  if (c.req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "PUT, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, X-Upload-Token",
-        "Access-Control-Max-Age": "600",
-      },
-    });
-  }
+const PRESIGNED_UPLOAD_PATHS = [
+  "/v1/photos/upload-presigned",
+  "/v1/blog-images/upload-presigned",
+];
+for (const path of PRESIGNED_UPLOAD_PATHS) {
+  app.use(path, async (c, next) => {
+    // Handle preflight
+    if (c.req.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "PUT, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, X-Upload-Token",
+          "Access-Control-Max-Age": "600",
+        },
+      });
+    }
 
-  // Run the handler, then add CORS headers to whatever it returns
-  await next();
-  c.res.headers.set("Access-Control-Allow-Origin", "*");
-});
+    // Run the handler, then add CORS headers to whatever it returns
+    await next();
+    c.res.headers.set("Access-Control-Allow-Origin", "*");
+  });
+}
 
 // Public routes
 app.get("/", (c) => {
@@ -117,6 +124,7 @@ app.route("/v1/experience", experienceRoute);
 app.route("/v1/education", educationRoute);
 app.route("/v1/skills", skillsRoute);
 app.route("/v1/photos", photosRoute);
+app.route("/v1/blog-images", blogImagesRoute);
 app.route("/v1/status", statusRoute);
 app.route("/v1/wakatime", wakatimeRoute);
 app.route("/v1/github", githubRoute);
