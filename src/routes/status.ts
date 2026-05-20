@@ -36,11 +36,27 @@ app.get("/", async (c) => {
   const row = await c.env.DB.prepare(
     "SELECT * FROM status_snapshots ORDER BY created_at DESC LIMIT 1"
   ).all();
-  return c.json(
-    row.results[0]
-      ? normalizeStatusSnapshot(row.results[0] as JsonRecord)
-      : {}
-  );
+  const refreshHealth = await c.env.DB.prepare(
+    `SELECT
+       name,
+       last_started_at,
+       last_success_at,
+       last_error_at,
+       last_error,
+       consecutive_failures,
+       updated_at
+     FROM refresh_health
+     ORDER BY name`
+  ).all();
+
+  const latestStatus = row.results[0]
+    ? normalizeStatusSnapshot(row.results[0] as JsonRecord)
+    : {};
+
+  return c.json({
+    ...latestStatus,
+    refreshHealth: refreshHealth.results ?? [],
+  });
 });
 
 app.post("/refresh", async (c) => {
