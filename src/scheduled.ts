@@ -18,11 +18,108 @@ export async function handleScheduled(
   // early `return`s that exited the whole handler, so GitHub would never
   // refresh on cron ticks where today's WakaTime row already existed —
   // i.e. most of the day.
-  await Promise.allSettled([
-    refreshLanyard(env),
-    refreshWakaTimeIfDue(env),
-    refreshGitHubIfDue(env),
-  ]);
+  const jobs = [
+    { name: "lanyard", task: () => refreshLanyard(env) },
+    { name: "wakatime", task: () => refreshWakaTimeIfDue(env) },
+    { name: "github", task: () => refreshGitHubIfDue(env) },
+  ];
+
+  const results = await Promise.allSettled(
+    jobs.map((job) => runRefreshJob(env, job.name, job.task))
+  );
+
+  results.forEach((result, index) => {
+    if (result.status === "rejected") {
+      console.error(`Scheduled refresh failed: ${jobs[index].name}`, result.reason);
+    }
+  });
+}
+
+export async function runRefreshJob(
+  env: Env,
+  name: string,
+  task: () => Promise<void>
+): Promise<void> {
+  const startedAt = new Date().toISOString();
+  await markRefreshStarted(env, name, startedAt);
+
+  try {
+    await task();
+    await markRefreshSucceeded(env, name, new Date().toISOString());
+  } catch (error) {
+    await markRefreshFailed(env, name, error, new Date().toISOString());
+    throw error;
+  }
+}
+
+async function markRefreshStarted(
+  env: Env,
+  name: string,
+  startedAt: string
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO refresh_health (name, last_started_at, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(name) DO UPDATE SET
+       last_started_at = excluded.last_started_at,
+       updated_at = excluded.updated_at`
+  )
+    .bind(name, startedAt, startedAt)
+    .run();
+}
+
+async function markRefreshSucceeded(
+  env: Env,
+  name: string,
+  succeededAt: string
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO refresh_health (
+       name,
+       last_success_at,
+       consecutive_failures,
+       updated_at
+     )
+     VALUES (?, ?, 0, ?)
+     ON CONFLICT(name) DO UPDATE SET
+       last_success_at = excluded.last_success_at,
+       consecutive_failures = 0,
+       updated_at = excluded.updated_at`
+  )
+    .bind(name, succeededAt, succeededAt)
+    .run();
+}
+
+async function markRefreshFailed(
+  env: Env,
+  name: string,
+  error: unknown,
+  failedAt: string
+): Promise<void> {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : JSON.stringify(error);
+
+  await env.DB.prepare(
+    `INSERT INTO refresh_health (
+       name,
+       last_error_at,
+       last_error,
+       consecutive_failures,
+       updated_at
+     )
+     VALUES (?, ?, ?, 1, ?)
+     ON CONFLICT(name) DO UPDATE SET
+       last_error_at = excluded.last_error_at,
+       last_error = excluded.last_error,
+       consecutive_failures = consecutive_failures + 1,
+       updated_at = excluded.updated_at`
+  )
+    .bind(name, failedAt, message ?? "Unknown error", failedAt)
+    .run();
 }
 
 async function refreshLanyard(env: Env): Promise<void> {
