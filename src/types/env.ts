@@ -7,6 +7,8 @@ export interface Env {
   WAKATIME_TIMEZONE: string;
   GITHUB_USERNAME: string;
   GITHUB_TOKEN: string;
+  TMDB_API_KEY?: string;
+  TMDB_ACCESS_TOKEN?: string;
   API_VERSION: string;
   R2_PUBLIC_BASE_URL: string;
   API_BASE_URL?: string;
