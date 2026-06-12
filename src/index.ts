@@ -34,6 +34,7 @@ import healthDataRoute from "./routes/health-data";
 import locationRoute from "./routes/location";
 import customRoute from "./routes/custom";
 import logsRoute from "./routes/logs";
+import mediaRoute from "./routes/media";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -120,6 +121,7 @@ app.route("/v1/events", eventsRoute);
 app.route("/v1/posts", postsRoute);
 app.route("/v1/uses", usesRoute);
 app.route("/v1/shelf", shelfRoute);
+app.route("/v1/media", mediaRoute);
 app.route("/v1/experience", experienceRoute);
 app.route("/v1/education", educationRoute);
 app.route("/v1/skills", skillsRoute);

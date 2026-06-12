@@ -8,6 +8,8 @@ import { validateBody } from "../utils/validation";
 import { normalizeShelfItem } from "../utils/normalizers";
 import { shelfItemSchema } from "../schemas/content";
 import { listQuerySchema } from "../schemas/common";
+import { getTmdbMedia, normalizeTmdbMediaType, searchTmdbMedia, type TmdbCandidate } from "../services/tmdb";
+import { getTag, mergeTags } from "../utils/tags";
 import {
   openApiRegistry,
   genericArraySchema,
@@ -38,8 +40,15 @@ const shelfPatchSchema = shelfItemSchema.partial().refine((data) => Object.keys(
   message: "At least one field must be provided",
 });
 
+const shelfEnrichSchema = z.object({
+  tmdb_id: z.number().int().positive().optional(),
+  tmdb_media_type: z.enum(["movie", "tv"]).optional(),
+  title: z.string().optional(),
+  year: z.string().optional(),
+});
+
 const shelfQuerySchema = listQuerySchema.extend({
-  type: z.enum(["book", "movie"]).optional(),
+  type: z.enum(["book", "movie", "show"]).optional(),
 });
 
 // OpenAPI registrations
@@ -95,6 +104,15 @@ openApiRegistry.registerPath({
   responses: okResponses(okDeletedSchema),
 });
 
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/shelf/{id}/enrich",
+  summary: "Enrich shelf item with TMDB poster metadata",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(shelfEnrichSchema) },
+  responses: okResponses(genericObjectSchema),
+});
+
 // Route handlers
 app.get("/", async (c) => {
   const query = c.req.query();
@@ -125,6 +143,85 @@ app.get("/", async (c) => {
     normalizeShelfItem(row as JsonRecord)
   );
   return c.json(results);
+});
+
+app.post("/:id/enrich", async (c) => {
+  const id = parseId(c.req.param("id"));
+  if (!id) {
+    return c.json({ error: "Invalid id" }, 400);
+  }
+
+  const body = await parseJson(c.req.raw);
+  const validation = body === null ? shelfEnrichSchema.safeParse({}) : shelfEnrichSchema.safeParse(body);
+  if (!validation.success) {
+    return c.json({ error: validation.error.issues[0]?.message ?? "Invalid body" }, 400);
+  }
+
+  const row = await c.env.DB.prepare("SELECT * FROM shelf_items WHERE id = ?")
+    .bind(id)
+    .all();
+  if (!row.results || row.results.length === 0) {
+    return c.json({ error: "Shelf item not found" }, 404);
+  }
+
+  const item = normalizeShelfItem(row.results[0] as JsonRecord);
+  const tags = item.tags;
+  const mediaType =
+    validation.data.tmdb_media_type ??
+    normalizeTmdbMediaType(getTag(tags, "tmdb_media_type")) ??
+    normalizeTmdbMediaType(getTag(tags, "kind")) ??
+    normalizeTmdbMediaType(String(item.type ?? "")) ??
+    normalizeTmdbMediaType(String(item.drawer ?? ""));
+
+  if (!mediaType) {
+    return c.json({ error: "Shelf item is not a movie or show" }, 400);
+  }
+
+  let candidate: TmdbCandidate | null = null;
+  try {
+    if (validation.data.tmdb_id) {
+      candidate = await getTmdbMedia(c.env, {
+        type: mediaType,
+        tmdbId: validation.data.tmdb_id,
+      });
+    } else {
+      const title = validation.data.title ?? String(item.title ?? item.quote ?? "");
+      const year = validation.data.year ?? getTag(tags, "year");
+      candidate = (await searchTmdbMedia(c.env, { type: mediaType, query: title, year, limit: 1 }))[0] ?? null;
+    }
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "TMDB enrichment failed" },
+      502
+    );
+  }
+
+  if (!candidate?.poster_url) {
+    return c.json({ error: "No TMDB poster match found" }, 404);
+  }
+
+  const nextTags = mergeTags(tags, [
+    `tmdb_id:${candidate.tmdb_id}`,
+    `tmdb_media_type:${candidate.tmdb_media_type}`,
+    "poster_source:tmdb",
+    candidate.year ? `year:${candidate.year}` : "",
+  ].filter(Boolean));
+  const updatedAt = nowIso();
+
+  await c.env.DB.prepare(
+    `UPDATE shelf_items SET image_url = ?, tags_json = ?, updated_at = ? WHERE id = ?`
+  )
+    .bind(candidate.poster_url, mapJsonField(nextTags), updatedAt, id)
+    .run();
+
+  return c.json({
+    ok: true,
+    id,
+    image_url: candidate.poster_url,
+    tmdb: candidate,
+    tags: nextTags,
+    updated_at: updatedAt,
+  });
 });
 
 app.get("/:id", async (c) => {
