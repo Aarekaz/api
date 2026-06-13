@@ -51,6 +51,25 @@ const shelfQuerySchema = listQuerySchema.extend({
   type: z.enum(["book", "movie", "show"]).optional(),
 });
 
+type ShelfItemInput = z.infer<typeof shelfItemSchema>;
+
+function shelfStateParams(data: ShelfItemInput) {
+  return [
+    data.status ?? null,
+    data.rating ?? null,
+    data.rating_scale ?? null,
+    data.started_at ?? null,
+    data.completed_at ?? null,
+    data.last_watched_at ?? null,
+    data.progress_current ?? null,
+    data.progress_total ?? null,
+    data.progress_unit ?? null,
+    data.favorite_rank ?? null,
+    data.showcase === true ? 1 : 0,
+    mapJsonField(data.metadata),
+  ];
+}
+
 // OpenAPI registrations
 openApiRegistry.registerPath({
   method: "get",
@@ -261,8 +280,13 @@ app.post("/", async (c) => {
   const createdAt = nowIso();
   const dateAdded = validation.data.date_added ?? createdAt;
   await c.env.DB.prepare(
-    `INSERT INTO shelf_items (type, title, quote, author, source, url, note, image_url, drawer, tags_json, date_added, published, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO shelf_items (
+      type, title, quote, author, source, url, note, image_url, drawer, tags_json, date_added, published,
+      status, rating, rating_scale, started_at, completed_at, last_watched_at, progress_current, progress_total,
+      progress_unit, favorite_rank, showcase, metadata_json,
+      created_at, updated_at
+    )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       validation.data.type,
@@ -277,6 +301,7 @@ app.post("/", async (c) => {
       mapJsonField(validation.data.tags),
       dateAdded,
       validation.data.published === false ? 0 : 1,
+      ...shelfStateParams(validation.data),
       createdAt,
       createdAt
     )
@@ -304,7 +329,9 @@ app.put("/:id", async (c) => {
   const updatedAt = nowIso();
   const result = await c.env.DB.prepare(
     `UPDATE shelf_items
-     SET type = ?, title = ?, quote = ?, author = ?, source = ?, url = ?, note = ?, image_url = ?, drawer = ?, tags_json = ?, date_added = ?, published = ?, updated_at = ?
+     SET type = ?, title = ?, quote = ?, author = ?, source = ?, url = ?, note = ?, image_url = ?, drawer = ?, tags_json = ?, date_added = ?, published = ?,
+       status = ?, rating = ?, rating_scale = ?, started_at = ?, completed_at = ?, last_watched_at = ?, progress_current = ?, progress_total = ?,
+       progress_unit = ?, favorite_rank = ?, showcase = ?, metadata_json = ?, updated_at = ?
      WHERE id = ?`
   )
     .bind(
@@ -320,6 +347,7 @@ app.put("/:id", async (c) => {
       mapJsonField(validation.data.tags),
       validation.data.date_added ?? null,
       validation.data.published === false ? 0 : 1,
+      ...shelfStateParams(validation.data),
       updatedAt,
       id
     )
@@ -398,6 +426,54 @@ app.patch("/:id", async (c) => {
   if (Object.prototype.hasOwnProperty.call(validation.data, "published")) {
     updates.push("published = ?");
     params.push(validation.data.published === false ? 0 : 1);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "status")) {
+    updates.push("status = ?");
+    params.push(validation.data.status ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "rating")) {
+    updates.push("rating = ?");
+    params.push(validation.data.rating ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "rating_scale")) {
+    updates.push("rating_scale = ?");
+    params.push(validation.data.rating_scale ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "started_at")) {
+    updates.push("started_at = ?");
+    params.push(validation.data.started_at ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "completed_at")) {
+    updates.push("completed_at = ?");
+    params.push(validation.data.completed_at ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "last_watched_at")) {
+    updates.push("last_watched_at = ?");
+    params.push(validation.data.last_watched_at ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "progress_current")) {
+    updates.push("progress_current = ?");
+    params.push(validation.data.progress_current ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "progress_total")) {
+    updates.push("progress_total = ?");
+    params.push(validation.data.progress_total ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "progress_unit")) {
+    updates.push("progress_unit = ?");
+    params.push(validation.data.progress_unit ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "favorite_rank")) {
+    updates.push("favorite_rank = ?");
+    params.push(validation.data.favorite_rank ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "showcase")) {
+    updates.push("showcase = ?");
+    params.push(validation.data.showcase === true ? 1 : 0);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "metadata")) {
+    updates.push("metadata_json = ?");
+    params.push(mapJsonField(validation.data.metadata));
   }
 
   const updatedAt = nowIso();
