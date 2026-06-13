@@ -56,6 +56,18 @@ export const shelfItemSchema = z.object({
   tags: shelfTagsSchema.optional(),
   date_added: dateString.optional(),
   published: z.boolean().optional(),
+  status: z.string().optional(),
+  rating: z.number().min(0).max(10).optional(),
+  rating_scale: z.union([z.literal(5), z.literal(10)]).optional(),
+  started_at: dateString.optional(),
+  completed_at: dateString.optional(),
+  last_watched_at: dateString.optional(),
+  progress_current: z.number().min(0).optional(),
+  progress_total: z.number().min(0).optional(),
+  progress_unit: z.string().optional(),
+  favorite_rank: z.number().int().positive().optional(),
+  showcase: z.boolean().optional(),
+  metadata: z.record(z.unknown()).optional(),
 });
 
 export const photoSchema = z.object({

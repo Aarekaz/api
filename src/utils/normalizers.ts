@@ -68,10 +68,13 @@ export function normalizePost(row: JsonRecord): JsonRecord {
 }
 
 export function normalizeShelfItem(row: JsonRecord): JsonRecord {
-  const { tags_json, ...rest } = row;
+  const { tags_json, metadata_json, showcase, published, ...rest } = row;
   return {
     ...rest,
     tags: parseStoredJson(tags_json),
+    metadata: parseStoredJson(metadata_json),
+    showcase: showcase == null ? false : Boolean(showcase),
+    published: published == null ? true : Boolean(published),
   };
 }
 
