@@ -31,6 +31,16 @@ export function normalizeSettings(row: JsonRecord): JsonRecord {
   };
 }
 
+export function normalizeFinancePlan(row: JsonRecord): JsonRecord {
+  const { offer_json, budget_json, equity_json, ...rest } = row;
+  return {
+    ...rest,
+    offer: parseStoredJson(offer_json),
+    budget: parseStoredJson(budget_json),
+    equity: parseStoredJson(equity_json),
+  };
+}
+
 export function normalizeProject(row: JsonRecord): JsonRecord {
   const { links_json, tags_json, ...rest } = row;
   return {

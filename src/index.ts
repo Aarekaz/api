@@ -35,6 +35,7 @@ import locationRoute from "./routes/location";
 import customRoute from "./routes/custom";
 import logsRoute from "./routes/logs";
 import mediaRoute from "./routes/media";
+import financeRoute from "./routes/finance";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -137,6 +138,7 @@ app.route("/v1/health", healthDataRoute);
 app.route("/v1/location", locationRoute);
 app.route("/v1/custom", customRoute);
 app.route("/v1/logs", logsRoute);
+app.route("/v1/finance", financeRoute);
 
 // Export Cloudflare Worker handlers
 export default {
