@@ -67,6 +67,13 @@ export const shelfItemSchema = z.object({
   progress_unit: z.string().optional(),
   favorite_rank: z.number().int().positive().optional(),
   showcase: z.boolean().optional(),
+  shelf_group: z.string().optional(),
+  display_order: z.number().int().optional(),
+  cover_override_url: z.string().url().optional(),
+  spine_image_url: z.string().url().optional(),
+  goodreads_id: z.string().optional(),
+  isbn: z.string().optional(),
+  apple_books_id: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 
