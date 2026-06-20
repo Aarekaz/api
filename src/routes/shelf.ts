@@ -70,6 +70,44 @@ function shelfStateParams(data: ShelfItemInput) {
   ];
 }
 
+function shelfControlParams(data: ShelfItemInput) {
+  return [
+    data.shelf_group ?? null,
+    data.display_order ?? null,
+    data.cover_override_url ?? null,
+    data.spine_image_url ?? null,
+    data.goodreads_id ?? null,
+    data.isbn ?? null,
+    data.apple_books_id ?? null,
+  ];
+}
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function compactRecord(record: JsonRecord): JsonRecord {
+  return Object.fromEntries(
+    Object.entries(record).filter(([, value]) => value !== undefined)
+  );
+}
+
+function normalizeTmdbMetadata(candidate: TmdbCandidate): JsonRecord {
+  return compactRecord({
+    id: candidate.tmdb_id,
+    media_type: candidate.tmdb_media_type,
+    title: candidate.title,
+    original_title: candidate.original_title,
+    year: candidate.year,
+    release_date: candidate.release_date,
+    overview: candidate.overview,
+    poster_path: candidate.poster_path,
+    poster_url: candidate.poster_url,
+    backdrop_path: candidate.backdrop_path,
+    backdrop_url: candidate.backdrop_url,
+  });
+}
+
 // OpenAPI registrations
 openApiRegistry.registerPath({
   method: "get",
@@ -150,7 +188,14 @@ app.get("/", async (c) => {
 
   const orderBy = parseSort(
     sort,
-    { date_added: "date_added", title: "title", author: "author" },
+    {
+      date_added: "date_added",
+      title: "title",
+      author: "author",
+      completed_at: "completed_at",
+      display_order: "display_order",
+      shelf_group: "shelf_group",
+    },
     "date_added DESC"
   );
 
@@ -225,12 +270,16 @@ app.post("/:id/enrich", async (c) => {
     "poster_source:tmdb",
     candidate.year ? `year:${candidate.year}` : "",
   ].filter(Boolean));
+  const nextMetadata = {
+    ...(isJsonRecord(item.metadata) ? item.metadata : {}),
+    tmdb: normalizeTmdbMetadata(candidate),
+  };
   const updatedAt = nowIso();
 
   await c.env.DB.prepare(
-    `UPDATE shelf_items SET image_url = ?, tags_json = ?, updated_at = ? WHERE id = ?`
+    `UPDATE shelf_items SET image_url = ?, tags_json = ?, metadata_json = ?, updated_at = ? WHERE id = ?`
   )
-    .bind(candidate.poster_url, mapJsonField(nextTags), updatedAt, id)
+    .bind(candidate.poster_url, mapJsonField(nextTags), mapJsonField(nextMetadata), updatedAt, id)
     .run();
 
   return c.json({
@@ -238,6 +287,7 @@ app.post("/:id/enrich", async (c) => {
     id,
     image_url: candidate.poster_url,
     tmdb: candidate,
+    metadata: nextMetadata,
     tags: nextTags,
     updated_at: updatedAt,
   });
@@ -284,9 +334,10 @@ app.post("/", async (c) => {
       type, title, quote, author, source, url, note, image_url, drawer, tags_json, date_added, published,
       status, rating, rating_scale, started_at, completed_at, last_watched_at, progress_current, progress_total,
       progress_unit, favorite_rank, showcase, metadata_json,
+      shelf_group, display_order, cover_override_url, spine_image_url, goodreads_id, isbn, apple_books_id,
       created_at, updated_at
     )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       validation.data.type,
@@ -302,6 +353,7 @@ app.post("/", async (c) => {
       dateAdded,
       validation.data.published === false ? 0 : 1,
       ...shelfStateParams(validation.data),
+      ...shelfControlParams(validation.data),
       createdAt,
       createdAt
     )
@@ -331,7 +383,9 @@ app.put("/:id", async (c) => {
     `UPDATE shelf_items
      SET type = ?, title = ?, quote = ?, author = ?, source = ?, url = ?, note = ?, image_url = ?, drawer = ?, tags_json = ?, date_added = ?, published = ?,
        status = ?, rating = ?, rating_scale = ?, started_at = ?, completed_at = ?, last_watched_at = ?, progress_current = ?, progress_total = ?,
-       progress_unit = ?, favorite_rank = ?, showcase = ?, metadata_json = ?, updated_at = ?
+       progress_unit = ?, favorite_rank = ?, showcase = ?, metadata_json = ?,
+       shelf_group = ?, display_order = ?, cover_override_url = ?, spine_image_url = ?, goodreads_id = ?, isbn = ?, apple_books_id = ?,
+       updated_at = ?
      WHERE id = ?`
   )
     .bind(
@@ -348,6 +402,7 @@ app.put("/:id", async (c) => {
       validation.data.date_added ?? null,
       validation.data.published === false ? 0 : 1,
       ...shelfStateParams(validation.data),
+      ...shelfControlParams(validation.data),
       updatedAt,
       id
     )
@@ -474,6 +529,34 @@ app.patch("/:id", async (c) => {
   if (Object.prototype.hasOwnProperty.call(validation.data, "metadata")) {
     updates.push("metadata_json = ?");
     params.push(mapJsonField(validation.data.metadata));
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "shelf_group")) {
+    updates.push("shelf_group = ?");
+    params.push(validation.data.shelf_group ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "display_order")) {
+    updates.push("display_order = ?");
+    params.push(validation.data.display_order ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "cover_override_url")) {
+    updates.push("cover_override_url = ?");
+    params.push(validation.data.cover_override_url ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "spine_image_url")) {
+    updates.push("spine_image_url = ?");
+    params.push(validation.data.spine_image_url ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "goodreads_id")) {
+    updates.push("goodreads_id = ?");
+    params.push(validation.data.goodreads_id ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "isbn")) {
+    updates.push("isbn = ?");
+    params.push(validation.data.isbn ?? null);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "apple_books_id")) {
+    updates.push("apple_books_id = ?");
+    params.push(validation.data.apple_books_id ?? null);
   }
 
   const updatedAt = nowIso();
