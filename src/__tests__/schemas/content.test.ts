@@ -18,4 +18,9 @@ describe("shelf item status schema", () => {
     expect(statusMatchesShelfType("movie", "reading")).toBe(false);
     expect(statusMatchesShelfType("show", "watched")).toBe(false);
   });
+
+  it("rejects negative shelf display order", () => {
+    expect(shelfItemSchema.safeParse({ type: "book", title: "Book", display_order: -1 }).success).toBe(false);
+    expect(shelfItemSchema.safeParse({ type: "book", title: "Book", display_order: 0 }).success).toBe(true);
+  });
 });

@@ -122,7 +122,7 @@ export const shelfItemBaseSchema = z.object({
   favorite_rank: z.number().int().positive().optional(),
   showcase: z.boolean().optional(),
   shelf_group: z.string().optional(),
-  display_order: z.number().int().optional(),
+  display_order: z.number().int().min(0).optional(),
   cover_override_url: z.string().url().optional(),
   spine_image_url: z.string().url().optional(),
   goodreads_id: z.string().optional(),

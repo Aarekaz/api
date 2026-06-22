@@ -105,7 +105,12 @@ async function tmdbFetch<T>(url: URL, env: Env): Promise<T> {
   const response = await fetch(url, { headers });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`TMDB request failed: ${response.status} ${response.statusText}${body ? ` ${body}` : ""}`);
+    console.error("[tmdb] request failed", {
+      status: response.status,
+      statusText: response.statusText,
+      body,
+    });
+    throw new Error("TMDB request failed");
   }
   return response.json() as Promise<T>;
 }
