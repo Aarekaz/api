@@ -108,6 +108,11 @@ function normalizeTmdbMetadata(candidate: TmdbCandidate): JsonRecord {
   });
 }
 
+function shouldReplaceShelfImage(item: JsonRecord, tags: unknown): boolean {
+  if (!item.image_url) return true;
+  return getTag(tags, "poster_source") === "tmdb";
+}
+
 // OpenAPI registrations
 openApiRegistry.registerPath({
   method: "get",
@@ -275,17 +280,20 @@ app.post("/:id/enrich", async (c) => {
     tmdb: normalizeTmdbMetadata(candidate),
   };
   const updatedAt = nowIso();
+  const nextImageUrl = shouldReplaceShelfImage(item, tags)
+    ? candidate.poster_url
+    : String(item.image_url);
 
   await c.env.DB.prepare(
     `UPDATE shelf_items SET image_url = ?, tags_json = ?, metadata_json = ?, updated_at = ? WHERE id = ?`
   )
-    .bind(candidate.poster_url, mapJsonField(nextTags), mapJsonField(nextMetadata), updatedAt, id)
+    .bind(nextImageUrl, mapJsonField(nextTags), mapJsonField(nextMetadata), updatedAt, id)
     .run();
 
   return c.json({
     ok: true,
     id,
-    image_url: candidate.poster_url,
+    image_url: nextImageUrl,
     tmdb: candidate,
     metadata: nextMetadata,
     tags: nextTags,
