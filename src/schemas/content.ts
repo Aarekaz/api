@@ -43,7 +43,61 @@ export const usesItemSchema = z.object({
 
 const shelfTagsSchema = z.union([z.array(z.string()), z.record(z.unknown())]);
 
-export const shelfItemSchema = z.object({
+export const BOOK_SHELF_STATUSES = [
+  "library",
+  "reading",
+  "completed",
+  "want_to_read",
+  "paused",
+  "dnf",
+] as const;
+
+export const MOVIE_SHELF_STATUSES = [
+  "watched",
+  "watching",
+  "want_to_watch",
+] as const;
+
+export const SHOW_SHELF_STATUSES = [
+  "watching",
+  "completed",
+  "want_to_watch",
+  "paused",
+  "dropped",
+] as const;
+
+export const SHELF_STATUSES = [
+  "library",
+  "reading",
+  "completed",
+  "want_to_read",
+  "paused",
+  "dnf",
+  "watched",
+  "watching",
+  "want_to_watch",
+  "dropped",
+] as const;
+
+const shelfStatusSchema = z.enum(SHELF_STATUSES);
+
+function shelfKindForType(type: string) {
+  const normalized = type.toLowerCase();
+  if (normalized === "book") return "book";
+  if (normalized === "movie" || normalized === "film") return "movie";
+  if (normalized === "show" || normalized === "tv" || normalized === "series") return "show";
+  return "other";
+}
+
+export function statusMatchesShelfType(type: string, status: string) {
+  const kind = shelfKindForType(type);
+  if (kind === "book") return BOOK_SHELF_STATUSES.includes(status as typeof BOOK_SHELF_STATUSES[number]);
+  if (kind === "movie") return MOVIE_SHELF_STATUSES.includes(status as typeof MOVIE_SHELF_STATUSES[number]);
+  if (kind === "show") return SHOW_SHELF_STATUSES.includes(status as typeof SHOW_SHELF_STATUSES[number]);
+  return false;
+}
+
+export const shelfItemBaseSchema = z.object({
   type: z.string().min(1),
   title: z.string().optional(),
   quote: z.string().optional(),
@@ -56,7 +110,7 @@ export const shelfItemSchema = z.object({
   tags: shelfTagsSchema.optional(),
   date_added: dateString.optional(),
   published: z.boolean().optional(),
-  status: z.string().optional(),
+  status: shelfStatusSchema.optional(),
   rating: z.number().min(0).max(10).optional(),
   rating_scale: z.union([z.literal(5), z.literal(10)]).optional(),
   started_at: dateString.optional(),
@@ -75,6 +129,17 @@ export const shelfItemSchema = z.object({
   isbn: z.string().optional(),
   apple_books_id: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
+});
+
+export const shelfItemSchema = shelfItemBaseSchema.superRefine((data, ctx) => {
+  if (!data.status) return;
+  if (statusMatchesShelfType(data.type, data.status)) return;
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["status"],
+    message: `Invalid ${data.type} shelf status: ${data.status}`,
+  });
 });
 
 export const photoSchema = z.object({

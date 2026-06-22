@@ -6,7 +6,7 @@ import { nowIso } from "../utils/date";
 import { parseJson, mapJsonField } from "../utils/json";
 import { validateBody } from "../utils/validation";
 import { normalizeShelfItem } from "../utils/normalizers";
-import { shelfItemSchema } from "../schemas/content";
+import { shelfItemBaseSchema, shelfItemSchema, statusMatchesShelfType } from "../schemas/content";
 import { listQuerySchema } from "../schemas/common";
 import { getTmdbMedia, normalizeTmdbMediaType, searchTmdbMedia, type TmdbCandidate } from "../services/tmdb";
 import { getTag, mergeTags } from "../utils/tags";
@@ -36,7 +36,7 @@ import {
 
 const app = new Hono<{ Bindings: Env }>();
 
-const shelfPatchSchema = shelfItemSchema.partial().refine((data) => Object.keys(data).length > 0, {
+const shelfPatchSchema = shelfItemBaseSchema.partial().refine((data) => Object.keys(data).length > 0, {
   message: "At least one field must be provided",
 });
 
@@ -429,6 +429,28 @@ app.patch("/:id", async (c) => {
   const validation = validateBody(shelfPatchSchema, body);
   if (!validation.ok) {
     return validation.response;
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(validation.data, "status") ||
+    Object.prototype.hasOwnProperty.call(validation.data, "type")
+  ) {
+    const existing = await c.env.DB.prepare("SELECT type, status FROM shelf_items WHERE id = ?")
+      .bind(id)
+      .first<JsonRecord>();
+
+    if (!existing) {
+      return c.json({ error: "Shelf item not found" }, 404);
+    }
+
+    const nextType = validation.data.type ?? String(existing.type ?? "");
+    const nextStatus =
+      validation.data.status ??
+      (typeof existing.status === "string" ? existing.status : undefined);
+
+    if (nextStatus && !statusMatchesShelfType(nextType, nextStatus)) {
+      return c.json({ error: `Invalid ${nextType} shelf status: ${nextStatus}` }, 400);
+    }
   }
 
   const updates: string[] = [];
