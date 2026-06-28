@@ -33,7 +33,11 @@ describe("finance route", () => {
         employer_401k_match_rate_percent?: number;
         loan_balance?: number;
         investment_label?: string;
+        hysa_apy_percent?: number;
         cash_savings_balance?: number;
+        current_hysa_balance?: number;
+        accounts?: unknown[];
+        money_routes?: unknown[];
         items?: unknown[];
       };
     };
@@ -43,7 +47,11 @@ describe("finance route", () => {
     expect(body.budget?.employer_401k_match_rate_percent).toBe(100);
     expect(body.budget?.loan_balance).toBe(0);
     expect(body.budget?.investment_label).toBe("S&P 500");
+    expect(body.budget?.hysa_apy_percent).toBe(4);
     expect(body.budget?.cash_savings_balance).toBe(0);
+    expect(body.budget?.current_hysa_balance).toBe(0);
+    expect(body.budget?.accounts).toHaveLength(3);
+    expect(body.budget?.money_routes).toHaveLength(0);
     expect(body.budget?.items).toHaveLength(5);
   });
 
@@ -98,11 +106,22 @@ describe("finance route", () => {
         investment_label: "S&P 500",
         investment_monthly: 1000,
         investment_return_percent: 7,
+        hysa_monthly: 500,
+        hysa_apy_percent: 4.25,
         cash_savings_balance: 5000,
+        current_hysa_balance: 10000,
         current_401k_balance: 12000,
         current_hsa_balance: 800,
         current_investment_balance: 3000,
         other_assets_balance: 1500,
+        accounts: [
+          { id: "checking", name: "Checking", type: "checking", monthly_deposit: 9000 },
+          { id: "hysa", name: "HYSA", type: "hysa", monthly_deposit: 500 },
+        ],
+        money_routes: [
+          { id: "route-rent", account_id: "checking", target_key: "budget:rent", amount: 2500 },
+          { id: "route-hysa", account_id: "hysa", target_key: "hysa", amount: 500 },
+        ],
         items: [{ id: "rent", name: "Rent", kind: "spending", amount: 2500 }],
       },
       equity: [{ id: "grant-1", grant_type: "options", shares: 10000 }],

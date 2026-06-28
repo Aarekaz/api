@@ -25,6 +25,23 @@ export const financeBudgetItemSchema = z.object({
   color: z.string().optional(),
 });
 
+export const financeAccountSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  type: z.enum(["checking", "savings", "hysa", "credit", "investment", "loan", "payroll", "pretax", "other"]),
+  institution: z.string().optional(),
+  monthly_deposit: z.number().min(0).optional(),
+  current_balance: z.number().min(0).optional(),
+  color: z.string().optional(),
+});
+
+export const financeMoneyRouteSchema = z.object({
+  id: z.string().min(1),
+  account_id: z.string().min(1),
+  target_key: z.string().min(1),
+  amount: z.number().min(0),
+});
+
 export const financeBudgetSchema = z.object({
   monthly_gross_income: z.number().min(0).optional(),
   retirement_401k_percent: z.number().min(0).max(100).optional(),
@@ -42,11 +59,16 @@ export const financeBudgetSchema = z.object({
   investment_label: z.string().optional(),
   investment_monthly: z.number().min(0).optional(),
   investment_return_percent: z.number().min(0).max(30).optional(),
+  hysa_monthly: z.number().min(0).optional(),
+  hysa_apy_percent: z.number().min(0).max(30).optional(),
   cash_savings_balance: z.number().min(0).optional(),
+  current_hysa_balance: z.number().min(0).optional(),
   current_401k_balance: z.number().min(0).optional(),
   current_hsa_balance: z.number().min(0).optional(),
   current_investment_balance: z.number().min(0).optional(),
   other_assets_balance: z.number().min(0).optional(),
+  accounts: z.array(financeAccountSchema).optional(),
+  money_routes: z.array(financeMoneyRouteSchema).optional(),
   items: z.array(financeBudgetItemSchema).optional(),
 });
 
