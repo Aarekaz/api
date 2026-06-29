@@ -42,6 +42,11 @@ export const financeMoneyRouteSchema = z.object({
   amount: z.number().min(0),
 });
 
+export const financeMoneyMapPositionSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+});
+
 export const financeBudgetSchema = z.object({
   monthly_gross_income: z.number().min(0).optional(),
   retirement_401k_percent: z.number().min(0).max(100).optional(),
@@ -69,6 +74,7 @@ export const financeBudgetSchema = z.object({
   other_assets_balance: z.number().min(0).optional(),
   accounts: z.array(financeAccountSchema).optional(),
   money_routes: z.array(financeMoneyRouteSchema).optional(),
+  money_map_positions: z.record(financeMoneyMapPositionSchema).optional(),
   items: z.array(financeBudgetItemSchema).optional(),
 });
 

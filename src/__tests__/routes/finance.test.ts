@@ -122,6 +122,10 @@ describe("finance route", () => {
           { id: "route-rent", account_id: "checking", target_key: "budget:rent", amount: 2500 },
           { id: "route-hysa", account_id: "hysa", target_key: "hysa", amount: 500 },
         ],
+        money_map_positions: {
+          "paycheck:1": { x: 280, y: 140 },
+          "account:hysa": { x: 540, y: 260 },
+        },
         items: [{ id: "rent", name: "Rent", kind: "spending", amount: 2500 }],
       },
       equity: [{ id: "grant-1", grant_type: "options", shares: 10000 }],
