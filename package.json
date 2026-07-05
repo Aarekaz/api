@@ -10,6 +10,7 @@
     "backup:r2-manifest": "node scripts/backup-r2-manifest.mjs",
     "import:tv-time:shelf": "node scripts/import-tv-time-shelf.mjs",
     "enrich:shelf-posters:tmdb": "node scripts/enrich-shelf-posters-tmdb.mjs",
+    "backfill:shelf-tmdb-metadata": "node scripts/backfill-shelf-tmdb-metadata.mjs",
     "enrich:shelf-books": "node scripts/enrich-shelf-books.mjs",
     "sync:shelf-posters": "node scripts/enrich-shelf-posters-tmdb.mjs --commit",
     "test": "vitest run",
