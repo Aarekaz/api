@@ -1,10 +1,12 @@
 import { Context, Next } from "hono";
 import type { Env } from "../types/env";
 
-// Paths that use their own token validation (e.g. presigned upload)
+// Paths that use their own token validation (e.g. presigned upload), plus the
+// public crowd endpoint, which the living-world site calls anonymously.
 const AUTH_SKIP_PATHS = [
   "/v1/photos/upload-presigned",
   "/v1/blog-images/upload-presigned",
+  "/v1/crowd",
 ];
 
 export async function requireAuth(c: Context<{ Bindings: Env }>, next: Next) {
