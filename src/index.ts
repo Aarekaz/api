@@ -36,6 +36,7 @@ import customRoute from "./routes/custom";
 import logsRoute from "./routes/logs";
 import mediaRoute from "./routes/media";
 import financeRoute from "./routes/finance";
+import crowdRoute from "./routes/crowd";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -68,6 +69,24 @@ for (const path of PRESIGNED_UPLOAD_PATHS) {
     c.res.headers.set("Access-Control-Allow-Origin", "*");
   });
 }
+
+// CORS for the public crowd endpoint — the living-world site (aarekaz.me) reads
+// and records visits from the browser, cross-origin.
+app.use("/v1/crowd", async (c, next) => {
+  if (c.req.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Max-Age": "600",
+      },
+    });
+  }
+  await next();
+  c.res.headers.set("Access-Control-Allow-Origin", "*");
+});
 
 // Public routes
 app.get("/", (c) => {
@@ -139,6 +158,7 @@ app.route("/v1/location", locationRoute);
 app.route("/v1/custom", customRoute);
 app.route("/v1/logs", logsRoute);
 app.route("/v1/finance", financeRoute);
+app.route("/v1/crowd", crowdRoute); // public — un-gated via AUTH_SKIP_PATHS
 
 // Export Cloudflare Worker handlers
 export default {
