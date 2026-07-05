@@ -13,6 +13,7 @@ function createShelfDb(row: Record<string, unknown>) {
           if (sql.startsWith("SELECT")) {
             return {
               all: vi.fn().mockResolvedValue({ results: [row] }),
+              first: vi.fn().mockResolvedValue(row),
             };
           }
           return {
@@ -156,5 +157,51 @@ describe("shelf route enrichment", () => {
       "[tmdb] request failed",
       expect.objectContaining({ status: 502, statusText: "Bad Gateway" })
     );
+  });
+});
+
+describe("shelf route patch validation", () => {
+  it("rejects statuses that do not belong to the existing shelf type", async () => {
+    const { db, updates } = createShelfDb({
+      id: 293,
+      type: "book",
+      title: "The 5 Types of Wealth",
+      status: "completed",
+    });
+
+    const res = await shelfRoute.request(
+      "/293",
+      {
+        method: "PATCH",
+        body: JSON.stringify({ status: "watching" }),
+        headers: { "content-type": "application/json" },
+      },
+      envFor(db),
+    );
+
+    expect(res.status).toBe(400);
+    expect(updates).toHaveLength(0);
+  });
+
+  it("rejects negative display_order updates", async () => {
+    const { db, updates } = createShelfDb({
+      id: 293,
+      type: "book",
+      title: "The 5 Types of Wealth",
+      status: "completed",
+    });
+
+    const res = await shelfRoute.request(
+      "/293",
+      {
+        method: "PATCH",
+        body: JSON.stringify({ display_order: -1 }),
+        headers: { "content-type": "application/json" },
+      },
+      envFor(db),
+    );
+
+    expect(res.status).toBe(400);
+    expect(updates).toHaveLength(0);
   });
 });
