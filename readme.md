@@ -317,7 +317,7 @@ curl -H "Authorization: Bearer $API_TOKEN" https://api.anuragd.me/health
    - `npx wrangler secret put WAKATIME_API_KEY`
 7) Set WakaTime timezone (optional, for hourly data):
    - `npx wrangler secret put WAKATIME_TIMEZONE`
-8) Set GitHub username/token (optional, for wrapped stats):
+8) Set GitHub username/token (optional, for wrapped stats). A second username can be configured as `GITHUB_WORK_USERNAME` in `[vars]`:
    - `npx wrangler secret put GITHUB_USERNAME`
    - `npx wrangler secret put GITHUB_TOKEN`
 9) Configure R2 (optional, for photo uploads):

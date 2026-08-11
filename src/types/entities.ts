@@ -111,7 +111,9 @@ export interface WakaTimeDailyEntity {
 /** GitHub contribution entity */
 export interface GitHubContributionEntity {
   date: string;
-  contributions: number;
+  count: number;
+  personal_count: number;
+  work_count: number;
   created_at?: string;
 }
 
