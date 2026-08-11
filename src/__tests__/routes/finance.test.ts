@@ -92,6 +92,8 @@ describe("finance route", () => {
       budget: {
         monthly_gross_income: 15833,
         retirement_401k_percent: 5,
+        retirement_401k_traditional_percent: 3,
+        retirement_401k_roth_percent: 2,
         hsa_monthly: 366,
         hsa_coverage: "family",
         hsa_employer_monthly: 100,
@@ -119,8 +121,8 @@ describe("finance route", () => {
           { id: "hysa", name: "HYSA", type: "hysa", monthly_deposit: 500 },
         ],
         money_routes: [
-          { id: "route-rent", account_id: "checking", target_key: "budget:rent", amount: 2500 },
-          { id: "route-hysa", account_id: "hysa", target_key: "hysa", amount: 500 },
+          { id: "route-rent", account_id: "checking", target_key: "budget:rent", amount: 2500, paycheck_index: 1 },
+          { id: "route-hysa", account_id: "hysa", target_key: "hysa", amount: 500, paycheck_index: 2 },
         ],
         money_map_positions: {
           "paycheck:1": { x: 280, y: 140 },

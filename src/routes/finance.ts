@@ -32,6 +32,8 @@ const defaultFinancePlan = {
   budget: {
     monthly_gross_income: 12500,
     retirement_401k_percent: 4,
+    retirement_401k_traditional_percent: 2,
+    retirement_401k_roth_percent: 2,
     hsa_monthly: 366,
     hsa_coverage: "self",
     hsa_employer_monthly: 0,

@@ -40,6 +40,7 @@ export const financeMoneyRouteSchema = z.object({
   account_id: z.string().min(1),
   target_key: z.string().min(1),
   amount: z.number().min(0),
+  paycheck_index: z.union([z.literal(1), z.literal(2)]).optional(),
 });
 
 export const financeMoneyMapPositionSchema = z.object({
@@ -50,6 +51,8 @@ export const financeMoneyMapPositionSchema = z.object({
 export const financeBudgetSchema = z.object({
   monthly_gross_income: z.number().min(0).optional(),
   retirement_401k_percent: z.number().min(0).max(100).optional(),
+  retirement_401k_traditional_percent: z.number().min(0).max(100).optional(),
+  retirement_401k_roth_percent: z.number().min(0).max(100).optional(),
   hsa_monthly: z.number().min(0).optional(),
   hsa_coverage: z.enum(["self", "family"]).optional(),
   hsa_employer_monthly: z.number().min(0).optional(),
