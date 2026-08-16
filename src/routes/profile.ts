@@ -6,9 +6,9 @@ import { parseJson, mapJsonField } from "../utils/json";
 import { validateBody } from "../utils/validation";
 import { normalizeProfile } from "../utils/normalizers";
 import { profileSchema } from "../schemas/profile";
+import { profileResponseSchema } from "../schemas/responses";
 import {
   openApiRegistry,
-  genericObjectSchema,
   okUpdatedSchema,
   openApiJsonRequestBody,
   okResponses,
@@ -23,7 +23,7 @@ openApiRegistry.registerPath({
   path: "/v1/profile",
   summary: "Fetch profile",
   security: authSecurity,
-  responses: okResponses(genericObjectSchema),
+  responses: okResponses(profileResponseSchema),
 });
 
 openApiRegistry.registerPath({

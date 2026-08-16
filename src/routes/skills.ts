@@ -6,10 +6,10 @@ import { parseJson, mapJsonField } from "../utils/json";
 import { validateBody } from "../utils/validation";
 import { normalizeSkill } from "../utils/normalizers";
 import { skillSchema } from "../schemas/profile";
+import { skillsResponseSchema } from "../schemas/responses";
 import { listQuerySchema } from "../schemas/common";
 import {
   openApiRegistry,
-  genericArraySchema,
   genericObjectSchema,
   okCreatedSchema,
   okUpdatedSchema,
@@ -43,7 +43,7 @@ openApiRegistry.registerPath({
   summary: "List skills",
   security: authSecurity,
   request: { query: listQuerySchema },
-  responses: okResponses(genericArraySchema),
+  responses: okResponses(skillsResponseSchema),
 });
 
 openApiRegistry.registerPath({
