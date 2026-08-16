@@ -11,6 +11,8 @@ type SchemaObject = {
   properties?: Record<string, SchemaObject>;
   items?: SchemaObject;
   additionalProperties?: boolean | SchemaObject;
+  anyOf?: SchemaObject[];
+  oneOf?: SchemaObject[];
 };
 
 type DocumentShape = {
@@ -34,7 +36,9 @@ type DocumentShape = {
   };
 };
 
-const document = getOpenApiDocument("test") as unknown as DocumentShape;
+const document = JSON.parse(
+  JSON.stringify(getOpenApiDocument("test"))
+) as DocumentShape;
 
 function resolveSchema(schema: SchemaObject): SchemaObject {
   if (!schema.$ref) return schema;
@@ -64,6 +68,31 @@ function property(schema: SchemaObject, name: string): SchemaObject {
   const value = resolveSchema(schema).properties?.[name];
   if (!value) throw new Error(`Missing property: ${name}`);
   return resolveSchema(value);
+}
+
+function additionalProperties(schema: SchemaObject): SchemaObject {
+  const value = resolveSchema(schema).additionalProperties;
+  if (!value || typeof value === "boolean") {
+    throw new Error("Missing schema-valued additionalProperties");
+  }
+  return resolveSchema(value);
+}
+
+function invalidNullablePaths(value: unknown, path: string): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) =>
+      invalidNullablePaths(item, `${path}[${index}]`)
+    );
+  }
+  if (typeof value !== "object" || value === null) return [];
+
+  const node = value as Record<string, unknown>;
+  const invalid = node.nullable === true && !("type" in node) ? [path] : [];
+  return invalid.concat(
+    Object.entries(node).flatMap(([key, child]) =>
+      invalidNullablePaths(child, `${path}.${key}`)
+    )
+  );
 }
 
 describe("website-consumed OpenAPI response contracts", () => {
@@ -397,8 +426,54 @@ describe("website-consumed OpenAPI response contracts", () => {
           "description"
         ),
     ],
-  ])("leaves open JSON value %s unconstrained", (_label, getSchema) => {
-    expect(getSchema().type).toBeUndefined();
+  ])("emits open JSON value %s as a null-accepting empty schema", (_label, getSchema) => {
+    expect(getSchema()).toEqual({});
+  });
+
+  it.each([
+    [
+      "profile handles",
+      () => additionalProperties(property(responseSchema("/v1/profile"), "handles")),
+    ],
+    [
+      "profile contact",
+      () => additionalProperties(property(responseSchema("/v1/profile"), "contact")),
+    ],
+    [
+      "now projects[]",
+      () =>
+        additionalProperties(
+          resolveSchema(property(responseSchema("/v1/now"), "projects").items!)
+        ),
+    ],
+    [
+      "settings flags",
+      () => additionalProperties(property(responseSchema("/v1/settings"), "flags")),
+    ],
+    [
+      "shelf metadata",
+      () => additionalProperties(property(itemOrObjectSchema("/v1/shelf"), "metadata")),
+    ],
+    [
+      "shelf tags record variant",
+      () => {
+        const tags = property(itemOrObjectSchema("/v1/shelf"), "tags");
+        const recordVariant = [...(tags.anyOf ?? []), ...(tags.oneOf ?? [])]
+          .map(resolveSchema)
+          .find((schema) => schema.type === "object");
+        if (!recordVariant) throw new Error("Missing shelf tags record variant");
+        return additionalProperties(recordVariant);
+      },
+    ],
+  ])("emits open JSON catchall %s as a null-accepting empty schema", (_label, getSchema) => {
+    expect(getSchema()).toEqual({});
+  });
+
+  it("never emits OpenAPI 3.0 nullable without a sibling type", () => {
+    const invalid = Object.entries(document.components?.schemas ?? {}).flatMap(
+      ([name, schema]) => invalidNullablePaths(schema, `components.schemas.${name}`)
+    );
+    expect(invalid).toEqual([]);
   });
 
   it("allows every JSON number in settings shelf_config.hiddenItems", () => {

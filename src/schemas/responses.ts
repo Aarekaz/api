@@ -18,31 +18,50 @@ import { openApiRegistry } from "./openapi";
 
 const nullableStringSchema = z.string().nullable();
 const nullableIntegerSchema = z.number().int().nullable();
+
+function openApi30NullAcceptingSchema<T extends z.ZodTypeAny>(schema: T): T {
+  // OpenAPI 3.0's empty schema already accepts null. Prevent the generator from
+  // adding its invalid `{ nullable: true }` representation when no type exists.
+  schema.isNullable = () => false;
+  return schema;
+}
+
+const arbitraryJsonValueSchema = openApi30NullAcceptingSchema(z.unknown());
+const optionalArbitraryJsonValueSchema = openApi30NullAcceptingSchema(
+  arbitraryJsonValueSchema.optional()
+);
+const shelfTagsResponseSchema = openApi30NullAcceptingSchema(
+  z.union([
+    z.array(z.string()),
+    z.record(arbitraryJsonValueSchema),
+    z.literal(null),
+  ])
+);
 const d1BooleanSchema = z
   .union([z.literal(0), z.literal(1)])
   .openapi({ type: "integer", enum: [0, 1] });
 
 const profileHandlesResponseSchema = z
   .object({
-    github: z.unknown().optional(),
-    linkedin: z.unknown().optional(),
-    twitter: z.unknown().optional(),
+    github: optionalArbitraryJsonValueSchema,
+    linkedin: optionalArbitraryJsonValueSchema,
+    twitter: optionalArbitraryJsonValueSchema,
   })
-  .catchall(z.unknown());
+  .catchall(arbitraryJsonValueSchema);
 
 const profileContactResponseSchema = z
   .object({
-    email: z.unknown().optional(),
+    email: optionalArbitraryJsonValueSchema,
   })
-  .catchall(z.unknown());
+  .catchall(arbitraryJsonValueSchema);
 
 const nowProjectResponseSchema = z
   .object({
-    name: z.unknown().optional(),
-    status: z.unknown().optional(),
-    description: z.unknown().optional(),
+    name: optionalArbitraryJsonValueSchema,
+    status: optionalArbitraryJsonValueSchema,
+    description: optionalArbitraryJsonValueSchema,
   })
-  .catchall(z.unknown());
+  .catchall(arbitraryJsonValueSchema);
 
 const shelfSectionVisibilityResponseSchema = z.object({
   visible: z.boolean(),
@@ -218,7 +237,7 @@ export const settingsResponseSchema = openApiRegistry.register(
     id: z.number().int().optional(),
     public_fields: z.array(z.string()).nullable(),
     theme: nullableStringSchema,
-    flags: z.record(z.unknown()).nullable(),
+    flags: z.record(arbitraryJsonValueSchema).nullable(),
     shelf_config: shelfConfigResponseSchema.nullable(),
     updated_at: nullableStringSchema.optional(),
   })
@@ -236,14 +255,16 @@ export const shelfItemResponseSchema = openApiRegistry.register(
     note: nullableStringSchema,
     image_url: nullableStringSchema,
     drawer: nullableStringSchema,
-    tags: z
-      .union([z.array(z.string()), z.record(z.unknown())])
-      .nullable(),
+    tags: shelfTagsResponseSchema,
     date_added: nullableStringSchema,
     published: z.boolean(),
     status: z.enum(SHELF_STATUSES).nullable(),
     rating: z.number().nullable(),
-    rating_scale: z.union([z.literal(5), z.literal(10)]).nullable(),
+    rating_scale: z
+      .number()
+      .int()
+      .nullable()
+      .openapi({ enum: [5, 10] }),
     started_at: nullableStringSchema,
     completed_at: nullableStringSchema,
     last_watched_at: nullableStringSchema,
@@ -252,7 +273,7 @@ export const shelfItemResponseSchema = openApiRegistry.register(
     progress_unit: nullableStringSchema,
     favorite_rank: nullableIntegerSchema,
     showcase: z.boolean(),
-    metadata: z.record(z.unknown()).nullable(),
+    metadata: z.record(arbitraryJsonValueSchema).nullable(),
     shelf_group: nullableStringSchema,
     display_order: nullableIntegerSchema,
     cover_override_url: nullableStringSchema,
