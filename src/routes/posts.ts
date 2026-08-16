@@ -6,10 +6,10 @@ import { parseJson, mapJsonField } from "../utils/json";
 import { validateBody } from "../utils/validation";
 import { normalizePost } from "../utils/normalizers";
 import { postSchema } from "../schemas/content";
+import { postsResponseSchema } from "../schemas/responses";
 import { listQuerySchema } from "../schemas/common";
 import {
   openApiRegistry,
-  genericArraySchema,
   genericObjectSchema,
   okCreatedSchema,
   okUpdatedSchema,
@@ -17,9 +17,7 @@ import {
   openApiJsonRequestBody,
   okResponses,
   createdResponses,
-  openApiResponseWithExample,
   authSecurity,
-  errorResponses,
 } from "../schemas/openapi";
 import {
   parseListQuery,
@@ -45,23 +43,7 @@ openApiRegistry.registerPath({
   summary: "List posts",
   security: authSecurity,
   request: { query: listQuerySchema },
-  responses: {
-    200: openApiResponseWithExample(genericArraySchema, "OK", [
-      {
-        id: 1,
-        slug: "hello-world",
-        title: "Hello World",
-        summary: "My first post",
-        content: "Lorem ipsum...",
-        tags: ["meta"],
-        published_at: "2025-01-01T00:00:00.000Z",
-        pinned: false,
-        created_at: "2025-01-01T00:00:00.000Z",
-        updated_at: "2025-01-01T00:00:00.000Z",
-      },
-    ]),
-    ...errorResponses,
-  },
+  responses: okResponses(postsResponseSchema),
 });
 
 openApiRegistry.registerPath({

@@ -4,10 +4,10 @@ import { nowIso } from "../utils/date";
 import { parseJson } from "../utils/json";
 import { validateBody } from "../utils/validation";
 import { educationSchema } from "../schemas/profile";
+import { educationListResponseSchema } from "../schemas/responses";
 import { listQuerySchema } from "../schemas/common";
 import {
   openApiRegistry,
-  genericArraySchema,
   genericObjectSchema,
   okCreatedSchema,
   okUpdatedSchema,
@@ -43,7 +43,7 @@ openApiRegistry.registerPath({
   summary: "List education",
   security: authSecurity,
   request: { query: listQuerySchema },
-  responses: okResponses(genericArraySchema),
+  responses: okResponses(educationListResponseSchema),
 });
 
 openApiRegistry.registerPath({

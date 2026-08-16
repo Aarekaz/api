@@ -4,10 +4,10 @@ import { nowIso } from "../utils/date";
 import { parseJson } from "../utils/json";
 import { validateBody } from "../utils/validation";
 import { usesItemSchema } from "../schemas/content";
+import { usesResponseSchema } from "../schemas/responses";
 import { listQuerySchema } from "../schemas/common";
 import {
   openApiRegistry,
-  genericArraySchema,
   genericObjectSchema,
   okCreatedSchema,
   okUpdatedSchema,
@@ -41,7 +41,7 @@ openApiRegistry.registerPath({
   summary: "List uses items",
   security: authSecurity,
   request: { query: listQuerySchema },
-  responses: okResponses(genericArraySchema),
+  responses: okResponses(usesResponseSchema),
 });
 
 openApiRegistry.registerPath({

@@ -4,11 +4,11 @@ import { dateOnly, addDays, daysBetween } from "../utils/date";
 import { parseJson } from "../utils/json";
 import { validateBody } from "../utils/validation";
 import { backfillSchema } from "../schemas/common";
+import { githubResponseSchema } from "../schemas/responses";
 import { refreshGitHub } from "../services/github";
 import { markRefreshed } from "../services/wakatime";
 import {
   openApiRegistry,
-  genericObjectSchema,
   okDateRangeSchema,
   openApiJsonRequestBody,
   okResponses,
@@ -24,7 +24,7 @@ openApiRegistry.registerPath({
   path: "/v1/github",
   summary: "Get GitHub data",
   security: authSecurity,
-  responses: okResponses(genericObjectSchema),
+  responses: okResponses(githubResponseSchema),
 });
 
 openApiRegistry.registerPath({
