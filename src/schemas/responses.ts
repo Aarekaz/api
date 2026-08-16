@@ -264,7 +264,7 @@ export const shelfItemResponseSchema = openApiRegistry.register(
       .number()
       .int()
       .nullable()
-      .openapi({ enum: [5, 10] }),
+      .openapi({ enum: [5, 10, null] }),
     started_at: nullableStringSchema,
     completed_at: nullableStringSchema,
     last_watched_at: nullableStringSchema,

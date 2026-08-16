@@ -469,6 +469,12 @@ describe("website-consumed OpenAPI response contracts", () => {
     expect(getSchema()).toEqual({});
   });
 
+  it("includes null in the nullable shelf rating scale enum", () => {
+    expect(
+      property(itemOrObjectSchema("/v1/shelf"), "rating_scale").enum
+    ).toEqual([5, 10, null]);
+  });
+
   it("never emits OpenAPI 3.0 nullable without a sibling type", () => {
     const invalid = Object.entries(document.components?.schemas ?? {}).flatMap(
       ([name, schema]) => invalidNullablePaths(schema, `components.schemas.${name}`)
