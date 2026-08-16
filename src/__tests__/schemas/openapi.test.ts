@@ -261,6 +261,25 @@ describe("website-consumed OpenAPI response contracts", () => {
     }
   });
 
+  it.each([
+    ["/v1/profile", "object"],
+    ["/v1/projects", "array"],
+    ["/v1/posts", "array"],
+    ["/v1/photos", "array"],
+    ["/v1/experience", "array"],
+    ["/v1/education", "array"],
+    ["/v1/skills", "array"],
+    ["/v1/now", "object"],
+    ["/v1/uses", "array"],
+    ["/v1/settings", "object"],
+    ["/v1/shelf", "array"],
+    ["/v1/github", "object"],
+    ["/v1/wakatime", "object"],
+    ["/v1/wakatime/hourly", "object"],
+  ])("documents GET %s as an %s response", (path, type) => {
+    expect(responseSchema(path).type).toBe(type);
+  });
+
   it("declares nested fields consumed by the website", () => {
     const profile = responseSchema("/v1/profile");
     expect(property(profile, "handles").properties).toEqual(
@@ -337,6 +356,58 @@ describe("website-consumed OpenAPI response contracts", () => {
     });
   });
 
+  it.each([
+    [
+      "profile handles.github",
+      () => property(property(responseSchema("/v1/profile"), "handles"), "github"),
+    ],
+    [
+      "profile handles.linkedin",
+      () => property(property(responseSchema("/v1/profile"), "handles"), "linkedin"),
+    ],
+    [
+      "profile handles.twitter",
+      () => property(property(responseSchema("/v1/profile"), "handles"), "twitter"),
+    ],
+    [
+      "profile contact.email",
+      () => property(property(responseSchema("/v1/profile"), "contact"), "email"),
+    ],
+    [
+      "now projects[].name",
+      () =>
+        property(
+          resolveSchema(property(responseSchema("/v1/now"), "projects").items!),
+          "name"
+        ),
+    ],
+    [
+      "now projects[].status",
+      () =>
+        property(
+          resolveSchema(property(responseSchema("/v1/now"), "projects").items!),
+          "status"
+        ),
+    ],
+    [
+      "now projects[].description",
+      () =>
+        property(
+          resolveSchema(property(responseSchema("/v1/now"), "projects").items!),
+          "description"
+        ),
+    ],
+  ])("leaves open JSON value %s unconstrained", (_label, getSchema) => {
+    expect(getSchema().type).toBeUndefined();
+  });
+
+  it("allows every JSON number in settings shelf_config.hiddenItems", () => {
+    const settings = responseSchema("/v1/settings");
+    const shelfConfig = property(settings, "shelf_config");
+    const hiddenItems = property(shelfConfig, "hiddenItems");
+    expect(resolveSchema(hiddenItems.items!)).toMatchObject({ type: "number" });
+  });
+
   it("distinguishes normalized booleans from raw D1 integer flags", () => {
     expect(property(itemOrObjectSchema("/v1/posts"), "published")).toMatchObject({
       type: "boolean",
@@ -350,12 +421,55 @@ describe("website-consumed OpenAPI response contracts", () => {
     });
   });
 
-  it("documents singleton fallbacks and nullable database values", () => {
-    const profile = responseSchema("/v1/profile");
-    expect(profile.required ?? []).not.toContain("name");
+  it.each([
+    [
+      "/v1/profile",
+      [
+        "id",
+        "name",
+        "bio",
+        "handles",
+        "contact",
+        "timezone",
+        "avatar_url",
+        "location",
+        "email",
+        "website",
+        "image_url",
+        "image_alt",
+        "summary",
+        "updated_at",
+      ],
+    ],
+    [
+      "/v1/now",
+      [
+        "id",
+        "focus",
+        "status",
+        "availability",
+        "mood",
+        "current_song",
+        "learning",
+        "projects",
+        "life",
+        "reading_goal",
+        "last_updated",
+        "updated_at",
+      ],
+    ],
+  ])("keeps all GET %s properties optional for the empty fallback", (path, fields) => {
+    const required = responseSchema(path).required ?? [];
+    for (const field of fields) {
+      expect(required).not.toContain(field);
+    }
+  });
 
-    const now = responseSchema("/v1/now");
-    expect(now.required ?? []).not.toContain("focus");
+  it("documents optional settings default fields and nullable database values", () => {
+    const settings = responseSchema("/v1/settings");
+    for (const field of ["id", "updated_at"]) {
+      expect(settings.required ?? []).not.toContain(field);
+    }
 
     const project = itemOrObjectSchema("/v1/projects");
     expect(project.required).toEqual(expect.arrayContaining(["id", "title", "description"]));
