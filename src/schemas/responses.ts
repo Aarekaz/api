@@ -24,23 +24,23 @@ const d1BooleanSchema = z
 
 const profileHandlesResponseSchema = z
   .object({
-    github: nullableStringSchema.optional(),
-    linkedin: nullableStringSchema.optional(),
-    twitter: nullableStringSchema.optional(),
+    github: z.unknown().optional(),
+    linkedin: z.unknown().optional(),
+    twitter: z.unknown().optional(),
   })
   .catchall(z.unknown());
 
 const profileContactResponseSchema = z
   .object({
-    email: nullableStringSchema.optional(),
+    email: z.unknown().optional(),
   })
   .catchall(z.unknown());
 
 const nowProjectResponseSchema = z
   .object({
-    name: nullableStringSchema.optional(),
-    status: nullableStringSchema.optional(),
-    description: nullableStringSchema.optional(),
+    name: z.unknown().optional(),
+    status: z.unknown().optional(),
+    description: z.unknown().optional(),
   })
   .catchall(z.unknown());
 
@@ -60,7 +60,7 @@ const shelfConfigResponseSchema = z.object({
       shows: shelfSectionVisibilityResponseSchema.optional(),
     })
     .optional(),
-  hiddenItems: z.array(z.number().int()).optional(),
+  hiddenItems: z.array(z.number()).optional(),
 });
 
 export const profileResponseSchema = openApiRegistry.register(
