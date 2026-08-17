@@ -7,12 +7,12 @@ import { parseJson, mapJsonField } from "../utils/json";
 import { validateBody } from "../utils/validation";
 import { normalizeShelfItem } from "../utils/normalizers";
 import { shelfItemBaseSchema, shelfItemSchema, statusMatchesShelfType } from "../schemas/content";
+import { shelfResponseSchema } from "../schemas/responses";
 import { listQuerySchema } from "../schemas/common";
 import { getTmdbMedia, normalizeTmdbMediaType, searchTmdbMedia, type TmdbCandidate } from "../services/tmdb";
 import { getTag, mergeTags } from "../utils/tags";
 import {
   openApiRegistry,
-  genericArraySchema,
   genericObjectSchema,
   okCreatedSchema,
   okUpdatedSchema,
@@ -120,7 +120,7 @@ openApiRegistry.registerPath({
   summary: "List shelf items",
   security: authSecurity,
   request: { query: shelfQuerySchema },
-  responses: okResponses(genericArraySchema),
+  responses: okResponses(shelfResponseSchema),
 });
 
 openApiRegistry.registerPath({

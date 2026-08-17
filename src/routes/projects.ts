@@ -6,10 +6,10 @@ import { parseJson, mapJsonField } from "../utils/json";
 import { validateBody } from "../utils/validation";
 import { normalizeProject } from "../utils/normalizers";
 import { projectSchema } from "../schemas/content";
+import { projectsResponseSchema } from "../schemas/responses";
 import { listQuerySchema } from "../schemas/common";
 import {
   openApiRegistry,
-  genericArraySchema,
   genericObjectSchema,
   okCreatedSchema,
   okUpdatedSchema,
@@ -17,9 +17,7 @@ import {
   openApiJsonRequestBody,
   okResponses,
   createdResponses,
-  openApiResponseWithExample,
   authSecurity,
-  errorResponses,
 } from "../schemas/openapi";
 import {
   parseListQuery,
@@ -46,21 +44,7 @@ openApiRegistry.registerPath({
   summary: "List projects",
   security: authSecurity,
   request: { query: listQuerySchema },
-  responses: {
-    200: openApiResponseWithExample(genericArraySchema, "OK", [
-      {
-        id: 1,
-        title: "Personal API",
-        description: "Cloudflare Worker + D1.",
-        links: ["https://api.example.com", "https://github.com/user/repo"],
-        tags: ["cloudflare", "typescript"],
-        status: "active",
-        created_at: "2025-01-05T12:34:56.000Z",
-        updated_at: "2025-01-05T12:34:56.000Z",
-      },
-    ]),
-    ...errorResponses,
-  },
+  responses: okResponses(projectsResponseSchema),
 });
 
 openApiRegistry.registerPath({
