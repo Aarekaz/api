@@ -6,9 +6,9 @@ import { parseJson, mapJsonField } from "../utils/json";
 import { validateBody } from "../utils/validation";
 import { normalizeSettings } from "../utils/normalizers";
 import { settingsSchema } from "../schemas/profile";
+import { settingsResponseSchema } from "../schemas/responses";
 import {
   openApiRegistry,
-  genericObjectSchema,
   okUpdatedSchema,
   openApiJsonRequestBody,
   okResponses,
@@ -23,7 +23,7 @@ openApiRegistry.registerPath({
   path: "/v1/settings",
   summary: "Fetch settings",
   security: authSecurity,
-  responses: okResponses(genericObjectSchema),
+  responses: okResponses(settingsResponseSchema),
 });
 
 openApiRegistry.registerPath({

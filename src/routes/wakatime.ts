@@ -7,13 +7,16 @@ import { validateBody } from "../utils/validation";
 import { normalizeWakaTimeHourly } from "../utils/normalizers";
 import { backfillSchema } from "../schemas/common";
 import {
+  wakatimeHourlyResponseSchema,
+  wakatimeResponseSchema,
+} from "../schemas/responses";
+import {
   refreshWakaTime,
   refreshWakaTimeHourly,
   markRefreshed,
 } from "../services/wakatime";
 import {
   openApiRegistry,
-  genericObjectSchema,
   okDateRangeSchema,
   openApiJsonRequestBody,
   okResponses,
@@ -29,7 +32,7 @@ openApiRegistry.registerPath({
   path: "/v1/wakatime",
   summary: "Get WakaTime data",
   security: authSecurity,
-  responses: okResponses(genericObjectSchema),
+  responses: okResponses(wakatimeResponseSchema),
 });
 
 openApiRegistry.registerPath({
@@ -37,7 +40,7 @@ openApiRegistry.registerPath({
   path: "/v1/wakatime/hourly",
   summary: "Get WakaTime hourly data",
   security: authSecurity,
-  responses: okResponses(genericObjectSchema),
+  responses: okResponses(wakatimeHourlyResponseSchema),
 });
 
 openApiRegistry.registerPath({

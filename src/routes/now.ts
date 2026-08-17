@@ -5,10 +5,10 @@ import { nowIso } from "../utils/date";
 import { parseJson, mapJsonField } from "../utils/json";
 import { validateBody } from "../utils/validation";
 import { nowSchema } from "../schemas/profile";
+import { nowResponseSchema } from "../schemas/responses";
 import { normalizeNow } from "../utils/normalizers";
 import {
   openApiRegistry,
-  genericObjectSchema,
   okUpdatedSchema,
   openApiJsonRequestBody,
   okResponses,
@@ -23,7 +23,7 @@ openApiRegistry.registerPath({
   path: "/v1/now",
   summary: "Fetch current status",
   security: authSecurity,
-  responses: okResponses(genericObjectSchema),
+  responses: okResponses(nowResponseSchema),
 });
 
 openApiRegistry.registerPath({
