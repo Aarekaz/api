@@ -22,7 +22,9 @@ export const whoopCollectionQuerySchema = z.object({
   start: whoopDateTime.optional(),
   end: whoopDateTime.optional(),
   limit: z.string().regex(/^(?:[1-9]|[1-9][0-9]|100)$/).optional(),
-  cursor: z.string().regex(/^[A-Za-z0-9_-]+$/).optional(),
+  cursor: z.string().regex(/^[A-Za-z0-9_-]+$/).refine((value) => value.length % 4 !== 1, {
+    message: "Invalid URL-safe base64 cursor",
+  }).optional(),
 }).strict();
 
 export const whoopProfileSchema = z.object({

@@ -4,6 +4,7 @@ import {
   whoopCollectionQuerySchema,
   whoopCycleSchema,
   whoopProfileSchema,
+  whoopRecoverySchema,
   whoopSleepSchema,
   whoopWebhookSchema,
   whoopWorkoutSchema,
@@ -15,6 +16,7 @@ import {
   CYCLE,
   ENV,
   PROFILE,
+  RECOVERY,
   SLEEP,
   SLEEP_UPDATED,
   WORKOUT,
@@ -50,6 +52,8 @@ describe("WHOOP shared schemas", () => {
   it("rejects an invalid local cursor and a limit above 100", () => {
     expect(whoopCollectionQuerySchema.safeParse({ limit: "101" }).success).toBe(false);
     expect(whoopCollectionQuerySchema.safeParse({ cursor: "not-base64!" }).success).toBe(false);
+    expect(whoopCollectionQuerySchema.safeParse({ cursor: "a" }).success).toBe(false);
+    expect(whoopCollectionQuerySchema.safeParse({ cursor: "MTIzOjEyMzEyMw" }).success).toBe(true);
   });
 
   it("rejects unknown fields in strict local and webhook envelopes", () => {
@@ -77,14 +81,21 @@ describe("WHOOP shared schemas", () => {
     expect(whoopWorkoutSchema.safeParse(WORKOUT).success).toBe(true);
   });
 
+  it("accepts official-shaped recovery records and preserves provider extensions", () => {
+    const parsed = whoopRecoverySchema.parse({ ...RECOVERY, future_metric: 123 });
+    expect(parsed.future_metric).toBe(123);
+  });
+
   it("rejects provider records missing documented core fields", () => {
     const { email: _profileEmail, ...profileWithoutEmail } = PROFILE;
     const { timezone_offset: _cycleTimezone, ...cycleWithoutTimezone } = CYCLE;
+    const { cycle_id: _recoveryCycle, ...recoveryWithoutCycle } = RECOVERY;
     const { nap: _sleepNap, ...sleepWithoutNap } = SLEEP;
     const { sport_name: _workoutSport, ...workoutWithoutSport } = WORKOUT;
 
     expect(whoopProfileSchema.safeParse(profileWithoutEmail).success).toBe(false);
     expect(whoopCycleSchema.safeParse(cycleWithoutTimezone).success).toBe(false);
+    expect(whoopRecoverySchema.safeParse(recoveryWithoutCycle).success).toBe(false);
     expect(whoopSleepSchema.safeParse(sleepWithoutNap).success).toBe(false);
     expect(whoopWorkoutSchema.safeParse(workoutWithoutSport).success).toBe(false);
   });

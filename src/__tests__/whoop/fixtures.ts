@@ -18,6 +18,14 @@ export const CYCLE = {
   score_state: "SCORED",
 } as const;
 export const CURRENT_CYCLE = { ...CYCLE, end: null };
+export const RECOVERY = {
+  sleep_id: "f7c85ce7-7e44-4bb4-8cb4-ee5b94b54e1c",
+  cycle_id: 9,
+  user_id: 42,
+  created_at: NOW,
+  updated_at: NOW,
+  score_state: "SCORED",
+} as const;
 export const SLEEP = {
   id: "f7c85ce7-7e44-4bb4-8cb4-ee5b94b54e1c",
   cycle_id: 9,
