@@ -40,12 +40,18 @@ type SyncRepository = Pick<WhoopRepository,
   | "isSyncConnectionCurrent"
   | "isReconciliationCurrent"
   | "activateCompletedBackfill"
+  | "refreshSyncRun"
+  | "recordSyncSuccess"
+  | "recordSyncFailure"
 >;
 
 type ReconciliationPublisherRepository = Pick<WhoopRepository,
   | "beginReconciliation"
   | "getCurrentConnection"
   | "getPendingRecoveryCycleIds"
+  | "createSyncRun"
+  | "markSyncRunPublicationFailure"
+  | "recordSyncFailure"
 >;
 
 export interface WhoopSyncDependencies {
@@ -150,7 +156,34 @@ export async function enqueueReconciliation(
     recoveryCycleId,
     trigger,
   })));
-  await env.WHOOP_SYNC_QUEUE.sendBatch(messages.map((body) => ({ body })));
+  const runCreated = await repository.createSyncRun({
+    runId: reconcileRunId,
+    whoopUserId,
+    connectionId: connection.connectionId,
+    reconcileGeneration,
+    trigger,
+    expectedTargetCount: messages.length,
+    startedAt: windowEnd,
+  });
+  if (!runCreated) throw new Error("WHOOP connection changed before reconciliation publication");
+  try {
+    await env.WHOOP_SYNC_QUEUE.sendBatch(messages.map((body) => ({ body })));
+  } catch {
+    await repository.markSyncRunPublicationFailure(
+      reconcileRunId,
+      whoopUserId,
+      connection.connectionId,
+      reconcileGeneration,
+      windowEnd,
+    );
+    await repository.recordSyncFailure(
+      whoopUserId,
+      connection.connectionId,
+      windowEnd,
+      "WHOOP queue publication failed",
+    );
+    throw new Error("WHOOP reconciliation queue publication failed");
+  }
 }
 
 export async function processWebhook(
@@ -256,6 +289,11 @@ export async function handleWhoopQueue(
       }
       requireCurrentWrite(await repository.markWebhookProcessed(
         body.traceId,
+        body.whoopUserId,
+        body.connectionId,
+        now().toISOString(),
+      ));
+      requireCurrentWrite(await repository.recordSyncSuccess(
         body.whoopUserId,
         body.connectionId,
         now().toISOString(),
@@ -430,6 +468,11 @@ export async function handleWhoopQueue(
               };
           await env.WHOOP_SYNC_QUEUE.send(nextMessage);
         } catch {
+          requireCurrentWrite(await repository.upsertCheckpoint({
+            ...checkpoint,
+            status: "retrying",
+            lastError: "WHOOP queue publication failed",
+          }));
           throw new WhoopPostCheckpointError();
         }
       } else if (body.kind === "backfill") {
@@ -458,6 +501,20 @@ export async function handleWhoopQueue(
         { expectedConnectionId: body.connectionId },
       );
     }
+    if (body.kind === "reconcile") {
+      requireCurrentWrite(await repository.refreshSyncRun(
+        body.reconcileRunId,
+        body.whoopUserId,
+        body.connectionId,
+        body.reconcileGeneration,
+        now().toISOString(),
+      ));
+      requireCurrentWrite(await repository.recordSyncSuccess(
+        body.whoopUserId,
+        body.connectionId,
+        now().toISOString(),
+      ));
+    }
     message.ack();
     } catch (error) {
       if (error instanceof WhoopStaleConnectionError) {
@@ -465,6 +522,44 @@ export async function handleWhoopQueue(
         continue;
       }
       if (error instanceof WhoopPostCheckpointError) {
+        if (body.kind === "reconcile") {
+          const failedAt = now().toISOString();
+          try {
+            const checkpointed = await repository.upsertCheckpoint({
+              whoopUserId: body.whoopUserId,
+              connectionId: body.connectionId,
+              resource: body.resource,
+              mode: body.kind,
+              ...checkpointIdentity(body),
+              windowStart: body.windowStart ?? null,
+              windowEnd: body.windowEnd ?? null,
+              nextToken: body.nextToken ?? null,
+              status: "retrying",
+              pageCount: body.pageCount ?? 0,
+              recordCount: body.recordCount ?? 0,
+              createdAt: failedAt,
+              updatedAt: failedAt,
+              lastError: "WHOOP queue publication failed",
+            });
+            if (!checkpointed) {
+              message.ack();
+              continue;
+            }
+            requireCurrentWrite(await repository.refreshSyncRun(
+              body.reconcileRunId, body.whoopUserId, body.connectionId,
+              body.reconcileGeneration, failedAt,
+            ));
+            requireCurrentWrite(await repository.recordSyncFailure(
+              body.whoopUserId, body.connectionId, failedAt,
+              "WHOOP queue publication failed",
+            ));
+          } catch (postCheckpointFailure) {
+            if (postCheckpointFailure instanceof WhoopStaleConnectionError) {
+              message.ack();
+              continue;
+            }
+          }
+        }
         message.retry({ delaySeconds: 30 });
         continue;
       }
@@ -492,6 +587,16 @@ export async function handleWhoopQueue(
             continue;
           }
           failureRecorded = true;
+          const healthRecorded = await repository.recordSyncFailure(
+            body.whoopUserId,
+            body.connectionId,
+            now().toISOString(),
+            lastError,
+          );
+          if (!healthRecorded) {
+            message.ack();
+            continue;
+          }
         } catch {
           // Retrying preserves the webhook when its durable status write fails.
         }
@@ -536,6 +641,25 @@ export async function handleWhoopQueue(
           continue;
         }
         checkpointed = true;
+        if (body.kind === "reconcile") {
+          requireCurrentWrite(await repository.refreshSyncRun(
+            body.reconcileRunId,
+            body.whoopUserId,
+            body.connectionId,
+            body.reconcileGeneration,
+            failedAt,
+          ));
+        }
+        const healthRecorded = await repository.recordSyncFailure(
+          body.whoopUserId,
+          body.connectionId,
+          failedAt,
+          lastError,
+        );
+        if (!healthRecorded) {
+          message.ack();
+          continue;
+        }
       } catch {
         // Retrying the message is the durable fallback when checkpointing fails.
       }

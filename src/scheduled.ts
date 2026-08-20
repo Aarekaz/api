@@ -30,6 +30,10 @@ type ScheduledWhoopRepository = Pick<WhoopRepository,
   | "beginReconciliation"
   | "getPendingRecoveryCycleIds"
   | "withWhoopAccessToken"
+  | "pruneOperationalData"
+  | "createSyncRun"
+  | "markSyncRunPublicationFailure"
+  | "recordSyncFailure"
 >;
 
 interface ScheduledRefreshJobs {
@@ -60,6 +64,7 @@ export async function handleScheduled(
     { name: "wakatime", task: dependencies.refreshJobs?.wakatime ?? (() => refreshWakaTimeIfDue(env)) },
     { name: "github", task: dependencies.refreshJobs?.github ?? (() => refreshGitHubIfDue(env)) },
     { name: "whoop", task: () => refreshWhoop(env, dependencies) },
+    { name: "whoop-retention", task: () => pruneWhoopOperations(env, dependencies) },
   ];
 
   const results = await Promise.allSettled(
@@ -71,6 +76,13 @@ export async function handleScheduled(
       console.error(`Scheduled refresh failed: ${jobs[index].name}`, result.reason);
     }
   });
+}
+
+async function pruneWhoopOperations(env: Env, dependencies: ScheduledDependencies): Promise<void> {
+  const repository = dependencies.repository
+    ?? new WhoopRepository(env.DB, env.WHOOP_TOKEN_ENCRYPTION_KEY);
+  const now = dependencies.now ?? (() => new Date());
+  await repository.pruneOperationalData(now().toISOString());
 }
 
 const backfillMessagesFor = (intent: PendingInitialBackfill): WhoopQueueMessage[] =>

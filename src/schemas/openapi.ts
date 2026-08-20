@@ -132,12 +132,25 @@ export const whoopIntegrationStatusResponseSchema = z.object({
   progress: z.array(z.object({
     resource: z.enum(["profile", "body_measurement", "cycle", "recovery", "sleep", "workout"]),
     mode: z.enum(["backfill", "reconcile", "webhook"]),
-    status: z.enum(["queued", "running", "complete", "failed"]),
+    status: z.enum(["queued", "running", "retrying", "complete", "error"]),
     page_count: z.number().int().nonnegative(),
     record_count: z.number().int().nonnegative(),
     updated_at: dateTimeSchema,
     last_error: z.string().nullable(),
   })),
+  runs: z.array(z.object({
+    run_id: z.string().uuid(),
+    trigger: z.string(),
+    status: z.enum(["queued", "running", "retrying", "complete", "error"]),
+    page_count: z.number().int().nonnegative(),
+    record_count: z.number().int().nonnegative(),
+    expected_target_count: z.number().int().nonnegative(),
+    completed_target_count: z.number().int().nonnegative(),
+    started_at: dateTimeSchema,
+    succeeded_at: dateTimeSchema.nullable(),
+    failed_at: dateTimeSchema.nullable(),
+    last_error: z.string().nullable(),
+  }).strict()),
 });
 
 const whoopReadScoreStateSchema = z.enum(["scored", "pending", "unscorable"]);
@@ -228,7 +241,9 @@ export const whoopSleepReadSchema = z.object({
   nap: z.boolean().nullable(),
   score_state: whoopReadScoreStateSchema,
   stage_durations_seconds: z.object({
+    in_bed_seconds: nullableNumberSchema,
     awake_seconds: nullableNumberSchema,
+    no_data_seconds: nullableNumberSchema,
     light_seconds: nullableNumberSchema,
     slow_wave_seconds: nullableNumberSchema,
     rem_seconds: nullableNumberSchema,
@@ -236,7 +251,11 @@ export const whoopSleepReadSchema = z.object({
   sleep_need_seconds: z.object({
     baseline_seconds: nullableNumberSchema,
     debt_seconds: nullableNumberSchema,
+    recent_strain_seconds: nullableNumberSchema,
+    recent_nap_seconds: nullableNumberSchema,
   }).strict(),
+  sleep_cycle_count: z.number().int().nonnegative().nullable(),
+  disturbance_count: z.number().int().nonnegative().nullable(),
   sleep_efficiency_percentage: nullableNumberSchema,
   sleep_consistency_percentage: nullableNumberSchema,
   sleep_performance_percentage: nullableNumberSchema,
@@ -311,10 +330,23 @@ const whoopSynchronizationSchema = z.object({
   progress: z.array(z.object({
     resource: z.enum(["profile", "body_measurement", "cycle", "recovery", "sleep", "workout"]),
     mode: z.enum(["backfill", "reconcile", "webhook"]),
-    status: z.enum(["queued", "running", "retrying", "complete", "failed", "error"]),
+    status: z.enum(["queued", "running", "retrying", "complete", "error"]),
     page_count: z.number().int().nonnegative(),
     record_count: z.number().int().nonnegative(),
     updated_at: dateTimeSchema,
+  }).strict()),
+  runs: z.array(z.object({
+    run_id: z.string().uuid(),
+    trigger: z.string(),
+    status: z.enum(["queued", "running", "retrying", "complete", "error"]),
+    page_count: z.number().int().nonnegative(),
+    record_count: z.number().int().nonnegative(),
+    expected_target_count: z.number().int().nonnegative(),
+    completed_target_count: z.number().int().nonnegative(),
+    started_at: dateTimeSchema,
+    succeeded_at: dateTimeSchema.nullable(),
+    failed_at: dateTimeSchema.nullable(),
+    last_error: z.string().nullable(),
   }).strict()),
 }).strict();
 

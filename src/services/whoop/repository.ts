@@ -25,6 +25,14 @@ import {
 const REFRESH_LEASE_MILLISECONDS = 30_000;
 const REFRESH_ABORT_MILLISECONDS = 20_000;
 const REFRESH_WAIT_MILLISECONDS = 100;
+export const WHOOP_OPERATIONAL_RETENTION = {
+  oauthStateMilliseconds: 24 * 60 * 60 * 1_000,
+  reconcileSeenMilliseconds: 24 * 60 * 60 * 1_000,
+  checkpointMilliseconds: 30 * 24 * 60 * 60 * 1_000,
+  syncRunMilliseconds: 30 * 24 * 60 * 60 * 1_000,
+  processedWebhookMilliseconds: 30 * 24 * 60 * 60 * 1_000,
+  deleteLimit: 100,
+} as const;
 
 export type TombstonePolicy = "preserve" | "reconcile";
 
@@ -68,8 +76,25 @@ export interface RotatedTokenInput {
 export interface SyncRunInput {
   runId: string;
   whoopUserId: number;
+  connectionId: string;
+  reconcileGeneration: number;
   trigger: string;
+  expectedTargetCount: number;
   startedAt: string;
+}
+
+export interface SyncRunProjection {
+  run_id: string;
+  trigger: string;
+  status: "queued" | "running" | "retrying" | "complete" | "error";
+  page_count: number;
+  record_count: number;
+  expected_target_count: number;
+  completed_target_count: number;
+  started_at: string;
+  succeeded_at: string | null;
+  failed_at: string | null;
+  last_error: string | null;
 }
 
 export interface CheckpointInput {
@@ -323,7 +348,9 @@ const sourceDefinitions: Record<WhoopResource, SourceDefinition> = {
     columns: [
       "sleep_id", "cycle_id", "whoop_user_id", "start_at", "end_at", "timezone_offset", "nap",
       "score_state", "stage_awake_milliseconds", "stage_light_milliseconds", "stage_slow_wave_milliseconds",
-      "stage_rem_milliseconds", "sleep_needed_milliseconds", "sleep_debt_milliseconds",
+      "stage_rem_milliseconds", "stage_in_bed_milliseconds", "stage_no_data_milliseconds",
+      "sleep_needed_milliseconds", "sleep_debt_milliseconds", "sleep_need_recent_strain_milliseconds",
+      "sleep_need_recent_nap_milliseconds", "sleep_cycle_count", "disturbance_count",
       "sleep_efficiency_percentage", "sleep_consistency_percentage", "sleep_performance_percentage",
       "respiratory_rate", "upstream_created_at", "upstream_updated_at", "deleted_at", "synced_at", "raw_json",
     ],
@@ -339,8 +366,13 @@ const sourceDefinitions: Record<WhoopResource, SourceDefinition> = {
         firstNumber(stages.total_light_sleep_time_milli, stages.light_milli),
         firstNumber(stages.total_slow_wave_sleep_time_milli, stages.slow_wave_milli),
         firstNumber(stages.total_rem_sleep_time_milli, stages.rem_milli),
+        nullableNumber(stages.total_in_bed_time_milli),
+        nullableNumber(stages.total_no_data_time_milli),
         firstNumber(needed.baseline_milli, needed.sleep_needed_milli),
         firstNumber(needed.need_from_sleep_debt_milli, needed.sleep_debt_milli),
+        nullableNumber(needed.need_from_recent_strain_milli),
+        nullableNumber(needed.need_from_recent_nap_milli),
+        nullableNumber(stages.sleep_cycle_count), nullableNumber(stages.disturbance_count),
         nullableNumber(score.sleep_efficiency_percentage), nullableNumber(score.sleep_consistency_percentage),
         nullableNumber(score.sleep_performance_percentage), nullableNumber(score.respiratory_rate),
         canonicalTimestamp(sleep.created_at), canonicalTimestamp(sleep.updated_at), null, syncedAt, rawJson(sleep),
@@ -843,18 +875,137 @@ export class WhoopRepository {
     return true;
   }
 
-  async createSyncRun(input: SyncRunInput): Promise<void> {
-    await this.db.prepare(`
+  async createSyncRun(input: SyncRunInput): Promise<boolean> {
+    const result = await this.db.prepare(`
       INSERT INTO whoop_sync_runs (
-        run_id, whoop_user_id, trigger, status, page_count, record_count,
+        run_id, whoop_user_id, connection_id, reconcile_generation, trigger, status,
+        expected_target_count, completed_target_count, page_count, record_count,
         started_at, succeeded_at, failed_at, last_error
-      ) VALUES (?, ?, ?, 'running', 0, 0, ?, NULL, NULL, NULL)
+      ) SELECT ?, ?, ?, ?, ?, 'queued', ?, 0, 0, 0, ?, NULL, NULL, NULL
+      WHERE EXISTS (
+        SELECT 1 FROM whoop_connections
+        WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+          AND status IN ('active', 'backfilling')
+      )
     `).bind(
       input.runId,
       input.whoopUserId,
+      input.connectionId,
+      input.reconcileGeneration,
       input.trigger,
+      input.expectedTargetCount,
       canonicalTimestamp(input.startedAt)!,
+      input.whoopUserId,
+      input.connectionId,
+      input.reconcileGeneration,
     ).run();
+    return changedRows(result) === 1;
+  }
+
+  async refreshSyncRun(
+    runId: string,
+    whoopUserId: number,
+    connectionId: string,
+    reconcileGeneration: number,
+    updatedAt: string,
+  ): Promise<boolean> {
+    const timestamp = canonicalTimestamp(updatedAt)!;
+    const result = await this.db.prepare(`
+      UPDATE whoop_sync_runs
+      SET page_count = COALESCE((
+            SELECT SUM(page_count) FROM whoop_sync_checkpoints
+            WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+              AND sync_run_id = ? AND mode = 'reconcile'
+          ), 0),
+          record_count = COALESCE((
+            SELECT SUM(record_count) FROM whoop_sync_checkpoints
+            WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+              AND sync_run_id = ? AND mode = 'reconcile'
+          ), 0),
+          completed_target_count = COALESCE((
+            SELECT SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END)
+            FROM whoop_sync_checkpoints
+            WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+              AND sync_run_id = ? AND mode = 'reconcile'
+          ), 0),
+          status = CASE
+            WHEN (SELECT COUNT(*) FROM whoop_sync_checkpoints
+                  WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+                    AND sync_run_id = ? AND mode = 'reconcile' AND status = 'error') > 0 THEN 'error'
+            WHEN (SELECT COUNT(*) FROM whoop_sync_checkpoints
+                  WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+                    AND sync_run_id = ? AND mode = 'reconcile' AND status = 'complete') >= expected_target_count
+              THEN 'complete'
+            WHEN (SELECT COUNT(*) FROM whoop_sync_checkpoints
+                  WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+                    AND sync_run_id = ? AND mode = 'reconcile' AND status = 'retrying') > 0 THEN 'retrying'
+            WHEN (SELECT COUNT(*) FROM whoop_sync_checkpoints
+                  WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+                    AND sync_run_id = ? AND mode = 'reconcile') > 0 THEN 'running'
+            ELSE 'queued'
+          END,
+          succeeded_at = CASE
+            WHEN (SELECT COUNT(*) FROM whoop_sync_checkpoints
+                  WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+                    AND sync_run_id = ? AND mode = 'reconcile' AND status = 'complete') >= expected_target_count
+              THEN COALESCE(succeeded_at, ?) ELSE NULL END,
+          failed_at = CASE
+            WHEN (SELECT COUNT(*) FROM whoop_sync_checkpoints
+                  WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+                    AND sync_run_id = ? AND mode = 'reconcile' AND status = 'error') > 0
+              THEN COALESCE(failed_at, ?) ELSE NULL END,
+          last_error = (
+            SELECT last_error FROM whoop_sync_checkpoints
+            WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+              AND sync_run_id = ? AND mode = 'reconcile' AND last_error IS NOT NULL
+            ORDER BY updated_at DESC LIMIT 1
+          )
+      WHERE run_id = ? AND whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+        AND EXISTS (
+          SELECT 1 FROM whoop_connections
+          WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+            AND status IN ('active', 'backfilling')
+        )
+    `).bind(
+      whoopUserId, connectionId, reconcileGeneration, runId,
+      whoopUserId, connectionId, reconcileGeneration, runId,
+      whoopUserId, connectionId, reconcileGeneration, runId,
+      whoopUserId, connectionId, reconcileGeneration, runId,
+      whoopUserId, connectionId, reconcileGeneration, runId,
+      whoopUserId, connectionId, reconcileGeneration, runId,
+      whoopUserId, connectionId, reconcileGeneration, runId,
+      whoopUserId, connectionId, reconcileGeneration, runId, timestamp,
+      whoopUserId, connectionId, reconcileGeneration, runId, timestamp,
+      whoopUserId, connectionId, reconcileGeneration, runId,
+      runId, whoopUserId, connectionId, reconcileGeneration,
+      whoopUserId, connectionId, reconcileGeneration,
+    ).run();
+    return changedRows(result) === 1;
+  }
+
+  async markSyncRunPublicationFailure(
+    runId: string,
+    whoopUserId: number,
+    connectionId: string,
+    reconcileGeneration: number,
+    failedAt: string,
+  ): Promise<boolean> {
+    const timestamp = canonicalTimestamp(failedAt)!;
+    const result = await this.db.prepare(`
+      UPDATE whoop_sync_runs
+      SET status = 'error', failed_at = ?, last_error = 'WHOOP queue publication failed'
+      WHERE run_id = ? AND whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+        AND status = 'queued'
+        AND EXISTS (
+          SELECT 1 FROM whoop_connections
+          WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+            AND status IN ('active', 'backfilling')
+        )
+    `).bind(
+      timestamp, runId, whoopUserId, connectionId, reconcileGeneration,
+      whoopUserId, connectionId, reconcileGeneration,
+    ).run();
+    return changedRows(result) === 1;
   }
 
   async beginReconciliation(
@@ -1466,6 +1617,148 @@ export class WhoopRepository {
       ORDER BY resource ASC, mode ASC
     `).bind(whoopUserId).all<SyncProgressProjection>();
     return result.results.map((row) => ({ ...row, last_error: sanitizedError(row.last_error) }));
+  }
+
+  async getRecentSyncRuns(whoopUserId: number, limit = 10): Promise<SyncRunProjection[]> {
+    const boundedLimit = Math.max(1, Math.min(25, Math.trunc(limit)));
+    const result = await this.db.prepare(`
+      SELECT run.run_id, run.trigger, run.status, run.page_count, run.record_count,
+             run.expected_target_count, run.completed_target_count, run.started_at,
+             run.succeeded_at, run.failed_at, run.last_error
+      FROM whoop_sync_runs AS run
+      INNER JOIN whoop_connections AS connection
+        ON connection.whoop_user_id = run.whoop_user_id
+       AND connection.connection_id = run.connection_id
+      WHERE run.whoop_user_id = ?
+      ORDER BY run.started_at DESC, run.run_id DESC
+      LIMIT ?
+    `).bind(whoopUserId, boundedLimit).all<SyncRunProjection>();
+    return result.results.map((run) => ({ ...run, last_error: sanitizedError(run.last_error) }));
+  }
+
+  async recordSyncSuccess(
+    whoopUserId: number,
+    connectionId: string,
+    succeededAt: string,
+  ): Promise<boolean> {
+    const timestamp = canonicalTimestamp(succeededAt)!;
+    const result = await this.db.prepare(`
+      UPDATE whoop_connections
+      SET last_success_at = ?, last_error_at = NULL, last_error = NULL,
+          consecutive_failure_count = 0, updated_at = ?
+      WHERE whoop_user_id = ? AND connection_id = ?
+        AND status IN ('active', 'backfilling')
+    `).bind(timestamp, timestamp, whoopUserId, connectionId).run();
+    return changedRows(result) === 1;
+  }
+
+  async recordSyncFailure(
+    whoopUserId: number,
+    connectionId: string,
+    failedAt: string,
+    lastError: string,
+  ): Promise<boolean> {
+    const timestamp = canonicalTimestamp(failedAt)!;
+    const result = await this.db.prepare(`
+      UPDATE whoop_connections
+      SET last_error_at = ?, last_error = ?,
+          consecutive_failure_count = consecutive_failure_count + 1, updated_at = ?
+      WHERE whoop_user_id = ? AND connection_id = ?
+        AND status IN ('active', 'backfilling')
+    `).bind(
+      timestamp,
+      sanitizedError(lastError) ?? "WHOOP synchronization failed",
+      timestamp,
+      whoopUserId,
+      connectionId,
+    ).run();
+    return changedRows(result) === 1;
+  }
+
+  async pruneOperationalData(now: string): Promise<{
+    oauthStates: number;
+    checkpoints: number;
+    runs: number;
+    seen: number;
+    webhookReceipts: number;
+  }> {
+    const nowMilliseconds = Date.parse(canonicalTimestamp(now)!);
+    const cutoff = (milliseconds: number) => new Date(nowMilliseconds - milliseconds).toISOString();
+    const oauthCutoff = cutoff(WHOOP_OPERATIONAL_RETENTION.oauthStateMilliseconds);
+    const checkpointCutoff = cutoff(WHOOP_OPERATIONAL_RETENTION.checkpointMilliseconds);
+    const runCutoff = cutoff(WHOOP_OPERATIONAL_RETENTION.syncRunMilliseconds);
+    const seenCutoff = cutoff(WHOOP_OPERATIONAL_RETENTION.reconcileSeenMilliseconds);
+    const webhookCutoff = cutoff(WHOOP_OPERATIONAL_RETENTION.processedWebhookMilliseconds);
+    const limit = WHOOP_OPERATIONAL_RETENTION.deleteLimit;
+    const results = await this.db.batch([
+      this.db.prepare(`
+        DELETE FROM whoop_oauth_states WHERE rowid IN (
+          SELECT rowid FROM whoop_oauth_states
+          WHERE (consumed_at IS NOT NULL AND consumed_at < ?)
+             OR (expires_at < ?)
+          ORDER BY expires_at ASC LIMIT ?
+        )
+      `).bind(oauthCutoff, oauthCutoff, limit),
+      this.db.prepare(`
+        DELETE FROM whoop_sync_checkpoints WHERE rowid IN (
+          SELECT checkpoint.rowid FROM whoop_sync_checkpoints AS checkpoint
+          WHERE checkpoint.status IN ('complete', 'error') AND checkpoint.updated_at < ?
+            AND (checkpoint.target_id != '' OR EXISTS (
+              SELECT 1 FROM whoop_sync_checkpoints AS newer
+              WHERE newer.whoop_user_id = checkpoint.whoop_user_id
+                AND newer.resource = checkpoint.resource
+                AND newer.mode = checkpoint.mode
+                AND newer.target_id = checkpoint.target_id
+                AND (newer.created_at > checkpoint.created_at
+                  OR (newer.created_at = checkpoint.created_at AND newer.sync_run_id > checkpoint.sync_run_id))
+            ))
+          ORDER BY checkpoint.updated_at ASC LIMIT ?
+        )
+      `).bind(checkpointCutoff, limit),
+      this.db.prepare(`
+        DELETE FROM whoop_sync_runs WHERE rowid IN (
+          SELECT run.rowid FROM whoop_sync_runs AS run
+          WHERE run.status IN ('complete', 'error') AND run.started_at < ?
+            AND EXISTS (
+              SELECT 1 FROM whoop_sync_runs AS newer
+              WHERE newer.whoop_user_id = run.whoop_user_id
+                AND (newer.started_at > run.started_at
+                  OR (newer.started_at = run.started_at AND newer.run_id > run.run_id))
+            )
+          ORDER BY run.started_at ASC LIMIT ?
+        )
+      `).bind(runCutoff, limit),
+      this.db.prepare(`
+        DELETE FROM whoop_reconcile_seen WHERE rowid IN (
+          SELECT seen.rowid FROM whoop_reconcile_seen AS seen
+          WHERE seen.seen_at < ?
+            AND NOT EXISTS (
+              SELECT 1 FROM whoop_sync_checkpoints AS checkpoint
+              WHERE checkpoint.whoop_user_id = seen.whoop_user_id
+                AND checkpoint.connection_id = seen.connection_id
+                AND checkpoint.reconcile_generation = seen.reconcile_generation
+                AND checkpoint.sync_run_id = seen.reconcile_run_id
+                AND checkpoint.status IN ('queued', 'running', 'retrying')
+            )
+          ORDER BY seen.seen_at ASC LIMIT ?
+        )
+      `).bind(seenCutoff, limit),
+      this.db.prepare(`
+        DELETE FROM whoop_webhook_events WHERE rowid IN (
+          SELECT rowid FROM whoop_webhook_events
+          WHERE status = 'processed' AND processed_at < ?
+            AND event_type IN ('workout.updated', 'sleep.updated', 'recovery.updated')
+          ORDER BY processed_at ASC LIMIT ?
+        )
+      `).bind(webhookCutoff, limit),
+    ]);
+    return {
+      oauthStates: changedRows(results[0]),
+      checkpoints: changedRows(results[1]),
+      runs: changedRows(results[2]),
+      seen: changedRows(results[3]),
+      webhookReceipts: changedRows(results[4]),
+    };
   }
 
   async getPendingRecoveryCycleIds(whoopUserId: number, limit = 25): Promise<number[]> {

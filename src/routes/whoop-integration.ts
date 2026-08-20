@@ -5,6 +5,7 @@ import { WhoopClient, type WhoopTokenResponse } from "../services/whoop/client";
 import {
   type CurrentWhoopConnection,
   type SyncProgressProjection,
+  type SyncRunProjection,
   WhoopRepository,
 } from "../services/whoop/repository";
 import {
@@ -36,12 +37,16 @@ interface IntegrationRepository {
   consumeOAuthState(stateHash: string, consumedAt: string): Promise<boolean>;
   getCurrentConnection(): Promise<CurrentWhoopConnection | null>;
   getSyncProgress(whoopUserId: number): Promise<SyncProgressProjection[]>;
+  getRecentSyncRuns(whoopUserId: number): Promise<SyncRunProjection[]>;
   beginReconciliation(
     whoopUserId: number,
     connectionId: string,
     begunAt: string,
   ): Promise<number | null>;
   getPendingRecoveryCycleIds(whoopUserId: number, limit?: number): Promise<number[]>;
+  createSyncRun(input: Parameters<WhoopRepository["createSyncRun"]>[0]): Promise<boolean>;
+  markSyncRunPublicationFailure(...input: Parameters<WhoopRepository["markSyncRunPublicationFailure"]>): Promise<boolean>;
+  recordSyncFailure(...input: Parameters<WhoopRepository["recordSyncFailure"]>): Promise<boolean>;
   claimAndUpsertConnection(input: Parameters<WhoopRepository["claimAndUpsertConnection"]>[0]): Promise<number | null>;
   markInitialBackfillQueued(
     whoopUserId: number,
@@ -186,8 +191,11 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
   app.get("/v1/integrations/whoop", async (c) => {
     const repository = repositoryFor(c.env);
     const connection = await repository.getCurrentConnection();
-    if (!connection) return c.json({ status: "not_connected", progress: [] });
-    const progress = await repository.getSyncProgress(connection.whoopUserId);
+    if (!connection) return c.json({ status: "not_connected", progress: [], runs: [] });
+    const [progress, runs] = await Promise.all([
+      repository.getSyncProgress(connection.whoopUserId),
+      repository.getRecentSyncRuns(connection.whoopUserId),
+    ]);
     const {
       whoopUserId: _whoopUserId,
       connectionId: _connectionId,
@@ -195,7 +203,7 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
       reconcileGeneration: _reconcileGeneration,
       ...status
     } = connection;
-    return c.json({ ...status, progress });
+    return c.json({ ...status, progress, runs });
   });
 
   app.post("/v1/integrations/whoop/connect", async (c) => {

@@ -102,7 +102,7 @@ WHOOP requires manually generated state to be exactly eight characters. Generate
 - `whoop_body_measurements`: user ID, height, weight, max HR, `raw_json`, `synced_at`
 - `whoop_cycles`: integer cycle ID, user ID, time bounds, timezone offset, score state, strain, kilojoules, average/max HR, upstream timestamps, `raw_json`, deletion/sync timestamps
 - `whoop_recoveries`: sleep UUID primary key, cycle ID, user ID, score state, calibration flag, recovery score, RHR, HRV, SpO2, skin temperature, upstream timestamps, `raw_json`, deletion/sync timestamps
-- `whoop_sleeps`: sleep UUID, cycle/user IDs, time bounds, timezone, nap flag, score state, stage durations, sleep need fields, respiratory rate, performance/consistency/efficiency, upstream timestamps, `raw_json`, deletion/sync timestamps
+- `whoop_sleeps`: sleep UUID, cycle/user IDs, time bounds, timezone, nap flag, score state, all approved stage durations including in-bed/no-data, baseline/debt/recent-strain/recent-nap sleep need, cycle/disturbance counts, respiratory rate, performance/consistency/efficiency, upstream timestamps, `raw_json`, deletion/sync timestamps
 - `whoop_workouts`: workout UUID, user ID, time bounds, timezone, sport ID/name, score state, strain, HR, kilojoules, percent recorded, distance/elevation, all six HR-zone durations, upstream timestamps, `raw_json`, deletion/sync timestamps
 
 Provider IDs are stable upsert keys. An update is accepted when its upstream `updated_at` is newer than or equal to the stored value. Equal timestamps remain safe because upserts are deterministic.
@@ -111,7 +111,7 @@ Provider IDs are stable upsert keys. An update is accepted when its upstream `up
 
 - `whoop_webhook_events`: `trace_id` primary key, user ID, resource ID, event type, received/processed timestamps, status, attempts, sanitized error
 - `whoop_sync_checkpoints`: user ID plus resource primary key, mode, window, next token, status, page/record counts, timestamps, sanitized error
-- `whoop_sync_runs`: run ID, user ID, trigger, status, counters, start/success/error timestamps, sanitized error
+- `whoop_sync_runs`: run ID, user/lifecycle/generation, trigger, exact target/completion counts, derived page/record counters, queued/running/retrying/complete/error status, start/success/error timestamps, sanitized error
 
 Deletion webhooks idempotently mark source rows with `deleted_at`; they do not hard-delete immediately. Because WHOOP deletion envelopes carry no source-update timestamp, a tombstone blocks webhook-driven resurrection until scheduled authoritative reconciliation confirms a current upstream record. Read endpoints exclude tombstones by default.
 
@@ -142,6 +142,10 @@ Scheduled synchronization performs:
 - recovery reconciliation for pending/unscorable records that may later become scored
 
 Manual protected `POST /v1/integrations/whoop/sync` queues the same idempotent reconciliation; it does not perform upstream work inside the request.
+
+Reconciliation creates its lifecycle-fenced run before queue publication. Run counters and state are recomputed from durable per-target checkpoints rather than incremented, so redelivery cannot double-count progress. Durable reconciliation and webhook success/failure also updates sanitized connection health only when the exact `connection_id` remains current.
+
+An independent scheduled retention job performs bounded deletes. It removes expired/consumed OAuth states and abandoned seen rows after one day, and superseded terminal checkpoints/runs plus processed update-webhook receipts after 30 days. Nonterminal receipts and every deletion-webhook receipt are retained; the latest useful progress is preserved.
 
 ## Webhook Flow
 

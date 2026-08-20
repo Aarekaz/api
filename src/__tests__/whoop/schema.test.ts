@@ -81,6 +81,47 @@ describe("WHOOP shared schemas", () => {
     expect(whoopWorkoutSchema.safeParse(WORKOUT).success).toBe(true);
   });
 
+  it("retains every approved WHOOP v2 sleep detail in the typed schema", () => {
+    const parsed = whoopSleepSchema.parse({
+      ...SLEEP,
+      score: {
+        stage_summary: {
+          total_in_bed_time_milli: 28_800_000,
+          total_awake_time_milli: 1_800_000,
+          total_no_data_time_milli: 60_000,
+          total_light_sleep_time_milli: 14_400_000,
+          total_slow_wave_sleep_time_milli: 6_000_000,
+          total_rem_sleep_time_milli: 6_540_000,
+          sleep_cycle_count: 5,
+          disturbance_count: 9,
+        },
+        sleep_needed: {
+          baseline_milli: 27_000_000,
+          need_from_sleep_debt_milli: 900_000,
+          need_from_recent_strain_milli: 600_000,
+          need_from_recent_nap_milli: -300_000,
+        },
+      },
+    });
+
+    expect(parsed.score).toEqual(expect.objectContaining({
+      stage_summary: expect.objectContaining({
+        total_in_bed_time_milli: 28_800_000,
+        total_no_data_time_milli: 60_000,
+        sleep_cycle_count: 5,
+        disturbance_count: 9,
+      }),
+      sleep_needed: expect.objectContaining({
+        need_from_recent_strain_milli: 600_000,
+        need_from_recent_nap_milli: -300_000,
+      }),
+    }));
+    expect(whoopSleepSchema.safeParse({
+      ...SLEEP,
+      score: { stage_summary: { sleep_cycle_count: "five" } },
+    }).success).toBe(false);
+  });
+
   it("accepts official-shaped recovery records and preserves provider extensions", () => {
     const parsed = whoopRecoverySchema.parse({ ...RECOVERY, future_metric: 123 });
     expect(parsed.future_metric).toBe(123);

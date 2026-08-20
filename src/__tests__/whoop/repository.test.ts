@@ -742,7 +742,10 @@ describe("WHOOP repository", () => {
     await repository.createSyncRun({
       runId: "run-1",
       whoopUserId: 42,
+      connectionId: "connection-1",
+      reconcileGeneration: 1,
       trigger: "manual",
+      expectedTargetCount: 6,
       startedAt: "2026-08-19T08:00:00.25-04:00",
     });
     await repository.upsertCheckpoint({
@@ -762,7 +765,7 @@ describe("WHOOP repository", () => {
       updatedAt: "2026-08-19T08:01:00.1250-04:00",
     });
 
-    expect(fake.calls[0].bindings[3]).toBe("2026-08-19T12:00:00.250Z");
+    expect(fake.calls[0].bindings[6]).toBe("2026-08-19T12:00:00.250Z");
     expect(fake.calls[1].bindings.slice(7, 9)).toEqual([
       "2026-08-18T12:00:00.000Z",
       "2026-08-19T12:00:00.500Z",

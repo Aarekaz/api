@@ -127,9 +127,12 @@ app.get("/", async (c) => {
     c.env.DB.prepare(`
       SELECT sleep_id, cycle_id, whoop_user_id, start_at, end_at,
              timezone_offset, nap, score_state, stage_awake_milliseconds,
+             stage_in_bed_milliseconds, stage_no_data_milliseconds,
              stage_light_milliseconds, stage_slow_wave_milliseconds,
              stage_rem_milliseconds, sleep_needed_milliseconds,
-             sleep_debt_milliseconds, sleep_efficiency_percentage,
+             sleep_debt_milliseconds, sleep_need_recent_strain_milliseconds,
+             sleep_need_recent_nap_milliseconds, sleep_cycle_count,
+             disturbance_count, sleep_efficiency_percentage,
              sleep_consistency_percentage, sleep_performance_percentage,
              respiratory_rate, upstream_created_at, upstream_updated_at,
              deleted_at, synced_at

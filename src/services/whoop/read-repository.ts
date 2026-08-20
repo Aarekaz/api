@@ -69,7 +69,9 @@ export interface WhoopSleepReadModel {
   nap: boolean | null;
   score_state: WhoopReadScoreState;
   stage_durations_seconds: {
+    in_bed_seconds: number | null;
     awake_seconds: number | null;
+    no_data_seconds: number | null;
     light_seconds: number | null;
     slow_wave_seconds: number | null;
     rem_seconds: number | null;
@@ -77,7 +79,11 @@ export interface WhoopSleepReadModel {
   sleep_need_seconds: {
     baseline_seconds: number | null;
     debt_seconds: number | null;
+    recent_strain_seconds: number | null;
+    recent_nap_seconds: number | null;
   };
+  sleep_cycle_count: number | null;
+  disturbance_count: number | null;
   sleep_efficiency_percentage: number | null;
   sleep_consistency_percentage: number | null;
   sleep_performance_percentage: number | null;
@@ -123,10 +129,23 @@ export interface WhoopReadContext {
   progress: Array<{
     resource: "profile" | "body_measurement" | "cycle" | "recovery" | "sleep" | "workout";
     mode: "backfill" | "reconcile" | "webhook";
-    status: "queued" | "running" | "retrying" | "complete" | "failed" | "error";
+    status: "queued" | "running" | "retrying" | "complete" | "error";
     page_count: number;
     record_count: number;
     updated_at: string;
+  }>;
+  runs: Array<{
+    run_id: string;
+    trigger: string;
+    status: "queued" | "running" | "retrying" | "complete" | "error";
+    page_count: number;
+    record_count: number;
+    expected_target_count: number;
+    completed_target_count: number;
+    started_at: string;
+    succeeded_at: string | null;
+    failed_at: string | null;
+    last_error: string | null;
   }>;
 }
 
@@ -203,11 +222,17 @@ interface SleepRow {
   nap: number | null;
   score_state: string;
   stage_awake_milliseconds: number | null;
+  stage_in_bed_milliseconds: number | null;
+  stage_no_data_milliseconds: number | null;
   stage_light_milliseconds: number | null;
   stage_slow_wave_milliseconds: number | null;
   stage_rem_milliseconds: number | null;
   sleep_needed_milliseconds: number | null;
   sleep_debt_milliseconds: number | null;
+  sleep_need_recent_strain_milliseconds: number | null;
+  sleep_need_recent_nap_milliseconds: number | null;
+  sleep_cycle_count: number | null;
+  disturbance_count: number | null;
   sleep_efficiency_percentage: number | null;
   sleep_consistency_percentage: number | null;
   sleep_performance_percentage: number | null;
@@ -312,7 +337,9 @@ const sleepReadModel = (row: SleepRow): WhoopSleepReadModel => ({
   nap: row.nap === null ? null : row.nap === 1,
   score_state: scoreState(row.score_state),
   stage_durations_seconds: {
+    in_bed_seconds: seconds(scoredValue(row.score_state, row.stage_in_bed_milliseconds)),
     awake_seconds: seconds(scoredValue(row.score_state, row.stage_awake_milliseconds)),
+    no_data_seconds: seconds(scoredValue(row.score_state, row.stage_no_data_milliseconds)),
     light_seconds: seconds(scoredValue(row.score_state, row.stage_light_milliseconds)),
     slow_wave_seconds: seconds(scoredValue(row.score_state, row.stage_slow_wave_milliseconds)),
     rem_seconds: seconds(scoredValue(row.score_state, row.stage_rem_milliseconds)),
@@ -320,7 +347,11 @@ const sleepReadModel = (row: SleepRow): WhoopSleepReadModel => ({
   sleep_need_seconds: {
     baseline_seconds: seconds(scoredValue(row.score_state, row.sleep_needed_milliseconds)),
     debt_seconds: seconds(scoredValue(row.score_state, row.sleep_debt_milliseconds)),
+    recent_strain_seconds: seconds(scoredValue(row.score_state, row.sleep_need_recent_strain_milliseconds)),
+    recent_nap_seconds: seconds(scoredValue(row.score_state, row.sleep_need_recent_nap_milliseconds)),
   },
+  sleep_cycle_count: scoredValue(row.score_state, row.sleep_cycle_count),
+  disturbance_count: scoredValue(row.score_state, row.disturbance_count),
   sleep_efficiency_percentage: scoredValue(row.score_state, row.sleep_efficiency_percentage),
   sleep_consistency_percentage: scoredValue(row.score_state, row.sleep_consistency_percentage),
   sleep_performance_percentage: scoredValue(row.score_state, row.sleep_performance_percentage),
@@ -350,7 +381,7 @@ export class WhoopHealthReadRepository {
       updated_at: string;
     }>();
     if (!connection) return null;
-    const progress = await this.db.prepare(`
+    const [progress, runs] = await Promise.all([this.db.prepare(`
       SELECT resource, mode, status, page_count, record_count, updated_at
       FROM (
         SELECT checkpoint.resource, checkpoint.mode, checkpoint.status,
@@ -370,7 +401,18 @@ export class WhoopHealthReadRepository {
       )
       WHERE row_number = 1
       ORDER BY resource ASC, mode ASC
-    `).bind(connection.whoop_user_id).all<WhoopReadContext["progress"][number]>();
+    `).bind(connection.whoop_user_id).all<WhoopReadContext["progress"][number]>(), this.db.prepare(`
+      SELECT run.run_id, run.trigger, run.status, run.page_count, run.record_count,
+             run.expected_target_count, run.completed_target_count, run.started_at,
+             run.succeeded_at, run.failed_at, run.last_error
+      FROM whoop_sync_runs AS run
+      INNER JOIN whoop_connections AS current_connection
+        ON current_connection.whoop_user_id = run.whoop_user_id
+       AND current_connection.connection_id = run.connection_id
+      WHERE run.whoop_user_id = ?
+      ORDER BY run.started_at DESC, run.run_id DESC
+      LIMIT 10
+    `).bind(connection.whoop_user_id).all<WhoopReadContext["runs"][number]>()]);
     return {
       whoopUserId: connection.whoop_user_id,
       status: connection.status,
@@ -379,6 +421,12 @@ export class WhoopHealthReadRepository {
       consecutive_failure_count: connection.consecutive_failure_count,
       updated_at: connection.updated_at,
       progress: progress.results,
+      runs: runs.results.map((run) => ({
+        ...run,
+        last_error: run.last_error === null
+          ? null
+          : run.last_error.replace(/[\r\n\t]+/g, " ").slice(0, 240),
+      })),
     };
   }
 
@@ -470,7 +518,10 @@ export class WhoopHealthReadRepository {
       table: "whoop_sleeps",
       columns: `sleep_id, cycle_id, start_at, end_at, timezone_offset, nap, score_state,
                 stage_awake_milliseconds, stage_light_milliseconds, stage_slow_wave_milliseconds,
-                stage_rem_milliseconds, sleep_needed_milliseconds, sleep_debt_milliseconds,
+                stage_rem_milliseconds, stage_in_bed_milliseconds, stage_no_data_milliseconds,
+                sleep_needed_milliseconds, sleep_debt_milliseconds,
+                sleep_need_recent_strain_milliseconds, sleep_need_recent_nap_milliseconds,
+                sleep_cycle_count, disturbance_count,
                 sleep_efficiency_percentage, sleep_consistency_percentage,
                 sleep_performance_percentage, respiratory_rate, upstream_created_at,
                 upstream_updated_at, synced_at`,

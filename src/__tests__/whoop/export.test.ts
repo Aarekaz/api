@@ -98,12 +98,15 @@ describe("WHOOP export", () => {
 
       INSERT INTO whoop_sleeps (
         sleep_id, cycle_id, whoop_user_id, start_at, end_at, timezone_offset,
-        nap, score_state, sleep_efficiency_percentage, upstream_created_at,
+        nap, score_state, stage_in_bed_milliseconds, stage_no_data_milliseconds,
+        sleep_need_recent_strain_milliseconds, sleep_need_recent_nap_milliseconds,
+        sleep_cycle_count, disturbance_count, sleep_efficiency_percentage, upstream_created_at,
         upstream_updated_at, deleted_at, synced_at, raw_json
       ) VALUES (
         '00000000-0000-4000-8000-000000000001', 9, 42,
         '2026-08-20T04:00:00.000Z', '2026-08-20T11:00:00.000Z', '-04:00',
-        0, 'SCORED', 91, '2026-08-20T04:00:00.000Z',
+        0, 'SCORED', 28800000, 60000, 600000, -300000, 5, 9, 91,
+        '2026-08-20T04:00:00.000Z',
         '2026-08-20T11:50:00.000Z', NULL, '2026-08-20T11:51:00.000Z',
         '{"last_error":"raw-sleep-secret"}'
       );
@@ -161,7 +164,16 @@ describe("WHOOP export", () => {
       body_measurements: [{ whoop_user_id: 42, weight_kilogram: 75 }],
       cycles: [{ cycle_id: 9, kilojoules: 836.8 }],
       recoveries: [{ cycle_id: 9, recovery_score: 82 }],
-      sleeps: [{ cycle_id: 9, sleep_efficiency_percentage: 91 }],
+      sleeps: [{
+        cycle_id: 9,
+        stage_in_bed_milliseconds: 28800000,
+        stage_no_data_milliseconds: 60000,
+        sleep_need_recent_strain_milliseconds: 600000,
+        sleep_need_recent_nap_milliseconds: -300000,
+        sleep_cycle_count: 5,
+        disturbance_count: 9,
+        sleep_efficiency_percentage: 91,
+      }],
       workouts: [{
         workout_id: "00000000-0000-4000-8000-000000000002",
         deleted_at: "2026-08-20T12:00:00.000Z",

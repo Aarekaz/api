@@ -36,8 +36,12 @@ function createDependencies(connection: Connection | null = null) {
     consumeOAuthState: vi.fn().mockResolvedValue(true),
     getCurrentConnection: vi.fn().mockResolvedValue(currentConnection),
     getSyncProgress: vi.fn().mockResolvedValue([]),
+    getRecentSyncRuns: vi.fn().mockResolvedValue([]),
     beginReconciliation: vi.fn().mockResolvedValue(4),
     getPendingRecoveryCycleIds: vi.fn().mockResolvedValue([]),
+    createSyncRun: vi.fn().mockResolvedValue(true),
+    markSyncRunPublicationFailure: vi.fn().mockResolvedValue(true),
+    recordSyncFailure: vi.fn().mockResolvedValue(true),
     claimAndUpsertConnection: vi.fn().mockResolvedValue(1),
     markInitialBackfillQueued: vi.fn().mockResolvedValue(true),
     disconnect: vi.fn().mockResolvedValue(true),
@@ -325,7 +329,20 @@ describe("WHOOP integration management routes", () => {
       credentialVersion: 1,
       granted_scopes: ["offline", "read:profile"],
     });
-    repository.getSyncProgress.mockResolvedValue([{ resource: "sleep", mode: "backfill", status: "running" }]);
+    repository.getSyncProgress.mockResolvedValue([{ resource: "sleep", mode: "backfill", status: "retrying" }]);
+    repository.getRecentSyncRuns.mockResolvedValue([{
+      run_id: "00000000-0000-4000-8000-000000000099",
+      trigger: "scheduled",
+      status: "error",
+      page_count: 2,
+      record_count: 25,
+      expected_target_count: 6,
+      completed_target_count: 5,
+      started_at: "2026-08-19T12:00:00.000Z",
+      succeeded_at: null,
+      failed_at: "2026-08-19T12:01:00.000Z",
+      last_error: "WHOOP synchronization failed",
+    }]);
     const app = createApp(dependencies);
 
     const response = await app.request("/v1/integrations/whoop", bearerGet(), ENV);
@@ -335,7 +352,8 @@ describe("WHOOP integration management routes", () => {
     expect(body).toEqual({
       status: "active",
       granted_scopes: ["offline", "read:profile"],
-      progress: [{ resource: "sleep", mode: "backfill", status: "running" }],
+      progress: [{ resource: "sleep", mode: "backfill", status: "retrying" }],
+      runs: [expect.objectContaining({ status: "error", completed_target_count: 5 })],
     });
     expect(JSON.stringify(body)).not.toMatch(/token|ciphertext|nonce|raw_json/i);
   });
@@ -350,5 +368,9 @@ describe("WHOOP integration management routes", () => {
     expect(JSON.stringify(status)).toContain("backfilling");
     expect(JSON.stringify(status)).toContain("body_measurement");
     expect(JSON.stringify(status)).toContain("page_count");
+    for (const state of ["queued", "running", "retrying", "complete", "error"]) {
+      expect(JSON.stringify(status)).toContain(state);
+    }
+    expect(JSON.stringify(status)).not.toContain('"failed"');
   });
 });

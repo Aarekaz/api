@@ -102,8 +102,9 @@ export function createWhoopHealthRoute(dependencies: WhoopHealthDependencies = {
           consecutive_failure_count: context.consecutive_failure_count,
           updated_at: context.updated_at,
           progress: context.progress,
+          runs: context.runs,
         }
-        : { status: "not_connected" as const, progress: [] },
+        : { status: "not_connected" as const, progress: [], runs: [] },
     });
   });
 

@@ -795,4 +795,128 @@ describe("WHOOP repository on SQLite", () => {
     expect(failureBatch.at(-1)).toBe(26);
     expect(failureBatch).not.toContain(1);
   });
+
+  it("lifecycle-fences connection health and derives run totals without redelivery double counts", async () => {
+    database.prepare("UPDATE whoop_connections SET reconcile_generation = 1").run();
+    await repository.createSyncRun({
+      runId: "run-health",
+      whoopUserId: 42,
+      connectionId: CONNECTION_ID,
+      reconcileGeneration: 1,
+      trigger: "manual",
+      expectedTargetCount: 2,
+      startedAt: NOW,
+    });
+    await repository.upsertCheckpoint(checkpoint({
+      mode: "reconcile",
+      reconcileGeneration: 1,
+      syncRunId: "run-health",
+      targetId: "",
+      resource: "sleep",
+      status: "complete",
+      pageCount: 2,
+      recordCount: 30,
+    }));
+    await repository.upsertCheckpoint(checkpoint({
+      mode: "reconcile",
+      reconcileGeneration: 1,
+      syncRunId: "run-health",
+      targetId: "",
+      resource: "workout",
+      status: "retrying",
+      pageCount: 1,
+      recordCount: 4,
+      lastError: "WHOOP request failed with status 503",
+    }));
+
+    await expect(repository.refreshSyncRun("run-health", 42, CONNECTION_ID, 1, NOW))
+      .resolves.toBe(true);
+    await expect(repository.refreshSyncRun("run-health", 42, CONNECTION_ID, 1, NOW))
+      .resolves.toBe(true);
+    expect(database.prepare(`
+      SELECT status, page_count, record_count, expected_target_count, completed_target_count
+      FROM whoop_sync_runs WHERE run_id = 'run-health'
+    `).get()).toEqual({
+      status: "retrying",
+      page_count: 3,
+      record_count: 34,
+      expected_target_count: 2,
+      completed_target_count: 1,
+    });
+    await repository.upsertCheckpoint(checkpoint({
+      mode: "reconcile",
+      reconcileGeneration: 1,
+      syncRunId: "run-health",
+      targetId: "",
+      resource: "workout",
+      status: "complete",
+      pageCount: 1,
+      recordCount: 4,
+    }));
+    await repository.refreshSyncRun(
+      "run-health", 42, CONNECTION_ID, 1, "2026-08-19T12:01:00.000Z",
+    );
+    expect(database.prepare(`
+      SELECT status, page_count, record_count, completed_target_count, succeeded_at
+      FROM whoop_sync_runs WHERE run_id = 'run-health'
+    `).get()).toEqual({
+      status: "complete",
+      page_count: 3,
+      record_count: 34,
+      completed_target_count: 2,
+      succeeded_at: "2026-08-19T12:01:00.000Z",
+    });
+
+    await expect(repository.recordSyncFailure(
+      42, CONNECTION_ID, NOW, "WHOOP request failed with status 503",
+    )).resolves.toBe(true);
+    await expect(repository.recordSyncSuccess(42, CONNECTION_ID, "2026-08-19T12:01:00.000Z"))
+      .resolves.toBe(true);
+    expect(database.prepare(`
+      SELECT last_success_at, last_error_at, last_error, consecutive_failure_count
+      FROM whoop_connections WHERE whoop_user_id = 42
+    `).get()).toEqual({
+      last_success_at: "2026-08-19T12:01:00.000Z",
+      last_error_at: null,
+      last_error: null,
+      consecutive_failure_count: 0,
+    });
+    database.prepare("UPDATE whoop_connections SET connection_id = 'replacement'").run();
+    await expect(repository.recordSyncFailure(42, CONNECTION_ID, NOW, "stale"))
+      .resolves.toBe(false);
+  });
+
+  it("prunes only bounded terminal operational data and preserves deletion receipts and latest progress", async () => {
+    database.exec(`
+      INSERT INTO whoop_oauth_states VALUES ('old-state', '2026-06-01T00:00:00.000Z', '2026-06-01T00:10:00.000Z', NULL);
+      INSERT INTO whoop_oauth_states VALUES ('fresh-state', '2026-08-19T11:50:00.000Z', '2026-08-19T12:10:00.000Z', NULL);
+      INSERT INTO whoop_webhook_events VALUES ('old-update', 42, '${CONNECTION_ID}', 'x', 'sleep.updated', '2026-06-01T00:00:00.000Z', '2026-06-01T00:01:00.000Z', 'processed', 1, NULL);
+      INSERT INTO whoop_webhook_events VALUES ('old-delete', 42, '${CONNECTION_ID}', 'x', 'sleep.deleted', '2026-06-01T00:00:00.000Z', '2026-06-01T00:01:00.000Z', 'processed', 1, NULL);
+      INSERT INTO whoop_webhook_events VALUES ('old-queued', 42, '${CONNECTION_ID}', 'x', 'sleep.updated', '2026-06-01T00:00:00.000Z', NULL, 'queued', 1, NULL);
+    `);
+    await repository.upsertCheckpoint(checkpoint({
+      syncRunId: "old",
+      targetId: "",
+      status: "complete",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    }));
+    await repository.upsertCheckpoint(checkpoint({
+      syncRunId: "old-targeted",
+      targetId: "recovery-cycle:9",
+      status: "error",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    }));
+    await repository.upsertCheckpoint(checkpoint({ syncRunId: "latest", targetId: "", status: "complete", updatedAt: NOW, createdAt: NOW }));
+
+    await repository.pruneOperationalData(NOW);
+
+    expect(database.prepare("SELECT state_hash FROM whoop_oauth_states ORDER BY state_hash").all())
+      .toEqual([{ state_hash: "fresh-state" }]);
+    expect(database.prepare("SELECT trace_id FROM whoop_webhook_events ORDER BY trace_id").all())
+      .toEqual([{ trace_id: "old-delete" }, { trace_id: "old-queued" }]);
+    expect(database.prepare("SELECT sync_run_id FROM whoop_sync_checkpoints ORDER BY sync_run_id").all())
+      .toEqual([{ sync_run_id: "latest" }]);
+  });
 });

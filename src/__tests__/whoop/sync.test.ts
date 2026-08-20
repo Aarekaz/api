@@ -44,6 +44,11 @@ const createHarness = () => {
     isSyncConnectionCurrent: vi.fn().mockResolvedValue(true),
     isReconciliationCurrent: vi.fn().mockResolvedValue(true),
     activateCompletedBackfill: vi.fn().mockResolvedValue(false),
+    createSyncRun: vi.fn().mockResolvedValue(true),
+    markSyncRunPublicationFailure: vi.fn().mockResolvedValue(true),
+    refreshSyncRun: vi.fn().mockResolvedValue(true),
+    recordSyncSuccess: vi.fn().mockResolvedValue(true),
+    recordSyncFailure: vi.fn().mockResolvedValue(true),
   };
   const client = {
     getProfile: vi.fn(),
@@ -102,6 +107,80 @@ beforeEach(() => {
 });
 
 describe("WHOOP queue synchronization", () => {
+  it("creates a queued lifecycle-fenced run before publishing reconciliation work", async () => {
+    const { dependencies, env, repository } = createHarness();
+
+    await enqueueReconciliation(env, 42, "manual", {
+      repository: repository as never,
+      now: () => new Date(NOW),
+      expectedConnectionId: CONNECTION_ID,
+      requireActiveConnection: true,
+    });
+
+    expect(repository.createSyncRun).toHaveBeenCalledWith(expect.objectContaining({
+      whoopUserId: 42,
+      connectionId: CONNECTION_ID,
+      reconcileGeneration: 7,
+      trigger: "manual",
+      expectedTargetCount: 6,
+      startedAt: NOW,
+    }));
+    expect(repository.createSyncRun.mock.invocationCallOrder[0])
+      .toBeLessThan((env.WHOOP_SYNC_QUEUE.sendBatch as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]);
+  });
+
+  it("records reconciliation publication failure on the run and connection", async () => {
+    const { env, repository } = createHarness();
+    (env.WHOOP_SYNC_QUEUE.sendBatch as unknown as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new Error("ambiguous queue outcome"));
+
+    await expect(enqueueReconciliation(env, 42, "manual", {
+      repository: repository as never,
+      now: () => new Date(NOW),
+    })).rejects.toThrow("WHOOP reconciliation queue publication failed");
+
+    expect(repository.markSyncRunPublicationFailure).toHaveBeenCalledWith(
+      expect.any(String), 42, CONNECTION_ID, 7, NOW,
+    );
+    expect(repository.recordSyncFailure).toHaveBeenCalledWith(
+      42, CONNECTION_ID, NOW, "WHOOP queue publication failed",
+    );
+  });
+
+  it("advances connection and run health only after durable reconciliation success", async () => {
+    const { client, dependencies, env, repository } = createHarness();
+    client.getProfile.mockResolvedValue(PROFILE);
+    const batch = batchOf({
+      kind: "reconcile",
+      whoopUserId: 42,
+      resource: "profile",
+      trigger: "manual",
+    });
+
+    await handleWhoopQueue(batch, env, dependencies);
+
+    expect(repository.refreshSyncRun).toHaveBeenCalledWith(
+      RECONCILE_RUN_ID, 42, CONNECTION_ID, 7, NOW,
+    );
+    expect(repository.recordSyncSuccess).toHaveBeenCalledWith(42, CONNECTION_ID, NOW);
+  });
+
+  it("records sanitized lifecycle-fenced retry health without acknowledging the message", async () => {
+    const { client, dependencies, env, repository } = createHarness();
+    client.getCollection.mockRejectedValue(new WhoopRequestError("secret payload", 503, true, 30));
+    const batch = batchOf({ kind: "reconcile", whoopUserId: 42, resource: "sleep" });
+
+    await handleWhoopQueue(batch, env, dependencies);
+
+    expect(repository.recordSyncFailure).toHaveBeenCalledWith(
+      42, CONNECTION_ID, NOW, "WHOOP request failed with status 503",
+    );
+    expect(repository.refreshSyncRun).toHaveBeenCalledWith(
+      RECONCILE_RUN_ID, 42, CONNECTION_ID, 7, NOW,
+    );
+    expect(batch.messages[0].retry).toHaveBeenCalled();
+    expect(batch.messages[0].ack).not.toHaveBeenCalled();
+  });
   it("durably persists one backfill page and follows only its returned cursor", async () => {
     const { client, dependencies, env, repository } = createHarness();
     client.getCollection.mockResolvedValue({ records: [SLEEP], nextToken: "opaque-next" });
@@ -269,7 +348,10 @@ describe("WHOOP queue synchronization", () => {
     const { dependencies, env, repository } = createHarness();
     repository.getPendingRecoveryCycleIds.mockResolvedValue([9, 10]);
 
-    await enqueueReconciliation(env, 42, "scheduled", dependencies);
+    await enqueueReconciliation(env, 42, "scheduled", {
+      repository: repository as never,
+      now: () => new Date(NOW),
+    });
 
     expect(repository.getPendingRecoveryCycleIds).toHaveBeenCalledWith(42, 25);
     expect(repository.beginReconciliation).toHaveBeenCalledWith(42, CONNECTION_ID, NOW);
@@ -493,6 +575,7 @@ describe("WHOOP queue synchronization", () => {
     );
     expect(repository.upsertSourceRecord.mock.invocationCallOrder[0])
       .toBeLessThan(repository.markWebhookProcessed.mock.invocationCallOrder[0]);
+    expect(repository.recordSyncSuccess).toHaveBeenCalledWith(42, CONNECTION_ID, NOW);
     expect(message.ack).toHaveBeenCalledTimes(1);
     expect(message.retry).not.toHaveBeenCalled();
   });
@@ -594,6 +677,9 @@ describe("WHOOP queue synchronization", () => {
       "WHOOP request failed with status 503",
       NOW,
     );
+    expect(repository.recordSyncFailure).toHaveBeenCalledWith(
+      42, CONNECTION_ID, NOW, "WHOOP request failed with status 503",
+    );
     expect(message.retry).toHaveBeenCalledWith({ delaySeconds: 15 });
     expect(message.ack).not.toHaveBeenCalled();
   });
@@ -643,11 +729,16 @@ describe("WHOOP queue synchronization", () => {
 
     await handleWhoopQueue(batch, env, dependencies);
 
-    expect(repository.upsertCheckpoint).toHaveBeenCalledTimes(1);
-    expect(repository.upsertCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+    expect(repository.upsertCheckpoint).toHaveBeenCalledTimes(2);
+    expect(repository.upsertCheckpoint).toHaveBeenNthCalledWith(1, expect.objectContaining({
       nextToken: "returned-cursor",
       pageCount: 3,
       recordCount: 26,
+    }));
+    expect(repository.upsertCheckpoint).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      nextToken: "returned-cursor",
+      status: "retrying",
+      lastError: "WHOOP queue publication failed",
     }));
     expect(batch.messages[0].retry).toHaveBeenCalledTimes(1);
     expect(batch.messages[0].ack).not.toHaveBeenCalled();

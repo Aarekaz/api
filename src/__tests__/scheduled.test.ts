@@ -34,6 +34,12 @@ function createScheduledDependencies() {
     withWhoopAccessToken: vi.fn(async (_userId, request) => request("fixture-access-token", 3)),
     beginReconciliation: vi.fn().mockResolvedValue(8),
     getPendingRecoveryCycleIds: vi.fn().mockResolvedValue([]),
+    pruneOperationalData: vi.fn().mockResolvedValue({
+      oauthStates: 0, checkpoints: 0, runs: 0, seen: 0, webhookReceipts: 0,
+    }),
+    createSyncRun: vi.fn().mockResolvedValue(true),
+    markSyncRunPublicationFailure: vi.fn().mockResolvedValue(true),
+    recordSyncFailure: vi.fn().mockResolvedValue(true),
   };
   const enqueueReconciliation = vi.fn().mockResolvedValue(undefined);
   const refreshJobs = {
@@ -187,6 +193,39 @@ describe("scheduled refresh health", () => {
     );
     expect(queue.send).not.toHaveBeenCalled();
     expect(queue.sendBatch).not.toHaveBeenCalled();
+  });
+
+  it("runs bounded WHOOP retention as an isolated scheduled job", async () => {
+    const { db } = createDb();
+    const env = { ...ENV, DB: db };
+    const { dependencies, repository } = createScheduledDependencies();
+
+    await runScheduled(env, dependencies);
+
+    expect(repository.pruneOperationalData).toHaveBeenCalledWith(NOW);
+  });
+
+  it("does not let retention failure suppress reconciliation or existing jobs", async () => {
+    const { db } = createDb();
+    const env = { ...ENV, DB: db };
+    const { dependencies, enqueueReconciliation, refreshJobs, repository } = createScheduledDependencies();
+    repository.pruneOperationalData.mockRejectedValue(new Error("retention unavailable"));
+    repository.getCurrentConnection.mockResolvedValue({
+      whoopUserId: 42,
+      connectionId: CONNECTION_ID,
+      credentialVersion: 3,
+      reconcileGeneration: 7,
+      status: "active",
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await runScheduled(env, dependencies);
+
+    expect(enqueueReconciliation).toHaveBeenCalledTimes(1);
+    expect(refreshJobs.lanyard).toHaveBeenCalledTimes(1);
+    expect(refreshJobs.wakatime).toHaveBeenCalledTimes(1);
+    expect(refreshJobs.github).toHaveBeenCalledTimes(1);
+    error.mockRestore();
   });
 
   it("checks token expiry through the serialized refresh path without making an access-token request", async () => {

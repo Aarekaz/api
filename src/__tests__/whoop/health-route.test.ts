@@ -153,13 +153,16 @@ const insertCompleteSourceSet = (database: SqliteDatabase) => {
     INSERT INTO whoop_sleeps (
       sleep_id, cycle_id, whoop_user_id, start_at, end_at, timezone_offset, nap,
       score_state, stage_awake_milliseconds, stage_light_milliseconds,
-      stage_slow_wave_milliseconds, stage_rem_milliseconds, sleep_needed_milliseconds,
-      sleep_debt_milliseconds, sleep_efficiency_percentage,
+      stage_slow_wave_milliseconds, stage_rem_milliseconds, stage_in_bed_milliseconds,
+      stage_no_data_milliseconds, sleep_needed_milliseconds, sleep_debt_milliseconds,
+      sleep_need_recent_strain_milliseconds, sleep_need_recent_nap_milliseconds,
+      sleep_cycle_count, disturbance_count, sleep_efficiency_percentage,
       sleep_consistency_percentage, sleep_performance_percentage, respiratory_rate,
       upstream_created_at, upstream_updated_at, deleted_at, synced_at, raw_json
     ) VALUES ('f7c85ce7-7e44-4bb4-8cb4-ee5b94b54e1c', 9, 42,
               '2026-08-20T03:00:00.000Z', '2026-08-20T10:00:00.000Z', '-04:00', 0,
-              'SCORED', 1499, 7200000, 3600000, 5400000, 28800000, 1800000,
+              'SCORED', 1499, 7200000, 3600000, 5400000, 28800000, 60000,
+              28800000, 1800000, 600000, -300000, 5, 9,
               91.2, 87.5, 84, 14.5, '2026-08-20T03:00:00.000Z',
               '2026-08-20T11:35:00.000Z', NULL, '2026-08-20T11:36:00.000Z', '{}')
   `).run();
@@ -187,7 +190,7 @@ describe("WHOOP health read routes", () => {
       recent_workouts: [],
       trends_7_days: [],
       trends_30_days: [],
-      synchronization: { status: "not_connected", progress: [] },
+      synchronization: { status: "not_connected", progress: [], runs: [] },
     });
   });
 
@@ -568,7 +571,9 @@ describe("WHOOP health read routes", () => {
         nap: false,
         score_state: "scored",
         stage_durations_seconds: {
+          in_bed_seconds: 28800,
           awake_seconds: 1,
+          no_data_seconds: 60,
           light_seconds: 7200,
           slow_wave_seconds: 3600,
           rem_seconds: 5400,
@@ -576,7 +581,11 @@ describe("WHOOP health read routes", () => {
         sleep_need_seconds: {
           baseline_seconds: 28800,
           debt_seconds: 1800,
+          recent_strain_seconds: 600,
+          recent_nap_seconds: -300,
         },
+        sleep_cycle_count: 5,
+        disturbance_count: 9,
         sleep_efficiency_percentage: 91.2,
         sleep_consistency_percentage: 87.5,
         sleep_performance_percentage: 84,
@@ -704,6 +713,7 @@ describe("WHOOP health read routes", () => {
             record_count: 7,
             updated_at: "2026-08-20T11:57:00.000Z",
           }],
+          runs: [],
         },
       });
       expect(JSON.stringify(body)).not.toMatch(/raw_json|access_token|refresh_token|ciphertext|nonce|lease|generation|connection_id/i);

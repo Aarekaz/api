@@ -71,6 +71,24 @@ export const whoopSleepSchema = z.object({
   timezone_offset: z.string(),
   nap: z.boolean(),
   score_state: scoreStateSchema,
+  score: z.object({
+    stage_summary: z.object({
+      total_in_bed_time_milli: z.number().int().optional(),
+      total_awake_time_milli: z.number().int().optional(),
+      total_no_data_time_milli: z.number().int().optional(),
+      total_light_sleep_time_milli: z.number().int().optional(),
+      total_slow_wave_sleep_time_milli: z.number().int().optional(),
+      total_rem_sleep_time_milli: z.number().int().optional(),
+      sleep_cycle_count: z.number().int().nonnegative().optional(),
+      disturbance_count: z.number().int().nonnegative().optional(),
+    }).passthrough().optional(),
+    sleep_needed: z.object({
+      baseline_milli: z.number().int().optional(),
+      need_from_sleep_debt_milli: z.number().int().optional(),
+      need_from_recent_strain_milli: z.number().int().optional(),
+      need_from_recent_nap_milli: z.number().int().optional(),
+    }).passthrough().optional(),
+  }).passthrough().nullish(),
 }).passthrough();
 
 export const whoopWorkoutSchema = z.object({

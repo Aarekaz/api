@@ -138,12 +138,20 @@ const requiredColumns: Record<string, readonly string[]> = {
   whoop_body_measurements: ["whoop_user_id", "deleted_at", "synced_at", "raw_json"],
   whoop_cycles: ["cycle_id", "whoop_user_id", "kilojoules", "deleted_at", "synced_at", "raw_json"],
   whoop_recoveries: ["sleep_id", "cycle_id", "whoop_user_id", "user_calibrating", "deleted_at", "synced_at", "raw_json"],
-  whoop_sleeps: ["sleep_id", "cycle_id", "whoop_user_id", "deleted_at", "synced_at", "raw_json"],
+  whoop_sleeps: [
+    "sleep_id", "cycle_id", "whoop_user_id", "stage_in_bed_milliseconds",
+    "stage_no_data_milliseconds", "sleep_needed_milliseconds", "sleep_debt_milliseconds",
+    "sleep_need_recent_strain_milliseconds", "sleep_need_recent_nap_milliseconds",
+    "sleep_cycle_count", "disturbance_count", "deleted_at", "synced_at", "raw_json",
+  ],
   whoop_workouts: ["workout_id", "whoop_user_id", "kilojoules", "deleted_at", "synced_at", "raw_json"],
   whoop_webhook_events: ["trace_id", "connection_id", "event_type", "status", "attempts"],
   whoop_reconcile_seen: ["connection_id", "reconcile_generation", "reconcile_run_id", "resource", "provider_id"],
   whoop_sync_checkpoints: ["connection_id", "mode", "reconcile_generation", "sync_run_id", "target_id", "window_end"],
-  whoop_sync_runs: ["run_id", "whoop_user_id", "trigger", "status"],
+  whoop_sync_runs: [
+    "run_id", "whoop_user_id", "connection_id", "reconcile_generation", "trigger",
+    "status", "expected_target_count", "completed_target_count",
+  ],
 };
 
 type WranglerRow = Record<string, unknown>;

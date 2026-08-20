@@ -8,7 +8,7 @@ The protected WHOOP management and health-read routes listed below under `/v1` r
 
 ### Connection management
 
-- `GET /v1/integrations/whoop` returns connection and synchronization status.
+- `GET /v1/integrations/whoop` returns connection health, current checkpoint progress, and recent reconciliation runs. Operational states are exactly `queued`, `running`, `retrying`, `complete`, and `error`.
 - `POST /v1/integrations/whoop/connect` creates a one-use OAuth state and returns the WHOOP authorization URL.
 - `POST /v1/integrations/whoop/sync` requests asynchronous reconciliation.
 - `DELETE /v1/integrations/whoop` revokes and disconnects the active WHOOP grant.
@@ -41,6 +41,7 @@ The database retains validated WHOOP source records and their upstream/synchroni
 - heart rate: beats per minute
 - HRV: RMSSD milliseconds
 - sleep and heart-rate-zone durations: source milliseconds in storage, seconds in typed health responses
+- sleep detail includes in-bed/no-data durations, baseline/debt/recent-strain/recent-nap need components, and cycle/disturbance counts
 - height, distance, and elevation gain: meters
 - weight: kilograms
 - skin temperature: degrees Celsius
@@ -58,6 +59,10 @@ WHOOP Developer API v2 does not expose continuous heart-rate samples, raw sensor
 The Worker owns the complete OAuth lifecycle: exact scope request, fixed redirect URI, one-use hashed state, authorization-code exchange, AES-256-GCM token storage, rotating refresh-token handling, and revocation. Tokens and authorization codes must never be logged, returned, exported, committed, or placed in fixtures.
 
 The queue performs initial pagination, webhook fetches, and reconciliation at concurrency one. Webhook bodies are notifications, not trusted source records; the consumer fetches authoritative data from WHOOP. Initial backfill is complete only after every provider page has been exhausted.
+
+Every reconciliation has a lifecycle-fenced run created before queue publication. Counters are derived from durable checkpoints so redelivery cannot double-count them. Durable reconciliation and webhook results update the exact current connection's sanitized success/failure health; work from a replaced connection cannot update it.
+
+The independent scheduled retention job deletes at most 100 eligible rows per operational table per invocation. It uses one day for expired/consumed OAuth states and abandoned reconciliation seen rows, and 30 days for superseded terminal checkpoints/runs and processed update-webhook receipts. It preserves nonterminal webhook receipts, every deletion-webhook receipt, and the latest useful checkpoint/run projection.
 
 ## Apple legacy history
 
