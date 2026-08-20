@@ -140,6 +140,178 @@ export const whoopIntegrationStatusResponseSchema = z.object({
   })),
 });
 
+const whoopReadScoreStateSchema = z.enum(["scored", "pending", "unscorable"]);
+const nullableNumberSchema = z.number().nullable();
+const nullableDateTimeSchema = dateTimeSchema.nullable();
+
+export const whoopHealthCollectionQuerySchema = z.object({
+  start: z.string().datetime({ offset: true }).optional().openapi({
+    param: { name: "start", in: "query" },
+    description: "Inclusive provider timestamp lower bound",
+    example: "2026-08-01T00:00:00.000Z",
+  }),
+  end: z.string().datetime({ offset: true }).optional().openapi({
+    param: { name: "end", in: "query" },
+    description: "Inclusive provider timestamp upper bound",
+    example: "2026-08-20T23:59:59.999Z",
+  }),
+  limit: z.number().int().min(1).max(100).optional().openapi({
+    param: { name: "limit", in: "query" },
+    description: "Page size from 1 through 100",
+    example: 25,
+  }),
+  cursor: z.string().min(1).max(1024).regex(/^[A-Za-z0-9_-]+$/).optional().openapi({
+    param: { name: "cursor", in: "query" },
+    description: "Opaque local continuation cursor bound to this resource and date window",
+  }),
+}).strict();
+
+export const whoopWorkoutPathSchema = z.object({
+  workoutId: z.string().uuid().openapi({
+    param: { name: "workoutId", in: "path" },
+  }),
+});
+
+export const whoopCycleReadSchema = z.object({
+  cycle_id: z.number().int().positive(),
+  start_at: dateTimeSchema,
+  end_at: nullableDateTimeSchema,
+  timezone_offset: z.string().nullable(),
+  score_state: whoopReadScoreStateSchema,
+  strain: nullableNumberSchema,
+  kilojoules: nullableNumberSchema,
+  energy_kcal_estimate: nullableNumberSchema,
+  average_heart_rate: nullableNumberSchema,
+  max_heart_rate: nullableNumberSchema,
+  created_at: dateTimeSchema,
+  updated_at: dateTimeSchema,
+  synced_at: dateTimeSchema,
+}).strict();
+
+export const whoopRecoveryReadSchema = z.object({
+  sleep_id: z.string().uuid(),
+  cycle_id: z.number().int().positive(),
+  score_state: whoopReadScoreStateSchema,
+  user_calibrating: z.boolean().nullable(),
+  score: nullableNumberSchema,
+  resting_heart_rate: nullableNumberSchema,
+  hrv_rmssd_milliseconds: nullableNumberSchema,
+  spo2_percentage: nullableNumberSchema,
+  skin_temperature_celsius: nullableNumberSchema,
+  created_at: dateTimeSchema,
+  updated_at: dateTimeSchema,
+  synced_at: dateTimeSchema,
+}).strict();
+
+export const whoopSleepReadSchema = z.object({
+  sleep_id: z.string().uuid(),
+  cycle_id: z.number().int().positive(),
+  start_at: nullableDateTimeSchema,
+  end_at: nullableDateTimeSchema,
+  timezone_offset: z.string().nullable(),
+  nap: z.boolean().nullable(),
+  score_state: whoopReadScoreStateSchema,
+  stage_durations_seconds: z.object({
+    awake_seconds: nullableNumberSchema,
+    light_seconds: nullableNumberSchema,
+    slow_wave_seconds: nullableNumberSchema,
+    rem_seconds: nullableNumberSchema,
+  }).strict(),
+  sleep_need_seconds: z.object({
+    baseline_seconds: nullableNumberSchema,
+    debt_seconds: nullableNumberSchema,
+  }).strict(),
+  sleep_efficiency_percentage: nullableNumberSchema,
+  sleep_consistency_percentage: nullableNumberSchema,
+  sleep_performance_percentage: nullableNumberSchema,
+  respiratory_rate: nullableNumberSchema,
+  created_at: dateTimeSchema,
+  updated_at: dateTimeSchema,
+  synced_at: dateTimeSchema,
+}).strict();
+
+const whoopZoneDurationsSchema = z.object({
+  zone_zero_seconds: nullableNumberSchema,
+  zone_one_seconds: nullableNumberSchema,
+  zone_two_seconds: nullableNumberSchema,
+  zone_three_seconds: nullableNumberSchema,
+  zone_four_seconds: nullableNumberSchema,
+  zone_five_seconds: nullableNumberSchema,
+}).strict();
+
+export const whoopWorkoutReadSchema = z.object({
+  workout_id: z.string().uuid(),
+  start_at: nullableDateTimeSchema,
+  end_at: nullableDateTimeSchema,
+  timezone_offset: z.string().nullable(),
+  sport_id: z.number().int().nullable(),
+  sport_name: z.string().nullable(),
+  score_state: whoopReadScoreStateSchema,
+  strain: nullableNumberSchema,
+  average_heart_rate: nullableNumberSchema,
+  max_heart_rate: nullableNumberSchema,
+  kilojoules: nullableNumberSchema,
+  energy_kcal_estimate: nullableNumberSchema,
+  percent_recorded: nullableNumberSchema,
+  distance_meter: nullableNumberSchema,
+  elevation_gain_meter: nullableNumberSchema,
+  zone_durations_seconds: whoopZoneDurationsSchema,
+  created_at: dateTimeSchema,
+  updated_at: dateTimeSchema,
+  synced_at: dateTimeSchema,
+}).strict();
+
+export const whoopProfileReadSchema = z.object({
+  whoop_user_id: z.number().int().positive(),
+  first_name: z.string().nullable(),
+  last_name: z.string().nullable(),
+  email: z.string().nullable(),
+  created_at: nullableDateTimeSchema,
+  updated_at: nullableDateTimeSchema,
+  synced_at: dateTimeSchema,
+}).strict();
+
+export const whoopHealthPageSchema = <T extends z.ZodTypeAny>(record: T) => z.object({
+  records: z.array(record),
+  next_cursor: z.string().nullable(),
+}).strict();
+
+const whoopTrendPointSchema = z.object({
+  date: dateSchema,
+  recovery_score: nullableNumberSchema,
+  strain: nullableNumberSchema,
+  sleep_performance_percentage: nullableNumberSchema,
+}).strict();
+
+const whoopSynchronizationSchema = z.object({
+  status: z.enum([
+    "not_connected", "connecting", "backfilling", "active",
+    "needs_reauth", "disconnected", "error",
+  ]),
+  last_success_at: nullableDateTimeSchema.optional(),
+  last_error_at: nullableDateTimeSchema.optional(),
+  consecutive_failure_count: z.number().int().nonnegative().optional(),
+  updated_at: nullableDateTimeSchema.optional(),
+  progress: z.array(z.object({
+    resource: z.enum(["profile", "body_measurement", "cycle", "recovery", "sleep", "workout"]),
+    mode: z.enum(["backfill", "reconcile", "webhook"]),
+    status: z.enum(["queued", "running", "retrying", "complete", "failed", "error"]),
+    page_count: z.number().int().nonnegative(),
+    record_count: z.number().int().nonnegative(),
+    updated_at: dateTimeSchema,
+  }).strict()),
+}).strict();
+
+export const whoopOverviewReadSchema = z.object({
+  current_cycle: whoopCycleReadSchema.nullable(),
+  current_recovery: whoopRecoveryReadSchema.nullable(),
+  current_sleep: whoopSleepReadSchema.nullable(),
+  recent_workouts: z.array(whoopWorkoutReadSchema),
+  trends_7_days: z.array(whoopTrendPointSchema),
+  trends_30_days: z.array(whoopTrendPointSchema),
+  synchronization: whoopSynchronizationSchema,
+}).strict();
+
 // OpenAPI helper functions
 export const openApiJsonContent = (schema: z.ZodTypeAny) => ({
   "application/json": { schema },
