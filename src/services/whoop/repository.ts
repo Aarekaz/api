@@ -116,6 +116,10 @@ export interface SyncProgressProjection {
   last_error: string | null;
 }
 
+export interface CurrentWhoopConnection extends ConnectionStatusProjection {
+  whoopUserId: number;
+}
+
 interface TokenConnectionRow {
   whoop_user_id: number;
   status: Exclude<WhoopConnectionStatus, "not_connected">;
@@ -378,6 +382,15 @@ export class WhoopRepository {
       WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?
     `).bind(canonicalConsumedAt, stateHash, canonicalConsumedAt).run();
     return changedRows(result) === 1;
+  }
+
+  async createOAuthState(stateHash: string, createdAt: string, expiresAt: string): Promise<void> {
+    const canonicalCreatedAt = canonicalTimestamp(createdAt)!;
+    const canonicalExpiresAt = canonicalTimestamp(expiresAt)!;
+    await this.db.prepare(`
+      INSERT INTO whoop_oauth_states (state_hash, created_at, expires_at, consumed_at)
+      VALUES (?, ?, ?, NULL)
+    `).bind(stateHash, canonicalCreatedAt, canonicalExpiresAt).run();
   }
 
   async upsertConnection(input: UpsertConnectionInput): Promise<void> {
@@ -700,6 +713,82 @@ export class WhoopRepository {
       granted_scopes: row.granted_scopes.split(/\s+/).filter(Boolean),
       last_error: sanitizedError(row.last_error),
     };
+  }
+
+  async getCurrentConnection(): Promise<CurrentWhoopConnection | null> {
+    const row = await this.db.prepare(`
+      SELECT whoop_user_id, status, granted_scopes, connected_at, refreshed_at, last_success_at,
+             last_error_at, disconnected_at, last_error, consecutive_failure_count, updated_at
+      FROM whoop_connections
+      ORDER BY CASE WHEN status = 'disconnected' THEN 1 ELSE 0 END,
+               connected_at DESC, whoop_user_id DESC
+      LIMIT 1
+    `).first<{
+      whoop_user_id: number;
+      status: Exclude<WhoopConnectionStatus, "not_connected">;
+      granted_scopes: string;
+      connected_at: string | null;
+      refreshed_at: string | null;
+      last_success_at: string | null;
+      last_error_at: string | null;
+      disconnected_at: string | null;
+      last_error: string | null;
+      consecutive_failure_count: number;
+      updated_at: string;
+    }>();
+    if (!row) return null;
+    return {
+      whoopUserId: row.whoop_user_id,
+      status: row.status,
+      granted_scopes: row.granted_scopes.split(/\s+/).filter(Boolean),
+      connected_at: row.connected_at,
+      refreshed_at: row.refreshed_at,
+      last_success_at: row.last_success_at,
+      last_error_at: row.last_error_at,
+      disconnected_at: row.disconnected_at,
+      last_error: sanitizedError(row.last_error),
+      consecutive_failure_count: row.consecutive_failure_count,
+      updated_at: row.updated_at,
+    };
+  }
+
+  async disconnect(whoopUserId: number, disconnectedAt: string): Promise<boolean> {
+    const timestamp = canonicalTimestamp(disconnectedAt)!;
+    const result = await this.db.prepare(`
+      UPDATE whoop_connections
+      SET status = 'disconnected',
+          access_token_ciphertext = NULL,
+          access_token_nonce = NULL,
+          access_token_expires_at = NULL,
+          refresh_token_ciphertext = NULL,
+          refresh_token_nonce = NULL,
+          refresh_lease_id = NULL,
+          refresh_lease_expires_at = NULL,
+          refresh_dispatched_at = NULL,
+          disconnected_at = ?,
+          updated_at = ?
+      WHERE whoop_user_id = ? AND status != 'disconnected'
+    `).bind(timestamp, timestamp, whoopUserId).run();
+    return changedRows(result) === 1;
+  }
+
+  async deleteLocalData(whoopUserId: number): Promise<void> {
+    const statements = [
+      "DELETE FROM whoop_profiles WHERE whoop_user_id = ?",
+      "DELETE FROM whoop_body_measurements WHERE whoop_user_id = ?",
+      "DELETE FROM whoop_cycles WHERE whoop_user_id = ?",
+      "DELETE FROM whoop_recoveries WHERE whoop_user_id = ?",
+      "DELETE FROM whoop_sleeps WHERE whoop_user_id = ?",
+      "DELETE FROM whoop_workouts WHERE whoop_user_id = ?",
+      "DELETE FROM whoop_webhook_events WHERE whoop_user_id = ?",
+      "DELETE FROM whoop_sync_checkpoints WHERE whoop_user_id = ?",
+      "DELETE FROM whoop_sync_runs WHERE whoop_user_id = ?",
+      "DELETE FROM whoop_connections WHERE whoop_user_id = ?",
+      "DELETE FROM whoop_oauth_states",
+    ];
+    await this.db.batch(statements.map((sql) => this.db.prepare(sql).bind(...(
+      sql === "DELETE FROM whoop_oauth_states" ? [] : [whoopUserId]
+    ))));
   }
 
   async getSyncProgress(whoopUserId: number): Promise<SyncProgressProjection[]> {

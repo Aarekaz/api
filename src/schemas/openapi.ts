@@ -106,6 +106,24 @@ export const healthWorkoutsRangeResponseSchema = z.object({
 
 export const healthSummaryResponseSchema = genericObjectSchema;
 
+export const whoopAuthorizationUrlResponseSchema = z.object({
+  authorization_url: z.string().url(),
+});
+
+export const whoopIntegrationStatusResponseSchema = z.object({
+  status: z.string(),
+  granted_scopes: z.array(z.string()).optional(),
+  connected_at: dateTimeSchema.nullable().optional(),
+  refreshed_at: dateTimeSchema.nullable().optional(),
+  last_success_at: dateTimeSchema.nullable().optional(),
+  last_error_at: dateTimeSchema.nullable().optional(),
+  disconnected_at: dateTimeSchema.nullable().optional(),
+  last_error: z.string().nullable().optional(),
+  consecutive_failure_count: z.number().optional(),
+  updated_at: dateTimeSchema.optional(),
+  progress: z.array(genericObjectSchema),
+});
+
 // OpenAPI helper functions
 export const openApiJsonContent = (schema: z.ZodTypeAny) => ({
   "application/json": { schema },

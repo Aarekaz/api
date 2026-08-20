@@ -37,6 +37,7 @@ import logsRoute from "./routes/logs";
 import mediaRoute from "./routes/media";
 import financeRoute from "./routes/finance";
 import crowdRoute from "./routes/crowd";
+import whoopIntegrationRoute from "./routes/whoop-integration";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -132,6 +133,7 @@ app.route("/health", healthRoute);
 
 // Protected v1 routes
 app.use("/v1/*", requireAuth);
+app.route("/", whoopIntegrationRoute);
 app.route("/v1/profile", profileRoute);
 app.route("/v1/now", nowRoute);
 app.route("/v1/settings", settingsRoute);
