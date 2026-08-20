@@ -22,6 +22,7 @@ import {
 } from "./crypto";
 
 const REFRESH_LEASE_MILLISECONDS = 30_000;
+const REFRESH_ABORT_MILLISECONDS = 20_000;
 const REFRESH_WAIT_MILLISECONDS = 100;
 
 export type TombstonePolicy = "preserve" | "reconcile";
@@ -133,7 +134,10 @@ interface AccessTokenOptions {
 }
 
 type AccessTokenRequest<T> = (accessToken: string) => Promise<T>;
-type RefreshTokenRequest = (refreshToken: string) => Promise<WhoopTokenResponse>;
+type RefreshTokenRequest = (
+  refreshToken: string,
+  options: { signal: AbortSignal },
+) => Promise<WhoopTokenResponse>;
 
 interface SourceDefinition {
   table: string;
@@ -356,11 +360,12 @@ export class WhoopRepository {
   ) {}
 
   async consumeOAuthState(stateHash: string, consumedAt: string): Promise<boolean> {
+    const canonicalConsumedAt = canonicalTimestamp(consumedAt)!;
     const result = await this.db.prepare(`
       UPDATE whoop_oauth_states
       SET consumed_at = ?
       WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?
-    `).bind(consumedAt, stateHash, consumedAt).run();
+    `).bind(canonicalConsumedAt, stateHash, canonicalConsumedAt).run();
     return changedRows(result) === 1;
   }
 
@@ -410,14 +415,16 @@ export class WhoopRepository {
     now: string,
     credentialVersion: number,
   ): Promise<boolean> {
-    const expiresAt = new Date(Date.parse(now) + REFRESH_LEASE_MILLISECONDS).toISOString();
+    const canonicalNow = canonicalTimestamp(now)!;
+    const expiresAt = new Date(Date.parse(canonicalNow) + REFRESH_LEASE_MILLISECONDS).toISOString();
     const result = await this.db.prepare(`
       UPDATE whoop_connections
       SET refresh_lease_id = ?, refresh_lease_expires_at = ?
       WHERE whoop_user_id = ?
         AND credential_version = ?
+        AND status IN ('active', 'backfilling')
         AND (refresh_lease_id IS NULL OR refresh_lease_expires_at <= ?)
-    `).bind(leaseId, expiresAt, whoopUserId, credentialVersion, now).run();
+    `).bind(leaseId, expiresAt, whoopUserId, credentialVersion, canonicalNow).run();
     return changedRows(result) === 1;
   }
 
@@ -545,7 +552,12 @@ export class WhoopRepository {
         run_id, whoop_user_id, trigger, status, page_count, record_count,
         started_at, succeeded_at, failed_at, last_error
       ) VALUES (?, ?, ?, 'running', 0, 0, ?, NULL, NULL, NULL)
-    `).bind(input.runId, input.whoopUserId, input.trigger, input.startedAt).run();
+    `).bind(
+      input.runId,
+      input.whoopUserId,
+      input.trigger,
+      canonicalTimestamp(input.startedAt)!,
+    ).run();
   }
 
   async upsertCheckpoint(input: CheckpointInput): Promise<void> {
@@ -568,14 +580,14 @@ export class WhoopRepository {
       input.whoopUserId,
       input.resource,
       input.mode,
-      input.windowStart ?? null,
-      input.windowEnd ?? null,
+      canonicalTimestamp(input.windowStart),
+      canonicalTimestamp(input.windowEnd),
       input.nextToken ?? null,
       input.status,
       input.pageCount,
       input.recordCount,
-      input.createdAt,
-      input.updatedAt,
+      canonicalTimestamp(input.createdAt)!,
+      canonicalTimestamp(input.updatedAt)!,
       sanitizedError(input.lastError),
     ).run();
   }
@@ -683,7 +695,33 @@ export class WhoopRepository {
         );
         if (!latest) throw new Error("WHOOP refresh lease ownership was lost before refresh");
         const latestRefreshToken = await this.decryptToken(latest, "refresh");
-        const tokens = await refresh(latestRefreshToken);
+        const abortAt = refreshStartedAt.getTime() + REFRESH_ABORT_MILLISECONDS;
+        const millisecondsUntilAbort = abortAt - now().getTime();
+        if (millisecondsUntilAbort <= 0) {
+          throw new Error("WHOOP refresh deadline elapsed before dispatch");
+        }
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          controller.abort(new DOMException("WHOOP token refresh timed out", "TimeoutError"));
+        }, millisecondsUntilAbort);
+        let tokens: WhoopTokenResponse;
+        try {
+          tokens = await refresh(latestRefreshToken, { signal: controller.signal });
+        } catch (error) {
+          const abortedAfterDispatch = controller.signal.aborted
+            || (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError"));
+          if (!abortedAfterDispatch) throw error;
+          const quarantined = await this.quarantineAmbiguousRefresh(
+            whoopUserId,
+            initialCredentialVersion,
+            leaseId,
+            now().toISOString(),
+          );
+          leaseCleared = quarantined;
+          throw new Error("WHOOP token refresh outcome is unknown");
+        } finally {
+          clearTimeout(timeoutId);
+        }
         const rotatedAt = now();
         const [accessToken, refreshToken] = await Promise.all([
           encryptWhoopToken(this.tokenEncryptionKey, whoopUserId, "access", tokens.access_token),
@@ -755,6 +793,7 @@ export class WhoopRepository {
              granted_scopes, credential_version
       FROM whoop_connections
       WHERE whoop_user_id = ? AND credential_version = ?
+        AND status IN ('active', 'backfilling')
         AND refresh_lease_id = ? AND refresh_lease_expires_at > ?
     `).bind(whoopUserId, credentialVersion, leaseId, now).first<TokenConnectionRow>();
   }
@@ -772,6 +811,25 @@ export class WhoopRepository {
       SET status = 'needs_reauth', last_error_at = ?, updated_at = ?
       WHERE whoop_user_id = ? AND credential_version = ?
     `).bind(now, now, whoopUserId, credentialVersion).run();
+  }
+
+  private async quarantineAmbiguousRefresh(
+    whoopUserId: number,
+    credentialVersion: number,
+    leaseId: string,
+    now: string,
+  ): Promise<boolean> {
+    const result = await this.db.prepare(`
+      UPDATE whoop_connections
+      SET status = 'needs_reauth',
+          last_error_at = ?,
+          updated_at = ?,
+          last_error = 'WHOOP token refresh outcome is unknown',
+          refresh_lease_id = NULL,
+          refresh_lease_expires_at = NULL
+      WHERE whoop_user_id = ? AND refresh_lease_id = ? AND credential_version = ?
+    `).bind(now, now, whoopUserId, leaseId, credentialVersion).run();
+    return changedRows(result) === 1;
   }
 }
 

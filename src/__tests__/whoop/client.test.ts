@@ -114,6 +114,19 @@ describe("WHOOP v2 client", () => {
     );
   });
 
+  it("passes the refresh abort signal to the token request fetch", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(TOKEN_RESPONSE));
+    const controller = new AbortController();
+    const client = new WhoopClient(ENV, "access");
+
+    await client.refreshToken("test-refresh", { signal: controller.signal });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.prod.whoop.com/oauth/oauth2/token",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
   it("revokes access at the documented v2 endpoint", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
     const client = new WhoopClient(ENV, "access");

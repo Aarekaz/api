@@ -62,6 +62,10 @@ export interface WhoopCollectionPage<T> {
 
 export type WhoopTokenResponse = z.infer<typeof tokenResponseSchema>;
 
+export interface WhoopRefreshOptions {
+  signal?: AbortSignal;
+}
+
 export class WhoopRequestError extends Error {
   readonly name: string = "WhoopRequestError";
 
@@ -143,14 +147,14 @@ export class WhoopClient {
     ]));
   }
 
-  async refreshToken(refreshToken: string): Promise<WhoopTokenResponse> {
+  async refreshToken(refreshToken: string, options: WhoopRefreshOptions = {}): Promise<WhoopTokenResponse> {
     return this.requestToken("token refresh", new URLSearchParams([
       ["grant_type", "refresh_token"],
       ["refresh_token", refreshToken],
       ["scope", "offline"],
       ["client_id", this.env.WHOOP_CLIENT_ID],
       ["client_secret", this.env.WHOOP_CLIENT_SECRET],
-    ]));
+    ]), options);
   }
 
   async revokeAccess(accessToken: string): Promise<void> {
@@ -222,11 +226,16 @@ export class WhoopClient {
     return parseProviderPayload(whoopWorkoutSchema, await this.requestJson("workout", `/activity/workout/${workoutId}`), "workout");
   }
 
-  private async requestToken(operation: string, body: URLSearchParams): Promise<WhoopTokenResponse> {
+  private async requestToken(
+    operation: string,
+    body: URLSearchParams,
+    options: WhoopRefreshOptions = {},
+  ): Promise<WhoopTokenResponse> {
     const payload = await this.requestJson(operation, WHOOP_TOKEN_PATH, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: body.toString(),
+      signal: options.signal,
     }, false);
     const parsed = tokenResponseSchema.safeParse(payload);
     if (!parsed.success) {
