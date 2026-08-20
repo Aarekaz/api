@@ -1,10 +1,10 @@
 # WHOOP Health Source
 
-WHOOP is the sole ongoing wearable source for this API. Existing Apple Health rows remain immutable legacy history; this release does not delete them or change the behavior of the Apple endpoints. Custom workout plans and logs remain independent under `/v1/custom/*`.
+WHOOP is the sole ongoing wearable source for this API. Existing Apple Health rows are retained as legacy history, with a no-new-ingestion policy after cutover. The legacy Apple mutation routes remain operational in this release, so immutability is not enforced by the API. Custom workout plans and logs remain independent under `/v1/custom/*`.
 
 ## Route contract
 
-All `/v1/*` routes require the existing API bearer token.
+The protected WHOOP management and health-read routes listed below under `/v1` require the existing API bearer token.
 
 ### Connection management
 
@@ -61,7 +61,7 @@ The queue performs initial pagination, webhook fetches, and reconciliation at co
 
 ## Apple legacy history
 
-The existing `/v1/health*` Apple Health routes and `apple_health_*` rows are preserved unchanged for historical reads. WHOOP is the ongoing wearable source after the production cutover. This document does not authorize new Apple Shortcut ingestion, table deletion, history rewriting, or conversion of Apple rows into WHOOP rows.
+The existing `/v1/health*` Apple Health routes and `apple_health_*` rows are retained unchanged as legacy history. That includes the existing Apple POST, PUT, PATCH, and DELETE routes: they remain operational in this release even though the post-cutover policy is to stop new Apple Shortcut ingestion. WHOOP is the ongoing wearable source after production cutover. This document does not authorize using those legacy mutations for new ingestion, deleting the Apple tables, rewriting history, or converting Apple rows into WHOOP rows.
 
 ## External rollout gates
 
