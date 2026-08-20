@@ -100,6 +100,8 @@ export interface WebhookEventInput {
   receivedAt: string;
 }
 
+export type WebhookEventStatus = "received" | "queued" | "processed" | "retrying" | "error";
+
 export interface ConnectionStatusProjection {
   status: WhoopConnectionStatus;
   granted_scopes?: string[];
@@ -154,6 +156,7 @@ interface AccessTokenOptions {
   leaseId?: () => string;
   sleep?: (milliseconds: number) => Promise<void>;
   expectedConnectionId?: string;
+  refreshBeforeExpirationMilliseconds?: number;
 }
 
 type AccessTokenRequest<T> = (accessToken: string, credentialVersion: number) => Promise<T>;
@@ -1229,6 +1232,25 @@ export class WhoopRepository {
     return changedRows(result) === 1;
   }
 
+  async getWebhookEventStatus(
+    traceId: string,
+    whoopUserId: number,
+    connectionId: string,
+  ): Promise<WebhookEventStatus | null> {
+    const row = await this.db.prepare(`
+      SELECT event.status
+      FROM whoop_webhook_events AS event
+      WHERE event.trace_id = ? AND event.whoop_user_id = ? AND event.connection_id = ?
+        AND EXISTS (
+          SELECT 1 FROM whoop_connections
+          WHERE whoop_user_id = ? AND connection_id = ?
+            AND status IN ('active', 'backfilling')
+        )
+    `).bind(traceId, whoopUserId, connectionId, whoopUserId, connectionId)
+      .first<{ status: WebhookEventStatus }>();
+    return row?.status ?? null;
+  }
+
   async markWebhookProcessed(
     traceId: string,
     whoopUserId: number,
@@ -1539,11 +1561,25 @@ export class WhoopRepository {
     }
     const initialCredentialVersion = initial.credential_version;
     const initialAccessToken = await this.decryptToken(initial, "access");
+    const refreshBeforeExpirationMilliseconds = options.refreshBeforeExpirationMilliseconds;
+    if (refreshBeforeExpirationMilliseconds !== undefined
+      && (!Number.isFinite(refreshBeforeExpirationMilliseconds)
+        || refreshBeforeExpirationMilliseconds < 0)) {
+      throw new Error("WHOOP refresh-before-expiration window is invalid");
+    }
+    const accessTokenExpiresAt = initial.access_token_expires_at === null
+      ? Number.NaN
+      : Date.parse(initial.access_token_expires_at);
+    const proactiveRefresh = refreshBeforeExpirationMilliseconds !== undefined
+      && (!Number.isFinite(accessTokenExpiresAt)
+        || accessTokenExpiresAt <= now().getTime() + refreshBeforeExpirationMilliseconds);
 
-    try {
-      return await request(initialAccessToken, initialCredentialVersion);
-    } catch (error) {
-      if (!(error instanceof WhoopUnauthorizedError)) throw error;
+    if (!proactiveRefresh) {
+      try {
+        return await request(initialAccessToken, initialCredentialVersion);
+      } catch (error) {
+        if (!(error instanceof WhoopUnauthorizedError)) throw error;
+      }
     }
 
     const leaseId = createLeaseId();

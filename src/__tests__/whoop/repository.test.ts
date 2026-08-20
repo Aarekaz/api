@@ -853,6 +853,95 @@ describe("WHOOP repository", () => {
     expect(fake.connections.get(42)?.reconcile_generation).toBe(9);
   });
 
+  it("proactively refreshes inside the five-minute expiry window but skips a healthy token", async () => {
+    const nearExpiryFake = new FakeD1();
+    nearExpiryFake.connections.set(42, await connectionRow({
+      access_token_expires_at: "2026-08-19T12:04:59.999Z",
+    }));
+    const nearExpiryRepository = new WhoopRepository(nearExpiryFake as unknown as D1Database, KEY);
+    const nearExpiryRequest = vi.fn().mockResolvedValue("ok");
+    const refresh = vi.fn().mockResolvedValue({
+      access_token: "rotated-access",
+      refresh_token: "rotated-refresh",
+      expires_in: 3600,
+      token_type: "bearer",
+    });
+
+    await expect(withWhoopAccessToken(
+      nearExpiryRepository,
+      42,
+      nearExpiryRequest,
+      refresh,
+      {
+        now: () => new Date(NOW),
+        leaseId: () => "lease-owner",
+        sleep: vi.fn(),
+        refreshBeforeExpirationMilliseconds: 5 * 60 * 1000,
+      } as unknown as Parameters<typeof withWhoopAccessToken>[4],
+    )).resolves.toBe("ok");
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(nearExpiryRequest.mock.calls.map(([token]) => token)).toEqual(["rotated-access"]);
+
+    const healthyFake = new FakeD1();
+    healthyFake.connections.set(42, await connectionRow({
+      access_token_expires_at: "2026-08-19T12:05:00.001Z",
+    }));
+    const healthyRepository = new WhoopRepository(healthyFake as unknown as D1Database, KEY);
+    const healthyRequest = vi.fn().mockResolvedValue("healthy");
+    const healthyRefresh = vi.fn();
+
+    await expect(withWhoopAccessToken(
+      healthyRepository,
+      42,
+      healthyRequest,
+      healthyRefresh,
+      {
+        now: () => new Date(NOW),
+        leaseId: () => "unused-owner",
+        sleep: vi.fn(),
+        refreshBeforeExpirationMilliseconds: 5 * 60 * 1000,
+      } as unknown as Parameters<typeof withWhoopAccessToken>[4],
+    )).resolves.toBe("healthy");
+
+    expect(healthyRefresh).not.toHaveBeenCalled();
+    expect(healthyRequest.mock.calls.map(([token]) => token)).toEqual(["access-before-refresh"]);
+  });
+
+  it("proactive refresh lease non-owner waits and uses only the rotated access token", async () => {
+    const fake = new FakeD1();
+    fake.connections.set(42, await connectionRow({
+      access_token_expires_at: "2026-08-19T12:04:00.000Z",
+      refresh_lease_id: "other-owner",
+      refresh_lease_expires_at: "2026-08-19T12:00:20.000Z",
+    }));
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+    const afterWait = await encryptWhoopToken(KEY, 42, "access", "access-after-wait");
+    const sleep = vi.fn().mockImplementation(async () => {
+      Object.assign(fake.connections.get(42)!, {
+        access_token_ciphertext: afterWait.ciphertext,
+        access_token_nonce: afterWait.nonce,
+        access_token_expires_at: "2026-08-19T13:00:00.000Z",
+        credential_version: 2,
+        refresh_lease_id: null,
+        refresh_lease_expires_at: null,
+      });
+    });
+    const request = vi.fn().mockResolvedValue("ok");
+    const refresh = vi.fn();
+
+    await expect(withWhoopAccessToken(repository, 42, request, refresh, {
+      now: () => new Date(NOW),
+      leaseId: () => "losing-owner",
+      sleep,
+      refreshBeforeExpirationMilliseconds: 5 * 60 * 1000,
+    } as unknown as Parameters<typeof withWhoopAccessToken>[4])).resolves.toBe("ok");
+
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(request.mock.calls.map(([token]) => token)).toEqual(["access-after-wait"]);
+  });
+
   it("passes the credential generation paired with each initial and refreshed access token", async () => {
     const fake = new FakeD1();
     fake.connections.set(42, await connectionRow());

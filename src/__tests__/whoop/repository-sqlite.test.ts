@@ -674,6 +674,7 @@ describe("WHOOP repository on SQLite", () => {
       whoopUserId: number,
       connectionId: string,
     ) => Promise<boolean>;
+    const getWebhookEventStatus = repository.getWebhookEventStatus.bind(repository);
 
     database.prepare("UPDATE whoop_connections SET connection_id = 'connection-new'").run();
     await expect(recordWebhookEvent({
@@ -695,8 +696,12 @@ describe("WHOOP repository on SQLite", () => {
       eventType: "workout.updated",
       receivedAt: NOW,
     })).resolves.toBe(true);
+    await expect(getWebhookEventStatus("trace-current", 42, "connection-new"))
+      .resolves.toBe("received");
     database.prepare("UPDATE whoop_connections SET connection_id = 'connection-newer'").run();
     await expect(markWebhookQueued("trace-current", 42, "connection-new")).resolves.toBe(false);
+    await expect(getWebhookEventStatus("trace-current", 42, "connection-new"))
+      .resolves.toBeNull();
     expect(database.prepare("SELECT status FROM whoop_webhook_events WHERE trace_id = 'trace-current'").get())
       .toEqual({ status: "received" });
   });

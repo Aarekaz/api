@@ -19,9 +19,11 @@ import {
 import type { Env } from "../types/env";
 import { WHOOP_SCOPES, type WhoopQueueMessage, type WhoopResource } from "../types/whoop";
 import { enqueueReconciliation } from "../services/whoop/sync";
+import { whoopWebhookSchema } from "../schemas/whoop";
 
 const WHOOP_AUTHORIZE_URL = "https://api.prod.whoop.com/oauth/oauth2/auth";
 const OAUTH_STATE_LIFETIME_MILLISECONDS = 10 * 60 * 1000;
+const WEBHOOK_MAX_SKEW_MILLISECONDS = 5 * 60 * 1000;
 const INITIAL_RESOURCES: readonly WhoopResource[] = [
   "profile", "body_measurement", "cycle", "recovery", "sleep", "workout",
 ];
@@ -44,6 +46,13 @@ interface IntegrationRepository {
     credentialVersion: number,
     queuedAt: string,
   ): Promise<boolean>;
+  recordWebhookEvent(input: Parameters<WhoopRepository["recordWebhookEvent"]>[0]): Promise<boolean>;
+  getWebhookEventStatus(
+    traceId: string,
+    whoopUserId: number,
+    connectionId: string,
+  ): ReturnType<WhoopRepository["getWebhookEventStatus"]>;
+  markWebhookQueued(traceId: string, whoopUserId: number, connectionId: string): Promise<boolean>;
   withWhoopAccessToken<T>(
     whoopUserId: number,
     request: (accessToken: string, credentialVersion: number) => Promise<T>,
@@ -102,6 +111,55 @@ const backfillMessagesFor = (
   connectionId,
   resource,
 }));
+
+const decodeCanonicalBase64 = (value: string): Uint8Array => {
+  if (!/^[A-Za-z0-9+/]{43}=$/.test(value)) {
+    return new Uint8Array();
+  }
+  try {
+    const decoded = atob(value);
+    if (btoa(decoded) !== value) return new Uint8Array();
+    return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+  } catch {
+    return new Uint8Array();
+  }
+};
+
+const constantTimeBytesEqual = (left: Uint8Array, right: Uint8Array): boolean => {
+  let difference = left.length ^ right.length;
+  const paddedLength = Math.max(left.length, right.length);
+  for (let index = 0; index < paddedLength; index += 1) {
+    difference |= (left[index] ?? 0) ^ (right[index] ?? 0);
+  }
+  return difference === 0;
+};
+
+const validWebhookSignature = async (
+  secret: string,
+  timestampHeader: string,
+  signatureHeader: string,
+  rawBody: string,
+  now: Date,
+): Promise<boolean> => {
+  if (!/^(?:0|[1-9][0-9]*)$/.test(timestampHeader)) return false;
+  const timestamp = Number(timestampHeader);
+  if (!Number.isSafeInteger(timestamp)
+    || Math.abs(now.getTime() - timestamp) > WEBHOOK_MAX_SKEW_MILLISECONDS) return false;
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const expected = new Uint8Array(await crypto.subtle.sign(
+    "HMAC",
+    key,
+    encoder.encode(timestampHeader + rawBody),
+  ));
+  return constantTimeBytesEqual(decodeCanonicalBase64(signatureHeader), expected);
+};
 
 export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDependencies = {}) {
   const app = new Hono<{ Bindings: Env }>();
@@ -213,6 +271,83 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
       }
       return callbackFailure(c.env);
     }
+  });
+
+  app.post("/integrations/whoop/webhook", async (c) => {
+    const signature = c.req.header("X-WHOOP-Signature");
+    const timestamp = c.req.header("X-WHOOP-Signature-Timestamp");
+    if (!signature || !timestamp || typeof c.env.WHOOP_CLIENT_SECRET !== "string"
+      || c.env.WHOOP_CLIENT_SECRET.length === 0) {
+      return c.json({ error: "Invalid WHOOP webhook signature" }, 401);
+    }
+    const rawBody = await c.req.raw.text();
+    if (!await validWebhookSignature(c.env.WHOOP_CLIENT_SECRET, timestamp, signature, rawBody, now())) {
+      return c.json({ error: "Invalid WHOOP webhook signature" }, 401);
+    }
+    let json: unknown;
+    try {
+      json = JSON.parse(rawBody);
+    } catch {
+      return c.json({ error: "Invalid WHOOP webhook payload" }, 400);
+    }
+    const parsed = whoopWebhookSchema.safeParse(json);
+    if (!parsed.success) return c.json({ error: "Invalid WHOOP webhook payload" }, 400);
+
+    const repository = repositoryFor(c.env);
+    const connection = await repository.getCurrentConnection();
+    if (!connectionCanSync(connection) || connection.whoopUserId !== parsed.data.user_id) {
+      return c.body(null, 204);
+    }
+    const receipt = {
+      traceId: parsed.data.trace_id,
+      whoopUserId: parsed.data.user_id,
+      connectionId: connection.connectionId,
+      resourceId: parsed.data.id,
+      eventType: parsed.data.type,
+      receivedAt: now().toISOString(),
+    };
+    const inserted = await repository.recordWebhookEvent(receipt);
+    if (!inserted) {
+      const status = await repository.getWebhookEventStatus(
+        receipt.traceId,
+        receipt.whoopUserId,
+        receipt.connectionId,
+      );
+      if (status !== "received") return c.body(null, 204);
+    }
+    try {
+      await c.env.WHOOP_SYNC_QUEUE.send({
+        kind: "webhook",
+        traceId: receipt.traceId,
+        whoopUserId: receipt.whoopUserId,
+        connectionId: receipt.connectionId,
+        resourceId: receipt.resourceId,
+        eventType: receipt.eventType,
+      });
+    } catch {
+      return c.json({ error: "WHOOP webhook queue unavailable" }, 503);
+    }
+    let markedQueued: boolean;
+    try {
+      markedQueued = await repository.markWebhookQueued(
+        receipt.traceId,
+        receipt.whoopUserId,
+        receipt.connectionId,
+      );
+    } catch {
+      return c.json({ error: "WHOOP webhook queue unavailable" }, 503);
+    }
+    if (!markedQueued) {
+      const status = await repository.getWebhookEventStatus(
+        receipt.traceId,
+        receipt.whoopUserId,
+        receipt.connectionId,
+      );
+      if (status === "received") {
+        return c.json({ error: "WHOOP webhook queue unavailable" }, 503);
+      }
+    }
+    return c.body(null, 204);
   });
 
   app.post("/v1/integrations/whoop/sync", async (c) => {
