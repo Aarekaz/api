@@ -94,7 +94,7 @@ Short-lived, one-use OAuth state records:
 - creation and expiry timestamps
 - consumed timestamp
 
-Generate at least 32 random bytes, despite WHOOP's minimum-length guidance. Store only the hash. Callback consumption is atomic and rejects missing, expired, or reused state.
+WHOOP requires manually generated state to be exactly eight characters. Generate eight random URL-safe alphanumeric characters with unbiased rejection sampling, store only its SHA-256 hash, and never log the plaintext. Callback consumption is atomic and rejects missing, expired, or reused state.
 
 ### Source tables
 
@@ -113,7 +113,7 @@ Provider IDs are stable upsert keys. An update is accepted when its upstream `up
 - `whoop_sync_checkpoints`: user ID plus resource primary key, mode, window, next token, status, page/record counts, timestamps, sanitized error
 - `whoop_sync_runs`: run ID, user ID, trigger, status, counters, start/success/error timestamps, sanitized error
 
-Deletion webhooks mark source rows with `deleted_at`; they do not hard-delete immediately. This prevents older or duplicated update events from resurrecting deleted records and preserves an audit trail. Read endpoints exclude tombstones by default.
+Deletion webhooks idempotently mark source rows with `deleted_at`; they do not hard-delete immediately. Because WHOOP deletion envelopes carry no source-update timestamp, a tombstone blocks webhook-driven resurrection until scheduled authoritative reconciliation confirms a current upstream record. Read endpoints exclude tombstones by default.
 
 ## OAuth Flow
 
@@ -173,9 +173,12 @@ Typed read endpoints:
 - `GET /v1/health/whoop/recoveries`
 - `GET /v1/health/whoop/sleeps`
 - `GET /v1/health/whoop/workouts`
+- `GET /v1/health/whoop/workouts/:workoutId`
 - `GET /v1/health/whoop/profile`
 
-Collection endpoints use validated `start`, `end`, `limit`, and opaque local cursor parameters. Overview returns current/latest scored cycle, recovery and primary sleep, recent workouts, 7/30-day trend points, and synchronization status. Missing or pending scores remain explicit states rather than zeroes.
+Collection endpoints use validated `start`, `end`, `limit`, and opaque local cursor parameters. The workout-detail endpoint returns 404 for a missing or tombstoned UUID. Overview returns `current_cycle`, `current_recovery`, `current_sleep`, recent workouts, 7/30-day trend points, and synchronization status. Normalized score states are `scored`, `pending`, and `unscorable`; recovery calibration is the separate nullable `user_calibrating` flag. Missing or pending values remain `null`, never zero.
+
+Read-model timestamps use `start_at`, `end_at`, `created_at`, and `updated_at`. Native WHOOP duration fields are persisted in milliseconds; API sleep-stage, sleep-need, and heart-rate-zone durations are integer `*_seconds` values derived by dividing by 1,000. HRV is exposed as `hrv_rmssd_milliseconds`. A missing connection row is represented by the non-persisted read state `{ "status": "not_connected" }`.
 
 Energy is stored and returned in WHOOP's source unit, kilojoules. Read models may additionally return `energy_kcal_estimate`, calculated as `kilojoule / 4.184` and explicitly labeled as a derived estimate.
 
@@ -187,8 +190,8 @@ Existing `/v1/health*` Apple endpoints remain unchanged during the first release
 - Upstream 401 triggers one serialized refresh. Repeated 401 requires reconnection.
 - Upstream 429 honors the reset header and retries through the queue.
 - Upstream 5xx and network failures retry with backoff and eventually enter the DLQ.
-- Schema mismatches retain `raw_json`, record a sanitized error, and fail visibly rather than silently dropping fields.
-- Disconnect invokes WHOOP's `DELETE /v2/user/access`, clears token ciphertext, and stops new webhook processing. Local deletion is a distinct, explicit action.
+- Provider record schemas validate required modeled fields while permitting extension fields, and raw payloads are retained before projection. Records whose core identity/timing fields are invalid are quarantined with sanitized diagnostics rather than silently dropped.
+- Disconnect invokes WHOOP's `DELETE /developer/v2/user/access`, clears token ciphertext, and stops new webhook processing. Local deletion is a distinct, explicit action.
 - D1 supplies platform encryption at rest and TLS in transit; OAuth token fields additionally use application-level AES-256-GCM.
 
 ## Security Prerequisite
