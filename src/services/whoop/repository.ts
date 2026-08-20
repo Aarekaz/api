@@ -53,6 +53,7 @@ export interface UpsertConnectionInput {
   grantedScopes: readonly string[];
   connectedAt: string;
   updatedAt?: string;
+  initialBackfillPending?: boolean;
 }
 
 export interface RotatedTokenInput {
@@ -118,6 +119,12 @@ export interface SyncProgressProjection {
 
 export interface CurrentWhoopConnection extends ConnectionStatusProjection {
   whoopUserId: number;
+  credentialVersion: number;
+}
+
+export interface PendingInitialBackfill {
+  whoopUserId: number;
+  credentialVersion: number;
 }
 
 interface TokenConnectionRow {
@@ -434,6 +441,85 @@ export class WhoopRepository {
     ).run();
   }
 
+  async claimAndUpsertConnection(input: UpsertConnectionInput): Promise<number | null> {
+    const updatedAt = input.updatedAt ?? input.connectedAt;
+    const row = await this.db.prepare(`
+      INSERT INTO whoop_connections (
+        whoop_user_id, status, access_token_ciphertext, access_token_nonce, access_token_expires_at,
+        refresh_token_ciphertext, refresh_token_nonce, granted_scopes, credential_version,
+        initial_backfill_pending, refresh_lease_id, refresh_lease_expires_at, refresh_dispatched_at,
+        connected_at, refreshed_at, last_success_at, last_error_at, disconnected_at, last_error,
+        consecutive_failure_count, created_at, updated_at
+      ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, NULL, 0, ?, ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM whoop_connections
+        WHERE whoop_user_id != ? AND status != 'disconnected'
+      )
+      ON CONFLICT(whoop_user_id) DO UPDATE SET
+        status = excluded.status,
+        access_token_ciphertext = excluded.access_token_ciphertext,
+        access_token_nonce = excluded.access_token_nonce,
+        access_token_expires_at = excluded.access_token_expires_at,
+        refresh_token_ciphertext = excluded.refresh_token_ciphertext,
+        refresh_token_nonce = excluded.refresh_token_nonce,
+        granted_scopes = excluded.granted_scopes,
+        credential_version = whoop_connections.credential_version + 1,
+        initial_backfill_pending = excluded.initial_backfill_pending,
+        refresh_lease_id = NULL,
+        refresh_lease_expires_at = NULL,
+        refresh_dispatched_at = NULL,
+        connected_at = excluded.connected_at,
+        disconnected_at = NULL,
+        last_error = NULL,
+        consecutive_failure_count = 0,
+        updated_at = excluded.updated_at
+      RETURNING credential_version
+    `).bind(
+      input.whoopUserId,
+      input.status,
+      input.accessToken.ciphertext,
+      input.accessToken.nonce,
+      input.accessTokenExpiresAt,
+      input.refreshToken.ciphertext,
+      input.refreshToken.nonce,
+      input.grantedScopes.join(" "),
+      input.initialBackfillPending ? 1 : 0,
+      input.connectedAt,
+      input.connectedAt,
+      updatedAt,
+      input.whoopUserId,
+    ).first<{ credential_version: number }>();
+    return row?.credential_version ?? null;
+  }
+
+  async markInitialBackfillQueued(
+    whoopUserId: number,
+    credentialVersion: number,
+    queuedAt: string,
+  ): Promise<boolean> {
+    const timestamp = canonicalTimestamp(queuedAt)!;
+    const result = await this.db.prepare(`
+      UPDATE whoop_connections
+      SET initial_backfill_pending = 0, updated_at = ?
+      WHERE whoop_user_id = ? AND credential_version = ?
+        AND status = 'backfilling' AND initial_backfill_pending = 1
+    `).bind(timestamp, whoopUserId, credentialVersion).run();
+    return changedRows(result) === 1;
+  }
+
+  async getPendingInitialBackfills(): Promise<PendingInitialBackfill[]> {
+    const result = await this.db.prepare(`
+      SELECT whoop_user_id, credential_version
+      FROM whoop_connections
+      WHERE status = 'backfilling' AND initial_backfill_pending = 1
+      ORDER BY connected_at ASC, whoop_user_id ASC
+    `).all<{ whoop_user_id: number; credential_version: number }>();
+    return result.results.map((row) => ({
+      whoopUserId: row.whoop_user_id,
+      credentialVersion: row.credential_version,
+    }));
+  }
+
   async acquireRefreshLease(
     whoopUserId: number,
     leaseId: string,
@@ -717,7 +803,7 @@ export class WhoopRepository {
 
   async getCurrentConnection(): Promise<CurrentWhoopConnection | null> {
     const row = await this.db.prepare(`
-      SELECT whoop_user_id, status, granted_scopes, connected_at, refreshed_at, last_success_at,
+      SELECT whoop_user_id, status, granted_scopes, credential_version, connected_at, refreshed_at, last_success_at,
              last_error_at, disconnected_at, last_error, consecutive_failure_count, updated_at
       FROM whoop_connections
       ORDER BY CASE WHEN status = 'disconnected' THEN 1 ELSE 0 END,
@@ -727,6 +813,7 @@ export class WhoopRepository {
       whoop_user_id: number;
       status: Exclude<WhoopConnectionStatus, "not_connected">;
       granted_scopes: string;
+      credential_version: number;
       connected_at: string | null;
       refreshed_at: string | null;
       last_success_at: string | null;
@@ -739,6 +826,7 @@ export class WhoopRepository {
     if (!row) return null;
     return {
       whoopUserId: row.whoop_user_id,
+      credentialVersion: row.credential_version,
       status: row.status,
       granted_scopes: row.granted_scopes.split(/\s+/).filter(Boolean),
       connected_at: row.connected_at,
@@ -752,7 +840,11 @@ export class WhoopRepository {
     };
   }
 
-  async disconnect(whoopUserId: number, disconnectedAt: string): Promise<boolean> {
+  async disconnect(
+    whoopUserId: number,
+    credentialVersion: number,
+    disconnectedAt: string,
+  ): Promise<boolean> {
     const timestamp = canonicalTimestamp(disconnectedAt)!;
     const result = await this.db.prepare(`
       UPDATE whoop_connections
@@ -767,28 +859,39 @@ export class WhoopRepository {
           refresh_dispatched_at = NULL,
           disconnected_at = ?,
           updated_at = ?
-      WHERE whoop_user_id = ? AND status != 'disconnected'
-    `).bind(timestamp, timestamp, whoopUserId).run();
+      WHERE whoop_user_id = ? AND credential_version = ? AND status != 'disconnected'
+    `).bind(timestamp, timestamp, whoopUserId, credentialVersion).run();
     return changedRows(result) === 1;
   }
 
-  async deleteLocalData(whoopUserId: number): Promise<void> {
-    const statements = [
-      "DELETE FROM whoop_profiles WHERE whoop_user_id = ?",
-      "DELETE FROM whoop_body_measurements WHERE whoop_user_id = ?",
-      "DELETE FROM whoop_cycles WHERE whoop_user_id = ?",
-      "DELETE FROM whoop_recoveries WHERE whoop_user_id = ?",
-      "DELETE FROM whoop_sleeps WHERE whoop_user_id = ?",
-      "DELETE FROM whoop_workouts WHERE whoop_user_id = ?",
-      "DELETE FROM whoop_webhook_events WHERE whoop_user_id = ?",
-      "DELETE FROM whoop_sync_checkpoints WHERE whoop_user_id = ?",
-      "DELETE FROM whoop_sync_runs WHERE whoop_user_id = ?",
-      "DELETE FROM whoop_connections WHERE whoop_user_id = ?",
-      "DELETE FROM whoop_oauth_states",
+  async deleteLocalData(whoopUserId: number, credentialVersion: number): Promise<boolean> {
+    const guard = `EXISTS (
+      SELECT 1 FROM whoop_connections
+      WHERE whoop_user_id = ? AND credential_version = ? AND status = 'disconnected'
+    )`;
+    const userTables = [
+      "whoop_profiles",
+      "whoop_body_measurements",
+      "whoop_cycles",
+      "whoop_recoveries",
+      "whoop_sleeps",
+      "whoop_workouts",
+      "whoop_webhook_events",
+      "whoop_sync_checkpoints",
+      "whoop_sync_runs",
     ];
-    await this.db.batch(statements.map((sql) => this.db.prepare(sql).bind(...(
-      sql === "DELETE FROM whoop_oauth_states" ? [] : [whoopUserId]
-    ))));
+    const results = await this.db.batch([
+      this.db.prepare(`DELETE FROM whoop_oauth_states WHERE ${guard}`)
+        .bind(whoopUserId, credentialVersion),
+      ...userTables.map((table) => this.db.prepare(
+        `DELETE FROM ${table} WHERE whoop_user_id = ? AND ${guard}`,
+      ).bind(whoopUserId, whoopUserId, credentialVersion)),
+      this.db.prepare(`
+        DELETE FROM whoop_connections
+        WHERE whoop_user_id = ? AND credential_version = ? AND status = 'disconnected'
+      `).bind(whoopUserId, credentialVersion),
+    ]);
+    return changedRows(results.at(-1)!) === 1;
   }
 
   async getSyncProgress(whoopUserId: number): Promise<SyncProgressProjection[]> {

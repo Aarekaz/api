@@ -30,6 +30,7 @@ class FakeD1 {
   readonly connections = new Map<number, DbRow>();
   readonly oauthStates = new Map<string, DbRow>();
   readonly webhookEvents = new Map<string, DbRow>();
+  pendingInitialBackfills: DbRow[] = [];
   onLeaseAcquired?: () => void | Promise<void>;
   onStoreRotated?: () => void | Promise<void>;
   onQuarantine?: () => void | Promise<void>;
@@ -82,6 +83,9 @@ class FakeD1 {
 
   private async all<T>(sql: string, bindings: unknown[]) {
     this.record(sql, bindings);
+    if (sql.includes("initial_backfill_pending = 1")) {
+      return { results: this.pendingInitialBackfills as T[], success: true, meta: {} };
+    }
     return { results: [] as T[], success: true, meta: {} };
   }
 
@@ -298,6 +302,61 @@ class FakeD1 {
 
 const result = (changes: number) => ({ success: true, results: [], meta: { changes } });
 
+class ClaimD1 {
+  readonly calls: SqlCall[] = [];
+  readonly connections = new Map<number, DbRow>();
+
+  prepare(sql: string) {
+    return {
+      bind: (...bindings: unknown[]) => ({
+        first: <T>() => this.claim<T>(sql, bindings),
+      }),
+    };
+  }
+
+  private async claim<T>(sql: string, bindings: unknown[]): Promise<T | null> {
+    this.calls.push({ sql, bindings });
+    const whoopUserId = Number(bindings[0]);
+    const existingDifferentIdentity = [...this.connections.values()].some((connection) =>
+      connection.whoop_user_id !== whoopUserId && connection.status !== "disconnected");
+    if (existingDifferentIdentity) return null;
+    const current = this.connections.get(whoopUserId);
+    const credentialVersion = Number(current?.credential_version ?? 0) + 1;
+    this.connections.set(whoopUserId, {
+      whoop_user_id: whoopUserId,
+      status: bindings[1],
+      credential_version: credentialVersion,
+    });
+    return { credential_version: credentialVersion } as T;
+  }
+}
+
+class CasD1 {
+  readonly calls: SqlCall[] = [];
+  batchStatements: Array<{ sql: string; bindings: unknown[] }> = [];
+  connectionDeleteChanges = 1;
+
+  prepare(sql: string) {
+    return {
+      bind: (...bindings: unknown[]) => ({
+        sql,
+        bindings,
+        run: async () => {
+          this.calls.push({ sql, bindings });
+          return result(this.connectionDeleteChanges);
+        },
+      }),
+    };
+  }
+
+  async batch(statements: D1PreparedStatement[]) {
+    this.batchStatements = statements as unknown as Array<{ sql: string; bindings: unknown[] }>;
+    return this.batchStatements.map((statement, index) => result(
+      index === this.batchStatements.length - 1 ? this.connectionDeleteChanges : 1,
+    ));
+  }
+}
+
 function insertColumns(sql: string): string[] {
   const match = sql.match(/\(([^)]+)\)\s*VALUES/i);
   if (!match) throw new Error("Test fake could not parse INSERT columns");
@@ -348,6 +407,68 @@ async function reconnectInput(accessPlaintext = "reconnected-access") {
 }
 
 describe("WHOOP repository", () => {
+  it("atomically claims one non-disconnected WHOOP identity while allowing that identity to reconnect", async () => {
+    const fake = new ClaimD1();
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+    const first = { ...(await reconnectInput()), initialBackfillPending: true };
+    const secondAccess = await encryptWhoopToken(KEY, 43, "access", "other-access");
+    const secondRefresh = await encryptWhoopToken(KEY, 43, "refresh", "other-refresh");
+    const second = {
+      ...first,
+      whoopUserId: 43,
+      accessToken: secondAccess,
+      refreshToken: secondRefresh,
+    };
+
+    const claims = await Promise.all([
+      repository.claimAndUpsertConnection(first),
+      repository.claimAndUpsertConnection(second),
+    ]);
+
+    expect(claims).toEqual([1, null]);
+    await expect(repository.claimAndUpsertConnection(first)).resolves.toBe(2);
+    expect(fake.connections.size).toBe(1);
+    expect(fake.calls[0].sql).toContain("INSERT INTO whoop_connections");
+    expect(fake.calls[0].sql).toContain("WHERE NOT EXISTS");
+    expect(fake.calls[0].sql).toContain("status != 'disconnected'");
+  });
+
+  it("projects durable initial-backfill intent for future queue or scheduler replay", async () => {
+    const fake = new FakeD1();
+    fake.pendingInitialBackfills = [{ whoop_user_id: 42, credential_version: 3 }];
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+
+    await expect(repository.getPendingInitialBackfills()).resolves.toEqual([
+      { whoopUserId: 42, credentialVersion: 3 },
+    ]);
+    expect(fake.calls[0].sql).toContain("initial_backfill_pending = 1");
+    expect(fake.calls[0].sql).toContain("status = 'backfilling'");
+  });
+
+  it("uses observed credential generation to fence disconnect and every atomic local-data delete", async () => {
+    const fake = new CasD1();
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+
+    await expect(repository.disconnect(42, 3, NOW)).resolves.toBe(true);
+    await expect(repository.deleteLocalData(42, 3)).resolves.toBe(true);
+
+    expect(fake.calls[0].sql).toContain("credential_version = ?");
+    expect(fake.calls[0].bindings).toEqual([NOW, NOW, 42, 3]);
+    expect(fake.batchStatements).toHaveLength(11);
+    for (const statement of fake.batchStatements) {
+      expect(statement.sql).toContain("credential_version = ?");
+      expect(statement.sql).toContain("status = 'disconnected'");
+    }
+  });
+
+  it("returns false when the atomic local-data delete loses its disconnected generation", async () => {
+    const fake = new CasD1();
+    fake.connectionDeleteChanges = 0;
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+
+    await expect(repository.deleteLocalData(42, 3)).resolves.toBe(false);
+  });
+
   it("conditionally consumes each unexpired OAuth state only once", async () => {
     const fake = new FakeD1();
     fake.oauthStates.set("state-hash", { consumed_at: null, expires_at: "2026-08-19T12:05:00.000Z" });

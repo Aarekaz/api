@@ -108,6 +108,7 @@ describe("WHOOP shared schemas", () => {
     expect(migrationSql).toMatch(/CREATE TABLE IF NOT EXISTS whoop_cycles/);
     expect(cyclesDefinition).toMatch(/end_at TEXT,/);
     expect(migrationSql).toMatch(/credential_version INTEGER NOT NULL DEFAULT 1/);
+    expect(migrationSql).toMatch(/initial_backfill_pending INTEGER NOT NULL DEFAULT 0/);
     expect(migrationSql).toMatch(/refresh_dispatched_at TEXT/);
     expect(migrationSql).toMatch(/status TEXT NOT NULL CHECK \(status IN/);
     expect(migrationSql).toMatch(/event_type TEXT NOT NULL CHECK \(event_type IN/);

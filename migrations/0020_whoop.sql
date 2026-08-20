@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS whoop_connections (
   refresh_token_nonce TEXT,
   granted_scopes TEXT NOT NULL,
   credential_version INTEGER NOT NULL DEFAULT 1,
+  initial_backfill_pending INTEGER NOT NULL DEFAULT 0,
   refresh_lease_id TEXT,
   refresh_lease_expires_at TEXT,
   refresh_dispatched_at TEXT,

@@ -8,7 +8,9 @@ import {
 } from "../services/whoop/repository";
 import {
   authSecurity,
+  errorResponses,
   okSchema,
+  openApiResponse,
   okResponses,
   openApiRegistry,
   whoopAuthorizationUrlResponseSchema,
@@ -28,14 +30,15 @@ interface IntegrationRepository {
   consumeOAuthState(stateHash: string, consumedAt: string): Promise<boolean>;
   getCurrentConnection(): Promise<CurrentWhoopConnection | null>;
   getSyncProgress(whoopUserId: number): Promise<SyncProgressProjection[]>;
-  upsertConnection(input: Parameters<WhoopRepository["upsertConnection"]>[0]): Promise<void>;
+  claimAndUpsertConnection(input: Parameters<WhoopRepository["claimAndUpsertConnection"]>[0]): Promise<number | null>;
+  markInitialBackfillQueued(whoopUserId: number, credentialVersion: number, queuedAt: string): Promise<boolean>;
   withWhoopAccessToken<T>(
     whoopUserId: number,
     request: (accessToken: string) => Promise<T>,
     refresh: (refreshToken: string, options: { signal: AbortSignal }) => Promise<WhoopTokenResponse>,
   ): Promise<T>;
-  disconnect(whoopUserId: number, disconnectedAt: string): Promise<boolean>;
-  deleteLocalData(whoopUserId: number): Promise<void>;
+  disconnect(whoopUserId: number, credentialVersion: number, disconnectedAt: string): Promise<boolean>;
+  deleteLocalData(whoopUserId: number, credentialVersion: number): Promise<boolean>;
 }
 
 interface IntegrationClient {
@@ -53,7 +56,9 @@ export interface WhoopIntegrationDependencies {
 
 const configured = (env: Env): boolean => {
   if (!env.DB) return false;
-  if (!env.WHOOP_SYNC_QUEUE || typeof env.WHOOP_SYNC_QUEUE.send !== "function") return false;
+  if (!env.WHOOP_SYNC_QUEUE
+    || typeof env.WHOOP_SYNC_QUEUE.send !== "function"
+    || typeof env.WHOOP_SYNC_QUEUE.sendBatch !== "function") return false;
   const requiredStrings = [
     env.WHOOP_CLIENT_ID,
     env.WHOOP_CLIENT_SECRET,
@@ -96,7 +101,7 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
     const connection = await repository.getCurrentConnection();
     if (!connection) return c.json({ status: "not_connected", progress: [] });
     const progress = await repository.getSyncProgress(connection.whoopUserId);
-    const { whoopUserId: _whoopUserId, ...status } = connection;
+    const { whoopUserId: _whoopUserId, credentialVersion: _credentialVersion, ...status } = connection;
     return c.json({ ...status, progress });
   });
 
@@ -122,27 +127,24 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
 
   app.get("/integrations/whoop/callback", async (c) => {
     if (!configured(c.env)) return callbackFailure(c.env);
-    const code = c.req.query("code");
     const state = c.req.query("state");
-    if (!code || !state) return callbackFailure(c.env);
+    if (!state) return callbackFailure(c.env);
     try {
       const repository = repositoryFor(c.env);
       const consumed = await repository.consumeOAuthState(await hashOAuthState(state), now().toISOString());
       if (!consumed) return callbackFailure(c.env);
+      const code = c.req.query("code");
+      if (!code) return callbackFailure(c.env);
       const unauthenticatedClient = clientFor(c.env, "");
       const tokens = await unauthenticatedClient.exchangeAuthorizationCode(code);
       const authenticatedClient = clientFor(c.env, tokens.access_token);
       const profile = await authenticatedClient.getProfile();
-      const existing = await repository.getCurrentConnection();
-      if (existing && existing.whoopUserId !== profile.user_id && existing.status !== "disconnected") {
-        return callbackFailure(c.env);
-      }
       const connectedAt = now();
       const [accessToken, refreshToken] = await Promise.all([
         encryptWhoopToken(c.env.WHOOP_TOKEN_ENCRYPTION_KEY, profile.user_id, "access", tokens.access_token),
         encryptWhoopToken(c.env.WHOOP_TOKEN_ENCRYPTION_KEY, profile.user_id, "refresh", tokens.refresh_token),
       ]);
-      await repository.upsertConnection({
+      const credentialVersion = await repository.claimAndUpsertConnection({
         whoopUserId: profile.user_id,
         status: "backfilling",
         accessToken,
@@ -150,8 +152,18 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
         refreshToken,
         grantedScopes: tokens.scope?.split(/\s+/).filter(Boolean) ?? WHOOP_SCOPES,
         connectedAt: connectedAt.toISOString(),
+        initialBackfillPending: true,
       });
-      await Promise.all(messagesFor("backfill", profile.user_id).map((message) => c.env.WHOOP_SYNC_QUEUE.send(message)));
+      if (credentialVersion === null) return callbackFailure(c.env);
+      await c.env.WHOOP_SYNC_QUEUE.sendBatch(
+        messagesFor("backfill", profile.user_id).map((body) => ({ body })),
+      );
+      const markedQueued = await repository.markInitialBackfillQueued(
+        profile.user_id,
+        credentialVersion,
+        now().toISOString(),
+      );
+      if (!markedQueued) return callbackFailure(c.env);
       return c.redirect(resultRedirect(c.env, "connected"));
     } catch {
       return callbackFailure(c.env);
@@ -177,7 +189,11 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
         (accessToken) => clientFor(c.env, accessToken).revokeAccess(accessToken),
         (refreshToken, options) => clientFor(c.env, "").refreshToken(refreshToken, options),
       );
-      const disconnected = await repository.disconnect(connection.whoopUserId, now().toISOString());
+      const disconnected = await repository.disconnect(
+        connection.whoopUserId,
+        connection.credentialVersion,
+        now().toISOString(),
+      );
       if (!disconnected) return c.json({ error: "WHOOP connection changed before disconnect" }, 409);
       return c.json({ ok: true });
     } catch {
@@ -191,7 +207,8 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
     if (!connection || connection.status !== "disconnected") {
       return c.json({ error: "Disconnect WHOOP before deleting local data" }, 409);
     }
-    await repository.deleteLocalData(connection.whoopUserId);
+    const deleted = await repository.deleteLocalData(connection.whoopUserId, connection.credentialVersion);
+    if (!deleted) return c.json({ error: "WHOOP connection changed before data deletion" }, 409);
     return c.json({ ok: true });
   });
 
@@ -214,8 +231,18 @@ openApiRegistry.registerPath({
   responses: okResponses(whoopAuthorizationUrlResponseSchema),
 });
 
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/integrations/whoop/sync",
+  summary: "Queue WHOOP reconciliation",
+  security: authSecurity,
+  responses: {
+    202: openApiResponse(okSchema, "Reconciliation queued"),
+    ...errorResponses,
+  },
+});
+
 for (const [method, path, summary] of [
-  ["post", "/v1/integrations/whoop/sync", "Queue WHOOP reconciliation"],
   ["delete", "/v1/integrations/whoop", "Revoke WHOOP access and disconnect"],
   ["delete", "/v1/integrations/whoop/data", "Delete disconnected local WHOOP data"],
 ] as const) {

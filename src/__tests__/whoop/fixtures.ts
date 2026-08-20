@@ -102,7 +102,7 @@ export const ENV: Env = {
   WHOOP_TOKEN_ENCRYPTION_KEY: KEY,
   WHOOP_REDIRECT_URI: "https://api.example.test/integrations/whoop/callback",
   OS_BASE_URL: "https://os.example.test",
-  WHOOP_SYNC_QUEUE: { send: vi.fn() } as unknown as Queue<WhoopQueueMessage>,
+  WHOOP_SYNC_QUEUE: { send: vi.fn(), sendBatch: vi.fn() } as unknown as Queue<WhoopQueueMessage>,
   LANYARD_USER_ID: "test-lanyard-user-id",
   WAKATIME_API_KEY: "test-wakatime-api-key",
   WAKATIME_TIMEZONE: "America/New_York",

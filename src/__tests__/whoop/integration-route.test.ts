@@ -7,6 +7,7 @@ import {
   type WhoopIntegrationDependencies,
 } from "../../routes/whoop-integration";
 import type { Env } from "../../types/env";
+import { getOpenApiDocument } from "../../schemas/openapi";
 import { ENV, PROFILE, bearerGet, bearerPost } from "./fixtures";
 
 const FIXED_CONNECTED_REDIRECT = "https://os.example.test/health/source?result=connected";
@@ -16,6 +17,7 @@ const RESOURCES = ["profile", "body_measurement", "cycle", "recovery", "sleep", 
 type Connection = {
   whoopUserId: number;
   status: "not_connected" | "backfilling" | "active" | "disconnected";
+  credentialVersion: number;
   granted_scopes?: string[];
 };
 
@@ -25,9 +27,10 @@ function createDependencies(connection: Connection | null = null) {
     consumeOAuthState: vi.fn().mockResolvedValue(true),
     getCurrentConnection: vi.fn().mockResolvedValue(connection),
     getSyncProgress: vi.fn().mockResolvedValue([]),
-    upsertConnection: vi.fn().mockResolvedValue(undefined),
+    claimAndUpsertConnection: vi.fn().mockResolvedValue(1),
+    markInitialBackfillQueued: vi.fn().mockResolvedValue(true),
     disconnect: vi.fn().mockResolvedValue(true),
-    deleteLocalData: vi.fn().mockResolvedValue(undefined),
+    deleteLocalData: vi.fn().mockResolvedValue(true),
     withWhoopAccessToken: vi.fn(async (_userId, request) => request("fixture-access-token")),
   };
   const client = {
@@ -121,30 +124,60 @@ describe("WHOOP integration management routes", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe(FIXED_CONNECTED_REDIRECT);
-    expect(repository.upsertConnection).toHaveBeenCalledWith(expect.objectContaining({
+    expect(repository.claimAndUpsertConnection).toHaveBeenCalledWith(expect.objectContaining({
       whoopUserId: PROFILE.user_id,
       status: "backfilling",
+      initialBackfillPending: true,
       accessToken: expect.objectContaining({ ciphertext: expect.any(String), nonce: expect.any(String) }),
       refreshToken: expect.objectContaining({ ciphertext: expect.any(String), nonce: expect.any(String) }),
     }));
-    expect(ENV.WHOOP_SYNC_QUEUE.send).toHaveBeenCalledTimes(6);
-    expect((ENV.WHOOP_SYNC_QUEUE.send as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([message]) => message))
-      .toEqual(RESOURCES.map((resource) => ({ kind: "backfill", whoopUserId: PROFILE.user_id, resource })));
+    expect(ENV.WHOOP_SYNC_QUEUE.send).not.toHaveBeenCalled();
+    expect(ENV.WHOOP_SYNC_QUEUE.sendBatch).toHaveBeenCalledWith(RESOURCES.map((resource) => ({
+      body: { kind: "backfill", whoopUserId: PROFILE.user_id, resource },
+    })));
+    expect(repository.markInitialBackfillQueued).toHaveBeenCalledWith(PROFILE.user_id, 1, expect.any(String));
   });
 
   it("does not replace an existing active WHOOP identity", async () => {
-    const { dependencies, repository } = createDependencies({ whoopUserId: 7, status: "active" });
+    const { dependencies, repository } = createDependencies({ whoopUserId: 7, status: "active", credentialVersion: 1 });
+    repository.claimAndUpsertConnection.mockResolvedValue(null);
     const app = createApp(dependencies);
 
     const response = await app.request("/integrations/whoop/callback?code=redacted-code&state=fresh-state", {}, ENV);
 
     expect(response.headers.get("location")).toBe(FIXED_FAILED_REDIRECT);
-    expect(repository.upsertConnection).not.toHaveBeenCalled();
+    expect(repository.claimAndUpsertConnection).toHaveBeenCalledTimes(1);
+    expect(ENV.WHOOP_SYNC_QUEUE.sendBatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps durable initial-backfill intent when the atomic queue batch is ambiguous", async () => {
+    const { dependencies, repository } = createDependencies();
+    const app = createApp(dependencies);
+    (ENV.WHOOP_SYNC_QUEUE.sendBatch as unknown as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error("queue publication unknown"));
+
+    const response = await app.request("/integrations/whoop/callback?code=redacted-code&state=fresh-state", {}, ENV);
+
+    expect(response.headers.get("location")).toBe(FIXED_FAILED_REDIRECT);
+    expect(repository.claimAndUpsertConnection).toHaveBeenCalledWith(expect.objectContaining({ initialBackfillPending: true }));
+    expect(repository.markInitialBackfillQueued).not.toHaveBeenCalled();
     expect(ENV.WHOOP_SYNC_QUEUE.send).not.toHaveBeenCalled();
+    expect(ENV.WHOOP_SYNC_QUEUE.sendBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("consumes a valid state before failing a provider denial without code exchange", async () => {
+    const { dependencies, repository, client } = createDependencies();
+    const app = createApp(dependencies);
+
+    const response = await app.request("/integrations/whoop/callback?state=fresh-state&error=access_denied", {}, ENV);
+
+    expect(response.headers.get("location")).toBe(FIXED_FAILED_REDIRECT);
+    expect(repository.consumeOAuthState).toHaveBeenCalledWith(expect.any(String), expect.any(String));
+    expect(client.exchangeAuthorizationCode).not.toHaveBeenCalled();
   });
 
   it("queues only reconciliation work for a manual sync", async () => {
-    const { dependencies, client } = createDependencies({ whoopUserId: PROFILE.user_id, status: "active" });
+    const { dependencies, client } = createDependencies({ whoopUserId: PROFILE.user_id, status: "active", credentialVersion: 1 });
     const app = createApp(dependencies);
 
     const response = await app.request("/v1/integrations/whoop/sync", bearerPost(), ENV);
@@ -157,19 +190,19 @@ describe("WHOOP integration management routes", () => {
   });
 
   it("revokes before clearing token fields and keeps imported source history", async () => {
-    const { dependencies, repository, client } = createDependencies({ whoopUserId: PROFILE.user_id, status: "active" });
+    const { dependencies, repository, client } = createDependencies({ whoopUserId: PROFILE.user_id, status: "active", credentialVersion: 1 });
     const app = createApp(dependencies);
 
     const response = await app.request("/v1/integrations/whoop", { method: "DELETE", ...bearerGet() }, ENV);
 
     expect(response.status).toBe(200);
     expect(client.revokeAccess).toHaveBeenCalledWith("fixture-access-token");
-    expect(repository.disconnect).toHaveBeenCalledWith(PROFILE.user_id, expect.any(String));
+    expect(repository.disconnect).toHaveBeenCalledWith(PROFILE.user_id, 1, expect.any(String));
     expect(repository.deleteLocalData).not.toHaveBeenCalled();
   });
 
   it("does not clear credentials when WHOOP revocation fails", async () => {
-    const { dependencies, repository, client } = createDependencies({ whoopUserId: PROFILE.user_id, status: "active" });
+    const { dependencies, repository, client } = createDependencies({ whoopUserId: PROFILE.user_id, status: "active", credentialVersion: 1 });
     client.revokeAccess.mockRejectedValue(new Error("upstream detail"));
     const app = createApp(dependencies);
 
@@ -180,8 +213,8 @@ describe("WHOOP integration management routes", () => {
   });
 
   it("allows local WHOOP data deletion only after disconnect", async () => {
-    const active = createDependencies({ whoopUserId: PROFILE.user_id, status: "active" });
-    const disconnected = createDependencies({ whoopUserId: PROFILE.user_id, status: "disconnected" });
+    const active = createDependencies({ whoopUserId: PROFILE.user_id, status: "active", credentialVersion: 1 });
+    const disconnected = createDependencies({ whoopUserId: PROFILE.user_id, status: "disconnected", credentialVersion: 2 });
 
     const activeResponse = await createApp(active.dependencies)
       .request("/v1/integrations/whoop/data", { method: "DELETE", ...bearerGet() }, ENV);
@@ -191,13 +224,29 @@ describe("WHOOP integration management routes", () => {
     expect(activeResponse.status).toBe(409);
     expect(active.repository.deleteLocalData).not.toHaveBeenCalled();
     expect(disconnectedResponse.status).toBe(200);
-    expect(disconnected.repository.deleteLocalData).toHaveBeenCalledWith(PROFILE.user_id);
+    expect(disconnected.repository.deleteLocalData).toHaveBeenCalledWith(PROFILE.user_id, 2);
+  });
+
+  it("returns conflict when a concurrent reconnect invalidates disconnect or local-delete CAS", async () => {
+    const disconnect = createDependencies({ whoopUserId: PROFILE.user_id, status: "active", credentialVersion: 1 });
+    disconnect.repository.disconnect.mockResolvedValue(false);
+    const deletion = createDependencies({ whoopUserId: PROFILE.user_id, status: "disconnected", credentialVersion: 2 });
+    deletion.repository.deleteLocalData.mockResolvedValue(false);
+
+    const disconnectResponse = await createApp(disconnect.dependencies)
+      .request("/v1/integrations/whoop", { method: "DELETE", ...bearerGet() }, ENV);
+    const deleteResponse = await createApp(deletion.dependencies)
+      .request("/v1/integrations/whoop/data", { method: "DELETE", ...bearerGet() }, ENV);
+
+    expect(disconnectResponse.status).toBe(409);
+    expect(deleteResponse.status).toBe(409);
   });
 
   it("returns a token-free connection and progress projection", async () => {
     const { dependencies, repository } = createDependencies({
       whoopUserId: PROFILE.user_id,
       status: "active",
+      credentialVersion: 1,
       granted_scopes: ["offline", "read:profile"],
     });
     repository.getSyncProgress.mockResolvedValue([{ resource: "sleep", mode: "backfill", status: "running" }]);
@@ -213,5 +262,17 @@ describe("WHOOP integration management routes", () => {
       progress: [{ resource: "sleep", mode: "backfill", status: "running" }],
     });
     expect(JSON.stringify(body)).not.toMatch(/token|ciphertext|nonce|raw_json/i);
+  });
+
+  it("advertises asynchronous reconciliation and exact WHOOP status/progress values", () => {
+    const document = getOpenApiDocument("test");
+    const sync = document.paths?.["/v1/integrations/whoop/sync"]?.post;
+    const status = document.paths?.["/v1/integrations/whoop"]?.get;
+
+    expect(sync?.responses).toHaveProperty("202");
+    expect(JSON.stringify(status)).toContain("not_connected");
+    expect(JSON.stringify(status)).toContain("backfilling");
+    expect(JSON.stringify(status)).toContain("body_measurement");
+    expect(JSON.stringify(status)).toContain("page_count");
   });
 });

@@ -111,7 +111,15 @@ export const whoopAuthorizationUrlResponseSchema = z.object({
 });
 
 export const whoopIntegrationStatusResponseSchema = z.object({
-  status: z.string(),
+  status: z.enum([
+    "not_connected",
+    "connecting",
+    "backfilling",
+    "active",
+    "needs_reauth",
+    "disconnected",
+    "error",
+  ]),
   granted_scopes: z.array(z.string()).optional(),
   connected_at: dateTimeSchema.nullable().optional(),
   refreshed_at: dateTimeSchema.nullable().optional(),
@@ -121,7 +129,15 @@ export const whoopIntegrationStatusResponseSchema = z.object({
   last_error: z.string().nullable().optional(),
   consecutive_failure_count: z.number().optional(),
   updated_at: dateTimeSchema.optional(),
-  progress: z.array(genericObjectSchema),
+  progress: z.array(z.object({
+    resource: z.enum(["profile", "body_measurement", "cycle", "recovery", "sleep", "workout"]),
+    mode: z.enum(["backfill", "reconcile", "webhook"]),
+    status: z.enum(["queued", "running", "complete", "failed"]),
+    page_count: z.number().int().nonnegative(),
+    record_count: z.number().int().nonnegative(),
+    updated_at: dateTimeSchema,
+    last_error: z.string().nullable(),
+  })),
 });
 
 // OpenAPI helper functions
