@@ -147,6 +147,7 @@ export class WhoopClient {
     return this.requestToken("token refresh", new URLSearchParams([
       ["grant_type", "refresh_token"],
       ["refresh_token", refreshToken],
+      ["scope", "offline"],
       ["client_id", this.env.WHOOP_CLIENT_ID],
       ["client_secret", this.env.WHOOP_CLIENT_SECRET],
     ]));
@@ -160,13 +161,13 @@ export class WhoopClient {
   }
 
   async getProfile(): Promise<WhoopProviderRecord<WhoopProfile>> {
-    return parseProviderPayload(whoopProfileSchema, await this.requestJson("profile", "/user/profile"), "profile");
+    return parseProviderPayload(whoopProfileSchema, await this.requestJson("profile", "/user/profile/basic"), "profile");
   }
 
   async getBodyMeasurements(): Promise<WhoopProviderRecord<WhoopBodyMeasurement>> {
     return parseProviderPayload(
       whoopBodyMeasurementSchema,
-      await this.requestJson("body measurement", "/user/measurement"),
+      await this.requestJson("body measurement", "/user/measurement/body"),
       "body measurement",
     );
   }
@@ -176,7 +177,11 @@ export class WhoopClient {
     params: WhoopCollectionParams = {},
   ): Promise<WhoopCollectionPage<WhoopCollectionRecordMap[R]>> {
     const definition = collectionDefinitions[resource];
-    const payload = await this.requestJson(`list ${resource}`, `${definition.path}${this.query(params)}`);
+    const normalizedParams = { ...params, limit: params.limit ?? 25 };
+    if (!Number.isInteger(normalizedParams.limit) || normalizedParams.limit < 1 || normalizedParams.limit > 25) {
+      throw new Error("WHOOP collection limit must be an integer from 1 to 25");
+    }
+    const payload = await this.requestJson(`list ${resource}`, `${definition.path}${this.query(normalizedParams)}`);
     const responseRecords = typeof payload === "object" && payload !== null
       ? (payload as { records?: unknown }).records
       : undefined;
@@ -198,18 +203,22 @@ export class WhoopClient {
   }
 
   async getCycle(cycleId: number): Promise<WhoopProviderRecord<WhoopCycle>> {
+    this.assertCycleId(cycleId);
     return parseProviderPayload(whoopCycleSchema, await this.requestJson("cycle", `/cycle/${cycleId}`), "cycle");
   }
 
   async getRecovery(cycleId: number): Promise<WhoopProviderRecord<WhoopRecovery>> {
-    return parseProviderPayload(whoopRecoverySchema, await this.requestJson("recovery", `/recovery/${cycleId}`), "recovery");
+    this.assertCycleId(cycleId);
+    return parseProviderPayload(whoopRecoverySchema, await this.requestJson("recovery", `/cycle/${cycleId}/recovery`), "recovery");
   }
 
   async getSleep(sleepId: string): Promise<WhoopProviderRecord<WhoopSleep>> {
+    this.assertActivityId(sleepId);
     return parseProviderPayload(whoopSleepSchema, await this.requestJson("sleep", `/activity/sleep/${sleepId}`), "sleep");
   }
 
   async getWorkout(workoutId: string): Promise<WhoopProviderRecord<WhoopWorkout>> {
+    this.assertActivityId(workoutId);
     return parseProviderPayload(whoopWorkoutSchema, await this.requestJson("workout", `/activity/workout/${workoutId}`), "workout");
   }
 
@@ -270,5 +279,17 @@ export class WhoopClient {
     if (params.nextToken) query.set("nextToken", params.nextToken);
     const serialized = query.toString();
     return serialized ? `?${serialized}` : "";
+  }
+
+  private assertCycleId(cycleId: number): void {
+    if (!Number.isInteger(cycleId) || cycleId <= 0) {
+      throw new Error("WHOOP cycle ID must be a positive integer");
+    }
+  }
+
+  private assertActivityId(activityId: string): void {
+    if (!z.string().uuid().safeParse(activityId).success) {
+      throw new Error("WHOOP activity ID must be a UUID");
+    }
   }
 }

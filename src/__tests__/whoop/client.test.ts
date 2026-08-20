@@ -64,18 +64,18 @@ describe("WHOOP v2 client", () => {
     await client.getWorkout(WORKOUT.id);
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      "https://api.prod.whoop.com/developer/v2/cycle?start=2026-08-19T00%3A00%3A00.000Z&end=2026-08-20T00%3A00%3A00.000Z&nextToken=next",
+      "https://api.prod.whoop.com/developer/v2/cycle?start=2026-08-19T00%3A00%3A00.000Z&end=2026-08-20T00%3A00%3A00.000Z&limit=25&nextToken=next",
       "https://api.prod.whoop.com/developer/v2/recovery?limit=25",
       "https://api.prod.whoop.com/developer/v2/activity/workout?limit=25",
       "https://api.prod.whoop.com/developer/v2/cycle/9",
-      "https://api.prod.whoop.com/developer/v2/recovery/9",
+      "https://api.prod.whoop.com/developer/v2/cycle/9/recovery",
       `https://api.prod.whoop.com/developer/v2/activity/sleep/${SLEEP.id}`,
       `https://api.prod.whoop.com/developer/v2/activity/workout/${WORKOUT.id}`,
     ]);
   });
 
   it("validates user responses and keeps body user context outside the provider payload", async () => {
-    vi.spyOn(globalThis, "fetch")
+    const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse(PROFILE))
       .mockResolvedValueOnce(jsonResponse(BODY_MEASUREMENT));
     const client = new WhoopClient(ENV, "access");
@@ -85,6 +85,10 @@ describe("WHOOP v2 client", () => {
       ...BODY_MEASUREMENT,
       rawJson: JSON.stringify(BODY_MEASUREMENT),
     });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://api.prod.whoop.com/developer/v2/user/profile/basic",
+      "https://api.prod.whoop.com/developer/v2/user/measurement/body",
+    ]);
   });
 
   it("exchanges and refreshes tokens through the OAuth endpoint without logging token values", async () => {
@@ -106,7 +110,7 @@ describe("WHOOP v2 client", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(2,
       "https://api.prod.whoop.com/oauth/oauth2/token",
-      expect.objectContaining({ body: "grant_type=refresh_token&refresh_token=test-refresh&client_id=test-whoop-client-id&client_secret=test-whoop-client-secret" }),
+      expect.objectContaining({ body: "grant_type=refresh_token&refresh_token=test-refresh&scope=offline&client_id=test-whoop-client-id&client_secret=test-whoop-client-secret" }),
     );
   });
 
@@ -153,6 +157,40 @@ describe("WHOOP v2 client", () => {
       retryAfterSeconds: 60,
       retryable: true,
     });
+  });
+
+  it("uses the provider maximum of 25 when no collection limit is supplied", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ records: [SLEEP] }));
+    const client = new WhoopClient(ENV, "access");
+
+    await client.getCollection("sleep");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.prod.whoop.com/developer/v2/activity/sleep?limit=25",
+      expect.any(Object),
+    );
+  });
+
+  it("rejects provider collection limits outside the whole-number range 1 through 25 before fetching", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const client = new WhoopClient(ENV, "access");
+
+    await expect(client.getCollection("sleep", { limit: 0 })).rejects.toThrow("WHOOP collection limit must be an integer from 1 to 25");
+    await expect(client.getCollection("sleep", { limit: 12.5 })).rejects.toThrow("WHOOP collection limit must be an integer from 1 to 25");
+    await expect(client.getCollection("sleep", { limit: 26 })).rejects.toThrow("WHOOP collection limit must be an integer from 1 to 25");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid provider IDs before constructing user-data paths", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const client = new WhoopClient(ENV, "access");
+
+    await expect(client.getCycle(0)).rejects.toThrow("WHOOP cycle ID must be a positive integer");
+    await expect(client.getCycle(1.5)).rejects.toThrow("WHOOP cycle ID must be a positive integer");
+    await expect(client.getRecovery(-1)).rejects.toThrow("WHOOP cycle ID must be a positive integer");
+    await expect(client.getSleep("not-a-uuid")).rejects.toThrow("WHOOP activity ID must be a UUID");
+    await expect(client.getWorkout("../../not-a-uuid")).rejects.toThrow("WHOOP activity ID must be a UUID");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("identifies unauthorized responses and never includes upstream bodies in errors", async () => {
