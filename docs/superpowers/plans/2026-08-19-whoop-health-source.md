@@ -430,6 +430,15 @@ it("rejects a timestamp older than five minutes before inserting an event", asyn
   expect(response.status).toBe(401);
   expect(repository.recordWebhookEvent).not.toHaveBeenCalled();
 });
+
+it("replays a durable initial backfill intent after ambiguous queue publication", async () => {
+  repository.getPendingInitialBackfills.mockResolvedValue([{ whoopUserId: 42, credentialVersion: 3 }]);
+  await handleScheduled(SCHEDULED_EVENT, ENV);
+  expect(ENV.WHOOP_SYNC_QUEUE.sendBatch).toHaveBeenCalledWith(
+    expect.arrayContaining([expect.objectContaining({ body: expect.objectContaining({ kind: "backfill", whoopUserId: 42 }) })]),
+  );
+  expect(repository.markInitialBackfillQueued).toHaveBeenCalledWith(42, 3, expect.any(String));
+});
 ```
 
 - [ ] **Step 2: Run failing webhook/scheduled tests**
@@ -442,7 +451,7 @@ Expected: FAIL because the public webhook and `whoop` scheduled job do not exist
 
 Read `await c.req.raw.text()` exactly once. Require the timestamp header to be a finite integer number of milliseconds since epoch, reject values more than 300,000ms in the past or future, and compute `base64(HMAC-SHA-256(originalTimestampHeader + rawBody, WHOOP_CLIENT_SECRET))`. Compare decoded byte arrays with a constant-time padded XOR loop and accept only `difference === 0`. Require both headers, validate the strict v2 envelope, and check the connection is active. Atomically insert a trace with status `received`; send the queue message and mark it `queued` before returning `204`. A duplicate already marked `queued` returns `204`; a duplicate still in `received` retries queue publication so a transient Queue failure cannot permanently suppress the event. Mount this public route outside `/v1/*`; do not add it to bearer skip paths.
 
-In `handleScheduled`, enqueue reconciliation only for active connections and run it through existing `runRefreshJob(env, "whoop", ...)`; preserve the independent `Promise.allSettled` behavior of other jobs. Refresh-before-expiry follows the Task 4 lease flow.
+In `handleScheduled`, first replay every durable `initial_backfill_pending` intent through one six-message `sendBatch`; clear the flag with `markInitialBackfillQueued` only after confirmed publication and only for the observed credential generation. Ambiguous publication leaves the flag set, so the next schedule safely sends duplicate idempotent backfill work rather than losing history. Then enqueue reconciliation only for active connections and run the work through existing `runRefreshJob(env, "whoop", ...)`; preserve the independent `Promise.allSettled` behavior of other jobs. Refresh-before-expiry follows the Task 4 lease flow.
 
 - [ ] **Step 4: Run focused tests and typecheck**
 
