@@ -44,9 +44,20 @@ export interface WhoopWebhookEvent {
 
 export type WhoopQueueMessage =
   | {
-      kind: "backfill" | "reconcile";
+      kind: "backfill";
       whoopUserId: number;
       connectionId: string;
+      resource: WhoopResource;
+      nextToken?: string;
+      pageCount?: number;
+      recordCount?: number;
+      trigger?: string;
+    }
+  | {
+      kind: "reconcile";
+      whoopUserId: number;
+      connectionId: string;
+      reconcileRunId: string;
       resource: WhoopResource;
       nextToken?: string;
       windowStart?: string;

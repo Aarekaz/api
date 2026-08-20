@@ -29,6 +29,8 @@ type SyncRepository = Pick<WhoopRepository,
   | "upsertSourceRecord"
   | "tombstoneSourceRecord"
   | "upsertCheckpoint"
+  | "recordReconciliationSeen"
+  | "finalizeReconciliation"
   | "getPendingRecoveryCycleIds"
   | "markWebhookProcessed"
   | "markWebhookFailed"
@@ -64,6 +66,24 @@ const RECONCILIATION_RESOURCES = [
   "profile", "body_measurement", "cycle", "recovery", "sleep", "workout",
 ] as const;
 
+const checkpointIdentity = (body: Exclude<WhoopQueueMessage, { kind: "webhook" }>) => body.kind === "backfill"
+  ? { syncRunId: "initial-backfill", targetId: "" }
+  : {
+      syncRunId: body.reconcileRunId,
+      targetId: body.recoveryCycleId === undefined ? "" : `recovery-cycle:${body.recoveryCycleId}`,
+    };
+
+const providerIdFor = (
+  resource: "cycle" | "recovery" | "sleep" | "workout",
+  record: Record<string, unknown>,
+): string | number => {
+  const providerId = resource === "recovery" ? record.sleep_id : record.id;
+  if (typeof providerId !== "string" && typeof providerId !== "number") {
+    throw new Error("WHOOP source identity is unavailable");
+  }
+  return providerId;
+};
+
 export async function enqueueReconciliation(
   env: Env,
   whoopUserId: number,
@@ -81,11 +101,13 @@ export async function enqueueReconciliation(
   }
   const windowEnd = now.toISOString();
   const windowStart = new Date(now.getTime() - RECONCILIATION_WINDOW_MILLISECONDS).toISOString();
+  const reconcileRunId = crypto.randomUUID();
   const pendingRecoveryCycleIds = await repository.getPendingRecoveryCycleIds(whoopUserId, 25);
   const messages: WhoopQueueMessage[] = RECONCILIATION_RESOURCES.map((resource) => ({
     kind: "reconcile",
     whoopUserId,
     connectionId: connection.connectionId,
+    reconcileRunId,
     resource,
     ...(isCollectionResource(resource) ? { windowStart, windowEnd } : {}),
     trigger,
@@ -94,6 +116,7 @@ export async function enqueueReconciliation(
     kind: "reconcile" as const,
     whoopUserId,
     connectionId: connection.connectionId,
+    reconcileRunId,
     resource: "recovery" as const,
     recoveryCycleId,
     trigger,
@@ -216,6 +239,7 @@ export async function handleWhoopQueue(
       ? body.windowStart ?? new Date(Date.parse(windowEnd!) - RECONCILIATION_WINDOW_MILLISECONDS).toISOString()
       : null;
     const tombstonePolicy = body.kind === "reconcile" ? "reconcile" : "preserve";
+    const identity = checkpointIdentity(body);
 
     const processPage = async (client: SyncClient): Promise<void> => {
       if (resource === "profile" || resource === "body_measurement") {
@@ -234,6 +258,7 @@ export async function handleWhoopQueue(
           connectionId: body.connectionId,
           resource,
           mode: body.kind,
+          ...identity,
           windowStart,
           windowEnd,
           nextToken: null,
@@ -257,7 +282,9 @@ export async function handleWhoopQueue(
         }
         return;
       }
-      if (resource === "recovery" && body.recoveryCycleId !== undefined) {
+      if (body.kind === "reconcile"
+        && resource === "recovery"
+        && body.recoveryCycleId !== undefined) {
         const record = await client.getRecovery(body.recoveryCycleId);
         const syncedAt = now().toISOString();
         requireCurrentWrite(await repository.upsertSourceRecord("recovery", record, {
@@ -265,6 +292,22 @@ export async function handleWhoopQueue(
           syncedAt,
           whoopUserId: body.whoopUserId,
           connectionId: body.connectionId,
+        }));
+        requireCurrentWrite(await repository.upsertCheckpoint({
+          whoopUserId: body.whoopUserId,
+          connectionId: body.connectionId,
+          resource,
+          mode: body.kind,
+          ...identity,
+          windowStart,
+          windowEnd,
+          nextToken: null,
+          status: "complete",
+          pageCount: 1,
+          recordCount: 1,
+          createdAt: syncedAt,
+          updatedAt: syncedAt,
+          lastError: null,
         }));
         return;
       }
@@ -284,14 +327,25 @@ export async function handleWhoopQueue(
           whoopUserId: body.whoopUserId,
           connectionId: body.connectionId,
         }));
+        if (body.kind === "reconcile") {
+          requireCurrentWrite(await repository.recordReconciliationSeen({
+            whoopUserId: body.whoopUserId,
+            connectionId: body.connectionId,
+            reconcileRunId: body.reconcileRunId,
+            resource,
+            providerId: providerIdFor(resource, record as unknown as Record<string, unknown>),
+            seenAt: syncedAt,
+          }));
+        }
       }
       const pageCount = (body.pageCount ?? 0) + 1;
       const recordCount = (body.recordCount ?? 0) + page.records.length;
-      requireCurrentWrite(await repository.upsertCheckpoint({
+      const checkpoint = {
         whoopUserId: body.whoopUserId,
         connectionId: body.connectionId,
         resource,
         mode: body.kind,
+        ...identity,
         windowStart,
         windowEnd,
         nextToken: page.nextToken ?? null,
@@ -301,21 +355,39 @@ export async function handleWhoopQueue(
         createdAt: syncedAt,
         updatedAt: syncedAt,
         lastError: null,
-      }));
+      };
+      if (body.kind === "reconcile" && page.nextToken === undefined) {
+        requireCurrentWrite(await repository.finalizeReconciliation(checkpoint));
+      } else {
+        requireCurrentWrite(await repository.upsertCheckpoint(checkpoint));
+      }
       if (page.nextToken !== undefined) {
         try {
-          await env.WHOOP_SYNC_QUEUE.send({
-            kind: body.kind,
-            whoopUserId: body.whoopUserId,
-            connectionId: body.connectionId,
-            resource,
-            nextToken: page.nextToken,
-            pageCount,
-            recordCount,
-            ...(windowStart === null ? {} : { windowStart }),
-            ...(windowEnd === null ? {} : { windowEnd }),
-            ...(body.trigger === undefined ? {} : { trigger: body.trigger }),
-          });
+          const nextMessage: WhoopQueueMessage = body.kind === "reconcile"
+            ? {
+                kind: "reconcile",
+                whoopUserId: body.whoopUserId,
+                connectionId: body.connectionId,
+                reconcileRunId: body.reconcileRunId,
+                resource,
+                nextToken: page.nextToken,
+                pageCount,
+                recordCount,
+                windowStart: windowStart!,
+                windowEnd: windowEnd!,
+                ...(body.trigger === undefined ? {} : { trigger: body.trigger }),
+              }
+            : {
+                kind: "backfill",
+                whoopUserId: body.whoopUserId,
+                connectionId: body.connectionId,
+                resource,
+                nextToken: page.nextToken,
+                pageCount,
+                recordCount,
+                ...(body.trigger === undefined ? {} : { trigger: body.trigger }),
+              };
+          await env.WHOOP_SYNC_QUEUE.send(nextMessage);
         } catch {
           throw new WhoopPostCheckpointError();
         }
@@ -407,8 +479,9 @@ export async function handleWhoopQueue(
           connectionId: body.connectionId,
           resource: body.resource,
           mode: body.kind,
-          windowStart: body.windowStart ?? null,
-          windowEnd: body.windowEnd ?? null,
+          ...checkpointIdentity(body),
+          windowStart: body.kind === "reconcile" ? body.windowStart ?? null : null,
+          windowEnd: body.kind === "reconcile" ? body.windowEnd ?? null : null,
           nextToken: body.nextToken ?? null,
           status: permanentClientError ? "error" : "retrying",
           pageCount: body.pageCount ?? 0,

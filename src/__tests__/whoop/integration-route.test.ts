@@ -7,6 +7,7 @@ import {
   type WhoopIntegrationDependencies,
 } from "../../routes/whoop-integration";
 import type { Env } from "../../types/env";
+import type { WhoopQueueMessage } from "../../types/whoop";
 import { getOpenApiDocument } from "../../schemas/openapi";
 import { ENV, PROFILE, bearerGet, bearerPost } from "./fixtures";
 
@@ -147,7 +148,12 @@ describe("WHOOP integration management routes", () => {
         resource,
       },
     })));
-    expect(repository.markInitialBackfillQueued).toHaveBeenCalledWith(PROFILE.user_id, 1, expect.any(String));
+    expect(repository.markInitialBackfillQueued).toHaveBeenCalledWith(
+      PROFILE.user_id,
+      expect.any(String),
+      1,
+      expect.any(String),
+    );
   });
 
   it("does not replace an existing active WHOOP identity", async () => {
@@ -210,11 +216,19 @@ describe("WHOOP integration management routes", () => {
 
     expect(response.status).toBe(202);
     expect(ENV.WHOOP_SYNC_QUEUE.send).toHaveBeenCalledTimes(6);
-    expect((ENV.WHOOP_SYNC_QUEUE.send as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([message]) => message))
+    const messages = (ENV.WHOOP_SYNC_QUEUE.send as unknown as ReturnType<typeof vi.fn>)
+      .mock.calls.map(([message]) => message) as WhoopQueueMessage[];
+    const reconcileRunIds = messages.map((message) => {
+      if (message.kind !== "reconcile") throw new Error("Expected reconciliation message");
+      return message.reconcileRunId;
+    });
+    expect(new Set(reconcileRunIds).size).toBe(1);
+    expect(messages)
       .toEqual(RESOURCES.map((resource) => ({
         kind: "reconcile",
         whoopUserId: PROFILE.user_id,
         connectionId: CONNECTION_ID,
+        reconcileRunId: reconcileRunIds[0],
         resource,
       })));
     expect(client.exchangeAuthorizationCode).not.toHaveBeenCalled();

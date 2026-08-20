@@ -173,6 +173,7 @@ CREATE INDEX IF NOT EXISTS idx_whoop_workouts_deleted ON whoop_workouts(deleted_
 CREATE TABLE IF NOT EXISTS whoop_webhook_events (
   trace_id TEXT PRIMARY KEY,
   whoop_user_id INTEGER NOT NULL,
+  connection_id TEXT NOT NULL,
   resource_id TEXT NOT NULL,
   event_type TEXT NOT NULL CHECK (event_type IN ('workout.updated', 'workout.deleted', 'sleep.updated', 'sleep.deleted', 'recovery.updated', 'recovery.deleted')),
   received_at TEXT NOT NULL,
@@ -184,11 +185,23 @@ CREATE TABLE IF NOT EXISTS whoop_webhook_events (
 
 CREATE INDEX IF NOT EXISTS idx_whoop_webhook_events_user_received ON whoop_webhook_events(whoop_user_id, received_at);
 
+CREATE TABLE IF NOT EXISTS whoop_reconcile_seen (
+  whoop_user_id INTEGER NOT NULL,
+  connection_id TEXT NOT NULL,
+  reconcile_run_id TEXT NOT NULL,
+  resource TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  seen_at TEXT NOT NULL,
+  PRIMARY KEY (whoop_user_id, connection_id, reconcile_run_id, resource, provider_id)
+);
+
 CREATE TABLE IF NOT EXISTS whoop_sync_checkpoints (
   whoop_user_id INTEGER NOT NULL,
   connection_id TEXT NOT NULL,
   resource TEXT NOT NULL,
   mode TEXT NOT NULL,
+  sync_run_id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
   window_start TEXT,
   window_end TEXT,
   next_token TEXT,
@@ -198,8 +211,11 @@ CREATE TABLE IF NOT EXISTS whoop_sync_checkpoints (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   last_error TEXT,
-  PRIMARY KEY (whoop_user_id, resource)
+  PRIMARY KEY (whoop_user_id, connection_id, resource, mode, sync_run_id, target_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_whoop_sync_checkpoints_progress
+  ON whoop_sync_checkpoints(whoop_user_id, connection_id, target_id, resource, updated_at);
 
 CREATE TABLE IF NOT EXISTS whoop_sync_runs (
   run_id TEXT PRIMARY KEY,

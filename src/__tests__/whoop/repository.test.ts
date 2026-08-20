@@ -273,11 +273,12 @@ class FakeD1 {
       let bindingIndex = 0;
       const incoming: DbRow = {};
       for (const column of columns) {
-        if (column === "deleted_at" && normalized.includes("SELECT MAX(received_at)")) {
-          const [whoopUserId, resourceId, eventType] = bindings.slice(bindingIndex, bindingIndex + 3);
-          bindingIndex += 3;
+      if (column === "deleted_at" && normalized.includes("SELECT MAX(received_at)")) {
+          const [whoopUserId, connectionId, resourceId, eventType] = bindings.slice(bindingIndex, bindingIndex + 4);
+          bindingIndex += 4;
           const deletedAt = [...this.webhookEvents.values()]
             .filter((event) => event.whoop_user_id === whoopUserId
+              && event.connection_id === connectionId
               && event.resource_id === String(resourceId)
               && event.event_type === eventType)
             .map((event) => String(event.received_at))
@@ -293,7 +294,10 @@ class FakeD1 {
       if (current && String(incoming.upstream_updated_at ?? "") < String(current.upstream_updated_at ?? "")) {
         return result(0);
       }
-      if (current && normalized.includes("deleted_at = CASE") && normalized.includes(`${table}.deleted_at`)) {
+      if (current
+        && normalized.includes(`${table}.deleted_at`)
+        && (normalized.includes("deleted_at = CASE")
+          || normalized.includes(`deleted_at = ${table}.deleted_at`))) {
         incoming.deleted_at = [current.deleted_at, incoming.deleted_at]
           .filter((value): value is string => typeof value === "string")
           .sort()
@@ -366,7 +370,7 @@ class CasD1 {
 }
 
 function insertColumns(sql: string): string[] {
-  const match = sql.match(/\(([^)]+)\)\s*VALUES/i);
+  const match = sql.match(/\(([^)]+)\)\s*(?:VALUES|SELECT)/i);
   if (!match) throw new Error("Test fake could not parse INSERT columns");
   return match[1].split(",").map((column) => column.trim());
 }
@@ -489,7 +493,7 @@ describe("WHOOP repository", () => {
     ]);
     expect(fake.calls[0].sql).toContain("initial_backfill_pending = 0");
     expect(fake.calls[0].sql).toContain("COUNT(DISTINCT resource)");
-    expect(fake.calls[0].sql).toContain("mode = 'backfill' AND status = 'complete'");
+    expect(fake.calls[0].sql).toContain("mode = 'backfill' AND target_id = '' AND status = 'complete'");
     expect(fake.calls[0].sql).not.toContain("initial_backfill_pending = 1");
   });
 
@@ -502,7 +506,7 @@ describe("WHOOP repository", () => {
 
     expect(fake.calls[0].sql).toContain("credential_version = ?");
     expect(fake.calls[0].bindings).toEqual([NOW, NOW, 42, 3]);
-    expect(fake.batchStatements).toHaveLength(11);
+    expect(fake.batchStatements).toHaveLength(12);
     for (const statement of fake.batchStatements) {
       expect(statement.sql).toContain("credential_version = ?");
       expect(statement.sql).toContain("status = 'disconnected'");
@@ -633,6 +637,7 @@ describe("WHOOP repository", () => {
     await repository.recordWebhookEvent({
       traceId: "delete-before-backfill",
       whoopUserId: 42,
+      connectionId: "connection-1",
       resourceId: WORKOUT.id,
       eventType: "workout.deleted",
       receivedAt: "2026-08-19T08:00:00-04:00",
@@ -641,7 +646,10 @@ describe("WHOOP repository", () => {
     await repository.tombstoneSourceRecord("workout", WORKOUT.id, NOW);
     expect(fake.sourceRow("whoop_workouts", WORKOUT.id)).toBeUndefined();
 
-    await repository.upsertSourceRecord("workout", WORKOUT, { tombstonePolicy: "preserve" });
+    await repository.upsertSourceRecord("workout", WORKOUT, {
+      tombstonePolicy: "preserve",
+      connectionId: "connection-1",
+    });
     expect(fake.sourceRow("whoop_workouts", WORKOUT.id)).toMatchObject({
       deleted_at: "2026-08-19T12:00:00.000Z",
     });
@@ -739,6 +747,8 @@ describe("WHOOP repository", () => {
       connectionId: "connection-1",
       resource: "workout",
       mode: "reconcile",
+      syncRunId: "reconcile-1",
+      targetId: "",
       windowStart: "2026-08-18T08:00:00-04:00",
       windowEnd: "2026-08-19T08:00:00.5-04:00",
       status: "running",
@@ -749,11 +759,11 @@ describe("WHOOP repository", () => {
     });
 
     expect(fake.calls[0].bindings[3]).toBe("2026-08-19T12:00:00.250Z");
-    expect(fake.calls[1].bindings.slice(4, 6)).toEqual([
+    expect(fake.calls[1].bindings.slice(6, 8)).toEqual([
       "2026-08-18T12:00:00.000Z",
       "2026-08-19T12:00:00.500Z",
     ]);
-    expect(fake.calls[1].bindings.slice(10, 12)).toEqual([
+    expect(fake.calls[1].bindings.slice(12, 14)).toEqual([
       "2026-08-19T12:00:00.250Z",
       "2026-08-19T12:01:00.125Z",
     ]);
@@ -765,6 +775,7 @@ describe("WHOOP repository", () => {
     const event = {
       traceId: "trace-1",
       whoopUserId: 42,
+      connectionId: "connection-1",
       resourceId: WORKOUT.id,
       eventType: "workout.updated" as const,
       receivedAt: NOW,
@@ -772,8 +783,8 @@ describe("WHOOP repository", () => {
 
     await expect(repository.recordWebhookEvent(event)).resolves.toBe(true);
     await expect(repository.recordWebhookEvent(event)).resolves.toBe(false);
-    await expect(repository.markWebhookQueued(event.traceId)).resolves.toBe(true);
-    await expect(repository.markWebhookQueued(event.traceId)).resolves.toBe(false);
+    await expect(repository.markWebhookQueued(event.traceId, 42, "connection-1")).resolves.toBe(true);
+    await expect(repository.markWebhookQueued(event.traceId, 42, "connection-1")).resolves.toBe(false);
     expect(fake.webhookEvents.get(event.traceId)?.status).toBe("queued");
     const insert = fake.calls.find(({ sql }) => sql.includes("whoop_webhook_events") && sql.includes("INSERT"));
     expect(insert?.sql).toContain("ON CONFLICT(trace_id) DO NOTHING");
