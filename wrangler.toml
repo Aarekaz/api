@@ -19,3 +19,15 @@ database_id = "f83dc86f-521f-4880-b54e-e3238baf861f"
 [[r2_buckets]]
 binding = "R2_BUCKET"
 bucket_name = "api-media"
+
+[[queues.producers]]
+binding = "WHOOP_SYNC_QUEUE"
+queue = "whoop-health-sync"
+
+[[queues.consumers]]
+queue = "whoop-health-sync"
+dead_letter_queue = "whoop-health-sync-dlq"
+max_batch_size = 1
+max_batch_timeout = 1
+max_concurrency = 1
+max_retries = 5
