@@ -56,6 +56,12 @@ app.get("/", async (c) => {
     wakaHourly,
     githubDaily,
     githubRepos,
+    whoopProfiles,
+    whoopBodyMeasurements,
+    whoopCycles,
+    whoopRecoveries,
+    whoopSleeps,
+    whoopWorkouts,
   ] = await Promise.all([
     c.env.DB.prepare("SELECT * FROM profile WHERE id = 1").all(),
     c.env.DB.prepare("SELECT * FROM now_state WHERE id = 1").all(),
@@ -90,6 +96,58 @@ app.get("/", async (c) => {
     c.env.DB.prepare(
       "SELECT * FROM github_repo_totals ORDER BY range_start ASC, count DESC"
     ).all(),
+    c.env.DB.prepare(`
+      SELECT whoop_user_id, first_name, last_name, email,
+             upstream_created_at, upstream_updated_at, deleted_at, synced_at
+      FROM whoop_profiles
+      ORDER BY whoop_user_id ASC
+    `).all(),
+    c.env.DB.prepare(`
+      SELECT whoop_user_id, height_meter, weight_kilogram, max_heart_rate,
+             upstream_created_at, upstream_updated_at, deleted_at, synced_at
+      FROM whoop_body_measurements
+      ORDER BY whoop_user_id ASC
+    `).all(),
+    c.env.DB.prepare(`
+      SELECT cycle_id, whoop_user_id, start_at, end_at, timezone_offset,
+             score_state, strain, kilojoules, average_heart_rate,
+             max_heart_rate, upstream_created_at, upstream_updated_at,
+             deleted_at, synced_at
+      FROM whoop_cycles
+      ORDER BY start_at ASC, cycle_id ASC
+    `).all(),
+    c.env.DB.prepare(`
+      SELECT sleep_id, cycle_id, whoop_user_id, score_state, user_calibrating,
+             recovery_score, resting_heart_rate, hrv_rmssd_milliseconds,
+             spo2_percentage, skin_temperature_celsius, upstream_created_at,
+             upstream_updated_at, deleted_at, synced_at
+      FROM whoop_recoveries
+      ORDER BY upstream_updated_at ASC, sleep_id ASC
+    `).all(),
+    c.env.DB.prepare(`
+      SELECT sleep_id, cycle_id, whoop_user_id, start_at, end_at,
+             timezone_offset, nap, score_state, stage_awake_milliseconds,
+             stage_light_milliseconds, stage_slow_wave_milliseconds,
+             stage_rem_milliseconds, sleep_needed_milliseconds,
+             sleep_debt_milliseconds, sleep_efficiency_percentage,
+             sleep_consistency_percentage, sleep_performance_percentage,
+             respiratory_rate, upstream_created_at, upstream_updated_at,
+             deleted_at, synced_at
+      FROM whoop_sleeps
+      ORDER BY start_at ASC, sleep_id ASC
+    `).all(),
+    c.env.DB.prepare(`
+      SELECT workout_id, whoop_user_id, start_at, end_at, timezone_offset,
+             sport_id, sport_name, score_state, strain, average_heart_rate,
+             max_heart_rate, kilojoules, percent_recorded, distance_meter,
+             elevation_gain_meter, zone_zero_milliseconds,
+             zone_one_milliseconds, zone_two_milliseconds,
+             zone_three_milliseconds, zone_four_milliseconds,
+             zone_five_milliseconds, upstream_created_at,
+             upstream_updated_at, deleted_at, synced_at
+      FROM whoop_workouts
+      ORDER BY start_at ASC, workout_id ASC
+    `).all(),
   ]);
 
   return c.json({
@@ -137,6 +195,14 @@ app.get("/", async (c) => {
     github: {
       daily: githubDaily.results ?? [],
       repos: githubRepos.results ?? [],
+    },
+    whoop: {
+      profiles: whoopProfiles.results ?? [],
+      body_measurements: whoopBodyMeasurements.results ?? [],
+      cycles: whoopCycles.results ?? [],
+      recoveries: whoopRecoveries.results ?? [],
+      sleeps: whoopSleeps.results ?? [],
+      workouts: whoopWorkouts.results ?? [],
     },
   });
 });

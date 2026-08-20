@@ -233,7 +233,26 @@ List endpoints support `?limit&offset&search&sort&tags&start&end` where applicab
 - `DELETE /v1/location/{id}`
 - `GET /v1/location/latest`
 
-### Apple Health Data
+### WHOOP Health Source
+
+WHOOP is the sole ongoing wearable source. See [WHOOP_HEALTH_SOURCE.md](docs/WHOOP_HEALTH_SOURCE.md) for the OAuth, synchronization, units, deletion, export, and rollout contract.
+
+- `GET /v1/integrations/whoop` - Get connection and synchronization status
+- `POST /v1/integrations/whoop/connect` - Begin WHOOP OAuth
+- `POST /v1/integrations/whoop/sync` - Request asynchronous reconciliation
+- `DELETE /v1/integrations/whoop` - Revoke and disconnect WHOOP
+- `DELETE /v1/integrations/whoop/data` - Delete local WHOOP data after disconnect
+- `GET /v1/health/whoop/overview` - Get current health state and bounded trends
+- `GET /v1/health/whoop/profile` - Get the current WHOOP profile
+- `GET /v1/health/whoop/cycles` - Get WHOOP cycles
+- `GET /v1/health/whoop/recoveries` - Get WHOOP recoveries
+- `GET /v1/health/whoop/sleeps` - Get WHOOP sleeps
+- `GET /v1/health/whoop/workouts` - Get WHOOP workouts
+- `GET /v1/health/whoop/workouts/{workoutId}` - Get WHOOP workout detail
+
+### Apple Health Data (Legacy History)
+
+These endpoints remain unchanged for historical Apple Health data. WHOOP replaces Apple Health only as the ongoing wearable source; this release does not delete or rewrite Apple rows.
 
 - `GET /v1/health` - Get daily health metrics (date range)
 - `POST /v1/health` - Submit daily health metrics
@@ -251,7 +270,7 @@ List endpoints support `?limit&offset&search&sort&tags&start&end` where applicab
 - `DELETE /v1/health/workouts/{id}` - Delete workout
 - `GET /v1/health/summary` - Get health summary with recent data and averages
 
-See [APPLE_HEALTH_EXPORT.md](docs/APPLE_HEALTH_EXPORT.md) for detailed health API documentation.
+See [APPLE_HEALTH_EXPORT.md](docs/APPLE_HEALTH_EXPORT.md) for legacy Apple Health API documentation.
 
 ### External Integrations
 
