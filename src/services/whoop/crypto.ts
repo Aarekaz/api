@@ -31,7 +31,10 @@ const base64UrlToBytes = (value: string): Uint8Array => {
   return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
 };
 
-const importEncryptionKey = async (keyMaterial: string): Promise<CryptoKey> => {
+export const decodeWhoopTokenEncryptionKey = (keyMaterial: unknown): Uint8Array => {
+  if (typeof keyMaterial !== "string") {
+    throw new Error("WHOOP token encryption key must be 32 bytes");
+  }
   let keyBytes: Uint8Array;
   try {
     keyBytes = base64UrlToBytes(keyMaterial);
@@ -42,10 +45,13 @@ const importEncryptionKey = async (keyMaterial: string): Promise<CryptoKey> => {
   if (keyBytes.byteLength !== AES_KEY_BYTES) {
     throw new Error("WHOOP token encryption key must be 32 bytes");
   }
+  return keyBytes;
+};
 
+const importEncryptionKey = async (keyMaterial: string): Promise<CryptoKey> => {
   return crypto.subtle.importKey(
     "raw",
-    keyBytes,
+    decodeWhoopTokenEncryptionKey(keyMaterial),
     { name: "AES-GCM" },
     false,
     ["encrypt", "decrypt"],

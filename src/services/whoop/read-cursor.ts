@@ -1,3 +1,5 @@
+import { decodeWhoopTokenEncryptionKey } from "./crypto";
+
 export const WHOOP_READ_CURSOR_MAX_LENGTH = 1024;
 export const WHOOP_READ_ORDER = "provider_time_desc_id_desc" as const;
 
@@ -50,7 +52,7 @@ const base64UrlDecode = (value: string): Uint8Array | null => {
 const sign = async (secret: string, payload: string): Promise<string> => {
   const key = await crypto.subtle.importKey(
     "raw",
-    encoder.encode(secret),
+    decodeWhoopTokenEncryptionKey(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],

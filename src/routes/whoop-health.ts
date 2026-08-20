@@ -20,6 +20,7 @@ import {
   openApiResponse,
   whoopCycleReadSchema,
   whoopHealthCollectionQuerySchema,
+  whoopHealthTimestampSchema,
   whoopHealthPageSchema,
   whoopOverviewReadSchema,
   whoopProfileReadSchema,
@@ -43,8 +44,9 @@ interface CollectionQuery {
 
 const canonicalTimestamp = (value: string | undefined): string | null | undefined => {
   if (value === undefined) return null;
+  if (!whoopHealthTimestampSchema.safeParse(value).success) return undefined;
   const milliseconds = Date.parse(value);
-  if (Number.isNaN(milliseconds) || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return undefined;
+  if (Number.isNaN(milliseconds)) return undefined;
   return new Date(milliseconds).toISOString();
 };
 

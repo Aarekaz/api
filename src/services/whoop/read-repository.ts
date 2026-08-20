@@ -390,18 +390,20 @@ export class WhoopHealthReadRepository {
     whoopUserId: number;
     options: CollectionOptions;
   }): Promise<{ rows: T[]; nextAnchor: { sortAt: string; id: string } | null }> {
+    const instantExpression = `julianday(${input.timeExpression})`;
+    const canonicalSortExpression = `strftime('%Y-%m-%dT%H:%M:%fZ', ${input.timeExpression})`;
     const filters = ["whoop_user_id = ?", "deleted_at IS NULL"];
     const bindings: unknown[] = [input.whoopUserId];
     if (input.options.start !== null) {
-      filters.push(`${input.timeExpression} >= ?`);
+      filters.push(`${instantExpression} >= julianday(?)`);
       bindings.push(input.options.start);
     }
     if (input.options.end !== null) {
-      filters.push(`${input.timeExpression} <= ?`);
+      filters.push(`${instantExpression} <= julianday(?)`);
       bindings.push(input.options.end);
     }
     if (input.options.cursor !== null) {
-      filters.push(`(${input.timeExpression} < ? OR (${input.timeExpression} = ? AND ${input.keyColumn} < ?))`);
+      filters.push(`(${instantExpression} < julianday(?) OR (${instantExpression} = julianday(?) AND ${input.keyColumn} < ?))`);
       bindings.push(
         input.options.cursor.sortAt,
         input.options.cursor.sortAt,
@@ -410,10 +412,10 @@ export class WhoopHealthReadRepository {
     }
     bindings.push(input.options.limit + 1);
     const result = await this.db.prepare(`
-      SELECT ${input.columns}, ${input.timeExpression} AS sort_at
+      SELECT ${input.columns}, ${canonicalSortExpression} AS sort_at
       FROM ${input.table}
       WHERE ${filters.join(" AND ")}
-      ORDER BY ${input.timeExpression} DESC, ${input.keyColumn} DESC
+      ORDER BY ${instantExpression} DESC, ${input.keyColumn} DESC
       LIMIT ?
     `).bind(...bindings).all<T & Record<string, unknown>>();
     const rows = result.results.slice(0, input.options.limit) as T[];
@@ -543,7 +545,14 @@ export class WhoopHealthReadRepository {
 
   async getOverview(whoopUserId: number, now: Date): Promise<WhoopOverviewReadModel> {
     const end = now.toISOString();
-    const thirtyDayStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1_000).toISOString();
+    const currentUtcDate = new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+    ));
+    const thirtyDayStartDate = new Date(currentUtcDate);
+    thirtyDayStartDate.setUTCDate(thirtyDayStartDate.getUTCDate() - 29);
+    const thirtyDayStart = thirtyDayStartDate.toISOString();
     const noCursor = { end, limit: 100, cursor: null } as const;
     const [currentCycles, cycles, recoveries, sleeps, workouts] = await Promise.all([
       this.listCycles(whoopUserId, { start: null, end, limit: 1, cursor: null }),
@@ -556,9 +565,11 @@ export class WhoopHealthReadRepository {
     const currentRecovery = currentCycle
       ? recoveries.records.find((record) => record.cycle_id === currentCycle.cycle_id) ?? null
       : recoveries.records[0] ?? null;
-    const currentSleep = currentRecovery
-      ? sleeps.records.find((record) => record.sleep_id === currentRecovery.sleep_id) ?? null
-      : sleeps.records.find((record) => record.nap === false) ?? sleeps.records[0] ?? null;
+    const currentSleep = currentCycle && currentRecovery
+      ? sleeps.records.find((record) =>
+        record.cycle_id === currentCycle.cycle_id && record.sleep_id === currentRecovery.sleep_id
+      ) ?? null
+      : null;
     const recoveryByCycle = new Map<number, WhoopRecoveryReadModel>();
     for (const recovery of recoveries.records) {
       if (!recoveryByCycle.has(recovery.cycle_id)) recoveryByCycle.set(recovery.cycle_id, recovery);
@@ -568,14 +579,15 @@ export class WhoopHealthReadRepository {
       if (sleep.nap !== true && !sleepByCycle.has(sleep.cycle_id)) sleepByCycle.set(sleep.cycle_id, sleep);
     }
     const trends30 = cycles.records.slice().reverse().map((cycle) => ({
-      date: cycle.start_at.slice(0, 10),
+      date: new Date(cycle.start_at).toISOString().slice(0, 10),
       recovery_score: recoveryByCycle.get(cycle.cycle_id)?.score ?? null,
       strain: cycle.strain,
       sleep_performance_percentage:
         sleepByCycle.get(cycle.cycle_id)?.sleep_performance_percentage ?? null,
     }));
-    const sevenDayDate = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1_000)
-      .toISOString().slice(0, 10);
+    const sevenDayStartDate = new Date(currentUtcDate);
+    sevenDayStartDate.setUTCDate(sevenDayStartDate.getUTCDate() - 6);
+    const sevenDayDate = sevenDayStartDate.toISOString().slice(0, 10);
     return {
       current_cycle: currentCycle,
       current_recovery: currentRecovery,

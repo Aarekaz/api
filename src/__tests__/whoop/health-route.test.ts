@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import worker from "../../index";
-import { getOpenApiDocument } from "../../schemas/openapi";
+import {
+  getOpenApiDocument,
+  whoopHealthCollectionQuerySchema,
+} from "../../schemas/openapi";
+import { WhoopHealthReadRepository } from "../../services/whoop/read-repository";
 import type { Env } from "../../types/env";
 import { ENV, bearerGet } from "./fixtures";
 
@@ -92,6 +96,30 @@ const insertWorkout = (
   overrides.zoneZeroMilliseconds === undefined ? 1499 : overrides.zoneZeroMilliseconds,
   overrides.deletedAt ?? null,
 );
+
+const insertCycle = (
+  database: SqliteDatabase,
+  cycleId: number,
+  startAt: string,
+  strain = 10,
+) => database.prepare(`
+  INSERT INTO whoop_cycles (
+    cycle_id, whoop_user_id, start_at, end_at, timezone_offset, score_state,
+    strain, upstream_created_at, upstream_updated_at, synced_at, raw_json
+  ) VALUES (?, 42, ?, NULL, '+00:00', 'SCORED', ?, ?, ?, ?, '{}')
+`).run(cycleId, startAt, strain, startAt, startAt, startAt);
+
+const insertSleep = (
+  database: SqliteDatabase,
+  sleepId: string,
+  cycleId: number,
+  startAt: string,
+) => database.prepare(`
+  INSERT INTO whoop_sleeps (
+    sleep_id, cycle_id, whoop_user_id, start_at, end_at, timezone_offset, nap,
+    score_state, upstream_created_at, upstream_updated_at, synced_at, raw_json
+  ) VALUES (?, ?, 42, ?, ?, '+00:00', 0, 'SCORED', ?, ?, ?, '{}')
+`).run(sleepId, cycleId, startAt, startAt, startAt, startAt, startAt);
 
 const insertCompleteSourceSet = (database: SqliteDatabase) => {
   database.prepare(`
@@ -340,6 +368,55 @@ describe("WHOOP health read routes", () => {
       expect(second.next_cursor).toEqual(expect.any(String));
     });
 
+    it("orders, windows, and paginates offset timestamps by their instant", async () => {
+      insertWorkout(database, {
+        id: "00000000-0000-4000-8000-000000000003",
+        startAt: "2026-08-20T10:00:00.000-04:00",
+      });
+      insertWorkout(database, {
+        id: "00000000-0000-4000-8000-000000000002",
+        startAt: "2026-08-20T13:00:00.000Z",
+      });
+      insertWorkout(database, {
+        id: "00000000-0000-4000-8000-000000000001",
+        startAt: "2026-08-20T12:00:00.000Z",
+      });
+
+      const firstResponse = await worker.fetch(new Request(
+        "https://api.example.test/v1/health/whoop/workouts?limit=1",
+        bearerGet(),
+      ), env);
+      expect(firstResponse.status).toBe(200);
+      const first = await firstResponse.json() as {
+        records: Array<{ workout_id: string }>;
+        next_cursor: string;
+      };
+      expect(first.records.map((record) => record.workout_id)).toEqual([
+        "00000000-0000-4000-8000-000000000003",
+      ]);
+      expect(first.next_cursor).toEqual(expect.any(String));
+
+      const secondResponse = await worker.fetch(new Request(
+        `https://api.example.test/v1/health/whoop/workouts?limit=1&cursor=${first.next_cursor}`,
+        bearerGet(),
+      ), env);
+      expect(secondResponse.status).toBe(200);
+      const second = await secondResponse.json() as { records: Array<{ workout_id: string }> };
+      expect(second.records.map((record) => record.workout_id)).toEqual([
+        "00000000-0000-4000-8000-000000000002",
+      ]);
+
+      const windowResponse = await worker.fetch(new Request(
+        "https://api.example.test/v1/health/whoop/workouts?start=2026-08-20T14:00:00.000Z",
+        bearerGet(),
+      ), env);
+      expect(windowResponse.status).toBe(200);
+      const window = await windowResponse.json() as { records: Array<{ workout_id: string }> };
+      expect(window.records.map((record) => record.workout_id)).toEqual([
+        "00000000-0000-4000-8000-000000000003",
+      ]);
+    });
+
     it("validates date windows, limits, and bounded opaque cursors", async () => {
       for (const query of [
         "limit=0",
@@ -357,6 +434,54 @@ describe("WHOOP health read routes", () => {
         ), env);
         expect(response.status, query).toBe(400);
       }
+    });
+
+    it("uses the OpenAPI timestamp contract at runtime and rejects invalid calendar dates", async () => {
+      for (const timestamp of [
+        "2026-08-20T12:00:00",
+        "2026-02-30T12:00:00.000Z",
+      ]) {
+        expect(whoopHealthCollectionQuerySchema.safeParse({ start: timestamp }).success, timestamp)
+          .toBe(false);
+        const response = await worker.fetch(new Request(
+          `https://api.example.test/v1/health/whoop/workouts?start=${timestamp}`,
+          bearerGet(),
+        ), env);
+        expect(response.status, timestamp).toBe(400);
+      }
+    });
+
+    it("fails closed for missing or short cursor keys and rejects cursors after rotation", async () => {
+      insertWorkout(database, { id: "00000000-0000-4000-8000-000000000002" });
+      insertWorkout(database, { id: "00000000-0000-4000-8000-000000000001" });
+
+      const missingKeyResponse = await worker.fetch(new Request(
+        "https://api.example.test/v1/health/whoop/workouts?limit=1",
+        bearerGet(),
+      ), { ...env, WHOOP_TOKEN_ENCRYPTION_KEY: undefined } as unknown as Env);
+      const shortKeyResponse = await worker.fetch(new Request(
+        "https://api.example.test/v1/health/whoop/workouts?limit=1",
+        bearerGet(),
+      ), { ...env, WHOOP_TOKEN_ENCRYPTION_KEY: "c2hvcnQ=" });
+      const validKeyResponse = await worker.fetch(new Request(
+        "https://api.example.test/v1/health/whoop/workouts?limit=1",
+        bearerGet(),
+      ), env);
+
+      expect(missingKeyResponse.status).toBe(500);
+      expect(shortKeyResponse.status).toBe(500);
+      expect(validKeyResponse.status).toBe(200);
+      const { next_cursor: cursor } = await validKeyResponse.json() as { next_cursor: string };
+      expect(cursor).toEqual(expect.any(String));
+
+      const rotatedKeyResponse = await worker.fetch(new Request(
+        `https://api.example.test/v1/health/whoop/workouts?limit=1&cursor=${cursor}`,
+        bearerGet(),
+      ), {
+        ...env,
+        WHOOP_TOKEN_ENCRYPTION_KEY: "ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA=",
+      });
+      expect(rotatedKeyResponse.status).toBe(400);
     });
 
     it("rejects tampered cursors and cursors reused with another window", async () => {
@@ -582,6 +707,45 @@ describe("WHOOP health read routes", () => {
         },
       });
       expect(JSON.stringify(body)).not.toMatch(/raw_json|access_token|refresh_token|ciphertext|nonce|lease|generation|connection_id/i);
+    });
+
+    it("does not pair the current cycle with an unrelated sleep when recovery is absent", async () => {
+      insertCycle(database, 9, "2026-08-20T04:00:00.000Z");
+      insertSleep(
+        database,
+        "00000000-0000-4000-8000-000000000008",
+        8,
+        "2026-08-20T03:00:00.000Z",
+      );
+
+      const repository = new WhoopHealthReadRepository(sqliteD1(database));
+      const overview = await repository.getOverview(42, new Date("2026-08-20T12:00:00.000Z"));
+
+      expect(overview.current_cycle?.cycle_id).toBe(9);
+      expect(overview.current_recovery).toBeNull();
+      expect(overview.current_sleep).toBeNull();
+    });
+
+    it("bounds trend dates to the current UTC calendar date and its prior 29 or 6 dates", async () => {
+      insertCycle(database, 1, "2026-07-21T18:00:00.000Z");
+      insertCycle(database, 2, "2026-07-22T00:00:00.000Z");
+      insertCycle(database, 3, "2026-08-14T00:30:00.000+01:00");
+      insertCycle(database, 4, "2026-08-14T00:00:00.000Z");
+      insertCycle(database, 5, "2026-08-20T08:00:00.000Z");
+
+      const repository = new WhoopHealthReadRepository(sqliteD1(database));
+      const overview = await repository.getOverview(42, new Date("2026-08-20T18:00:00.000Z"));
+
+      expect(overview.trends_30_days.map((point) => point.date)).toEqual([
+        "2026-07-22",
+        "2026-08-13",
+        "2026-08-14",
+        "2026-08-20",
+      ]);
+      expect(overview.trends_7_days.map((point) => point.date)).toEqual([
+        "2026-08-14",
+        "2026-08-20",
+      ]);
     });
   });
 });
