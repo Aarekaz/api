@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../types/env";
-import { handleScheduled, runRefreshJob } from "../scheduled";
+import { handleScheduled, runRefreshJob, type ScheduledDependencies } from "../scheduled";
+import { enqueueReconciliation as enqueueCanonicalReconciliation } from "../services/whoop/sync";
 import type { WhoopQueueMessage } from "../types/whoop";
 import { CONNECTION_ID, ENV, NOW } from "./whoop/fixtures";
 
@@ -31,6 +32,8 @@ function createScheduledDependencies() {
     markInitialBackfillQueued: vi.fn().mockResolvedValue(true),
     getCurrentConnection: vi.fn().mockResolvedValue(null),
     withWhoopAccessToken: vi.fn(async (_userId, request) => request("fixture-access-token", 3)),
+    beginReconciliation: vi.fn().mockResolvedValue(8),
+    getPendingRecoveryCycleIds: vi.fn().mockResolvedValue([]),
   };
   const enqueueReconciliation = vi.fn().mockResolvedValue(undefined);
   const refreshJobs = {
@@ -53,7 +56,7 @@ function createScheduledDependencies() {
 
 async function runScheduled(
   env: Env,
-  dependencies: ReturnType<typeof createScheduledDependencies>["dependencies"],
+  dependencies: ScheduledDependencies,
 ) {
   const scheduled = handleScheduled as unknown as (
     event: ScheduledEvent,
@@ -175,7 +178,12 @@ describe("scheduled refresh health", () => {
       env,
       42,
       "scheduled",
-      { repository, now: dependencies.now },
+      {
+        repository,
+        now: dependencies.now,
+        expectedConnectionId: CONNECTION_ID,
+        requireActiveConnection: true,
+      },
     );
     expect(queue.send).not.toHaveBeenCalled();
     expect(queue.sendBatch).not.toHaveBeenCalled();
@@ -211,6 +219,39 @@ describe("scheduled refresh health", () => {
     );
     expect(repository.withWhoopAccessToken.mock.invocationCallOrder[0])
       .toBeLessThan(enqueueReconciliation.mock.invocationCallOrder[0]);
+  });
+
+  it("does not reconcile a replacement backfilling lifecycle after active token preflight", async () => {
+    const { db } = createDb();
+    const queue = { send: vi.fn(), sendBatch: vi.fn() };
+    const env = { ...ENV, DB: db, WHOOP_SYNC_QUEUE: queue as unknown as Queue<WhoopQueueMessage> };
+    const { dependencies, repository } = createScheduledDependencies();
+    repository.getCurrentConnection
+      .mockResolvedValueOnce({
+        whoopUserId: 42,
+        connectionId: "connection-c1",
+        credentialVersion: 3,
+        reconcileGeneration: 7,
+        status: "active",
+      })
+      .mockResolvedValueOnce({
+        whoopUserId: 42,
+        connectionId: "connection-c2",
+        credentialVersion: 4,
+        reconcileGeneration: 0,
+        status: "backfilling",
+      });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await runScheduled(env, {
+      ...dependencies,
+      enqueueReconciliation: enqueueCanonicalReconciliation,
+    });
+
+    expect(repository.beginReconciliation).not.toHaveBeenCalled();
+    expect(repository.getPendingRecoveryCycleIds).not.toHaveBeenCalled();
+    expect(queue.sendBatch).not.toHaveBeenCalled();
+    error.mockRestore();
   });
 
   it("starts reconciliation only for active connections", async () => {

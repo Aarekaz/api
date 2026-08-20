@@ -304,6 +304,46 @@ describe("WHOOP queue synchronization", () => {
     ]);
   });
 
+  it("rejects a replacement lifecycle and backfilling status required to stay active", async () => {
+    const { dependencies, env, repository } = createHarness();
+    repository.getCurrentConnection.mockResolvedValue({
+      whoopUserId: 42,
+      connectionId: "connection-c2",
+      credentialVersion: 2,
+      reconcileGeneration: 0,
+      status: "backfilling",
+    });
+
+    await expect(enqueueReconciliation(env, 42, "scheduled", {
+      ...dependencies,
+      expectedConnectionId: "connection-c1",
+      requireActiveConnection: true,
+    } as unknown as Parameters<typeof enqueueReconciliation>[3])).rejects.toThrow(
+      "WHOOP connection is not available for reconciliation",
+    );
+
+    expect(repository.beginReconciliation).not.toHaveBeenCalled();
+    expect(repository.getPendingRecoveryCycleIds).not.toHaveBeenCalled();
+    expect(env.WHOOP_SYNC_QUEUE.sendBatch).not.toHaveBeenCalled();
+  });
+
+  it("requires the begin-generation CAS to preserve active status after its reread", async () => {
+    const { dependencies, env, repository } = createHarness();
+    repository.beginReconciliation.mockResolvedValue(null);
+
+    await expect(enqueueReconciliation(env, 42, "scheduled", {
+      ...dependencies,
+      expectedConnectionId: CONNECTION_ID,
+      requireActiveConnection: true,
+    } as unknown as Parameters<typeof enqueueReconciliation>[3])).rejects.toThrow(
+      "WHOOP connection changed before reconciliation began",
+    );
+
+    expect(repository.beginReconciliation).toHaveBeenCalledWith(42, CONNECTION_ID, NOW, true);
+    expect(repository.getPendingRecoveryCycleIds).not.toHaveBeenCalled();
+    expect(env.WHOOP_SYNC_QUEUE.sendBatch).not.toHaveBeenCalled();
+  });
+
   it("records every returned provider ID before atomically finalizing the last reconciliation page", async () => {
     const { client, dependencies, env, repository } = createHarness();
     client.getCollection.mockResolvedValue({ records: [SLEEP] });

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { createOAuthState, encryptWhoopToken, hashOAuthState } from "../services/whoop/crypto";
 import { WhoopClient, type WhoopTokenResponse } from "../services/whoop/client";
 import {
@@ -9,8 +10,10 @@ import {
 import {
   authSecurity,
   errorResponses,
+  errorSchema,
   okSchema,
   openApiResponse,
+  openApiJsonRequestBody,
   okResponses,
   openApiRegistry,
   whoopAuthorizationUrlResponseSchema,
@@ -355,7 +358,12 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
     const repository = repositoryFor(c.env);
     const connection = await repository.getCurrentConnection();
     if (!connectionCanSync(connection)) return c.json({ error: "WHOOP is not connected" }, 409);
-    await enqueueReconciliation(c.env, connection.whoopUserId, "manual", { repository, now });
+    await enqueueReconciliation(c.env, connection.whoopUserId, "manual", {
+      repository,
+      now,
+      expectedConnectionId: connection.connectionId,
+      requireActiveConnection: false,
+    });
     return c.json({ ok: true }, 202);
   });
 
@@ -407,6 +415,27 @@ openApiRegistry.registerPath({
   summary: "Get WHOOP connection and sync status",
   security: authSecurity,
   responses: okResponses(whoopIntegrationStatusResponseSchema),
+});
+
+const whoopWebhookHeadersSchema = z.object({
+  "X-WHOOP-Signature": z.string(),
+  "X-WHOOP-Signature-Timestamp": z.string(),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/integrations/whoop/webhook",
+  summary: "Receive a signed WHOOP webhook",
+  request: {
+    headers: whoopWebhookHeadersSchema,
+    body: openApiJsonRequestBody(whoopWebhookSchema),
+  },
+  responses: {
+    204: { description: "Webhook accepted" },
+    400: openApiResponse(errorSchema, "Invalid webhook payload"),
+    401: openApiResponse(errorSchema, "Invalid webhook signature"),
+    503: openApiResponse(errorSchema, "Webhook queue unavailable"),
+  },
 });
 
 openApiRegistry.registerPath({

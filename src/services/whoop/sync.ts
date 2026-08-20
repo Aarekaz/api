@@ -58,6 +58,8 @@ export interface WhoopSyncDependencies {
 export interface EnqueueReconciliationDependencies {
   repository?: ReconciliationPublisherRepository;
   now?: () => Date;
+  expectedConnectionId?: string;
+  requireActiveConnection?: boolean;
 }
 
 export interface ProcessWebhookInput {
@@ -111,17 +113,19 @@ export async function enqueueReconciliation(
   const connection = await repository.getCurrentConnection();
   if (!connection
     || connection.whoopUserId !== whoopUserId
-    || (connection.status !== "active" && connection.status !== "backfilling")) {
+    || (dependencies.expectedConnectionId !== undefined
+      && connection.connectionId !== dependencies.expectedConnectionId)
+    || (dependencies.requireActiveConnection
+      ? connection.status !== "active"
+      : connection.status !== "active" && connection.status !== "backfilling")) {
     throw new Error("WHOOP connection is not available for reconciliation");
   }
   const windowEnd = now.toISOString();
   const windowStart = new Date(now.getTime() - RECONCILIATION_WINDOW_MILLISECONDS).toISOString();
   const reconcileRunId = crypto.randomUUID();
-  const reconcileGeneration = await repository.beginReconciliation(
-    whoopUserId,
-    connection.connectionId,
-    windowEnd,
-  );
+  const reconcileGeneration = dependencies.requireActiveConnection
+    ? await repository.beginReconciliation(whoopUserId, connection.connectionId, windowEnd, true)
+    : await repository.beginReconciliation(whoopUserId, connection.connectionId, windowEnd);
   if (reconcileGeneration === null) {
     throw new Error("WHOOP connection changed before reconciliation began");
   }

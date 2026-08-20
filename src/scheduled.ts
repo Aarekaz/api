@@ -118,7 +118,12 @@ async function refreshWhoop(env: Env, dependencies: ScheduledDependencies): Prom
       refreshBeforeExpirationMilliseconds: WHOOP_REFRESH_WINDOW_MILLISECONDS,
     },
   );
-  await publishReconciliation(env, connection.whoopUserId, "scheduled", { repository, now });
+  await publishReconciliation(env, connection.whoopUserId, "scheduled", {
+    repository,
+    now,
+    expectedConnectionId: connection.connectionId,
+    requireActiveConnection: true,
+  });
 }
 
 export async function runRefreshJob(

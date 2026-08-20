@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../../index";
+import { getOpenApiDocument } from "../../schemas/openapi";
 import {
   createWhoopIntegrationRoute,
   type WhoopIntegrationDependencies,
@@ -71,6 +72,24 @@ beforeEach(() => {
 });
 
 describe("WHOOP public webhook", () => {
+  it("publishes the exact signature headers and response contract in OpenAPI", () => {
+    const document = getOpenApiDocument("test", "https://api.example.test") as {
+      paths: Record<string, { post?: Record<string, unknown> }>;
+    };
+    const operation = document.paths["/integrations/whoop/webhook"].post as {
+      parameters: Array<{ in: string; name: string; required?: boolean }>;
+      responses: Record<string, unknown>;
+      security?: unknown;
+    };
+
+    expect(operation.parameters).toEqual(expect.arrayContaining([
+      expect.objectContaining({ in: "header", name: "X-WHOOP-Signature", required: true }),
+      expect.objectContaining({ in: "header", name: "X-WHOOP-Signature-Timestamp", required: true }),
+    ]));
+    expect(Object.keys(operation.responses).sort()).toEqual(["204", "400", "401", "503"]);
+    expect(operation.security).toBeUndefined();
+  });
+
   it("mounts outside bearer-protected v1 routes", async () => {
     const response = await worker.fetch(new Request(
       "https://api.example.test/integrations/whoop/webhook",

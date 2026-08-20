@@ -861,14 +861,18 @@ export class WhoopRepository {
     whoopUserId: number,
     connectionId: string,
     begunAt: string,
+    requireActiveConnection = false,
   ): Promise<number | null> {
     const canonicalBegunAt = canonicalTimestamp(begunAt)!;
+    const statusCondition = requireActiveConnection
+      ? "status = 'active'"
+      : "status IN ('active', 'backfilling')";
     const row = await this.db.prepare(`
       UPDATE whoop_connections
       SET reconcile_generation = reconcile_generation + 1,
           updated_at = ?
       WHERE whoop_user_id = ? AND connection_id = ?
-        AND status IN ('active', 'backfilling')
+        AND ${statusCondition}
       RETURNING reconcile_generation
     `).bind(canonicalBegunAt, whoopUserId, connectionId)
       .first<{ reconcile_generation: number }>();
