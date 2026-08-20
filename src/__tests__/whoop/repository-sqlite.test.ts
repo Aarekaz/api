@@ -967,4 +967,92 @@ describe("WHOOP repository on SQLite", () => {
         { run_id: "superseded-recent" },
       ]);
   });
+
+  it("does not let abandoned nonterminal work supersede the useful terminal projection", async () => {
+    database.prepare("UPDATE whoop_connections SET reconcile_generation = 3, status = 'active'").run();
+    const insertCheckpoint = database.prepare(`
+      INSERT INTO whoop_sync_checkpoints (
+        whoop_user_id, connection_id, resource, mode, reconcile_generation,
+        sync_run_id, target_id, status, page_count, record_count, created_at, updated_at
+      ) VALUES (42, ?, 'sleep', 'reconcile', ?, ?, ?, ?, 0, 0, ?, ?)
+    `);
+    const oldTerminal = "2026-06-01T00:00:00.000Z";
+    const abandoned = "2026-08-17T00:00:00.000Z";
+    insertCheckpoint.run(CONNECTION_ID, 1, "useful-terminal", "", "complete", oldTerminal, oldTerminal);
+    insertCheckpoint.run(CONNECTION_ID, 2, "abandoned-newer", "", "retrying", abandoned, abandoned);
+    insertCheckpoint.run(
+      CONNECTION_ID, 2, "different-target", "recovery-cycle:9", "complete", NOW, NOW,
+    );
+
+    const insertRun = database.prepare(`
+      INSERT INTO whoop_sync_runs (
+        run_id, whoop_user_id, connection_id, reconcile_generation, trigger, status,
+        expected_target_count, completed_target_count, page_count, record_count, started_at
+      ) VALUES (?, 42, ?, ?, 'scheduled', ?, 6, 0, 0, 0, ?)
+    `);
+    insertRun.run("useful-terminal", CONNECTION_ID, 1, "complete", oldTerminal);
+    insertRun.run("abandoned-newer", CONNECTION_ID, 2, "running", abandoned);
+
+    await expect(repository.pruneOperationalData(NOW)).resolves.toEqual(expect.objectContaining({
+      checkpoints: 1,
+      runs: 1,
+    }));
+    expect(database.prepare("SELECT sync_run_id FROM whoop_sync_checkpoints ORDER BY sync_run_id").all())
+      .toEqual([{ sync_run_id: "different-target" }, { sync_run_id: "useful-terminal" }]);
+    expect(database.prepare("SELECT run_id FROM whoop_sync_runs").all())
+      .toEqual([{ run_id: "useful-terminal" }]);
+  });
+
+  it("prunes terminal history through repeated bounded sweeps within its projection partition", async () => {
+    const old = "2026-06-01T00:00:00.000Z";
+    const newest = "2026-08-19T12:00:00.000Z";
+    const insertCheckpoint = database.prepare(`
+      INSERT INTO whoop_sync_checkpoints (
+        whoop_user_id, connection_id, resource, mode, reconcile_generation,
+        sync_run_id, target_id, status, page_count, record_count, created_at, updated_at
+      ) VALUES (42, ?, ?, 'reconcile', ?, ?, '', 'complete', 0, 0, ?, ?)
+    `);
+    for (let index = 0; index < 102; index += 1) {
+      insertCheckpoint.run(
+        CONNECTION_ID, "sleep", 1, `old-checkpoint-${index.toString().padStart(3, "0")}`, old, old,
+      );
+    }
+    insertCheckpoint.run(CONNECTION_ID, "sleep", 2, "newest-checkpoint", newest, newest);
+    insertCheckpoint.run(CONNECTION_ID, "workout", 1, "different-resource", old, old);
+    insertCheckpoint.run("old-connection", "sleep", 1, "different-lifecycle", old, old);
+
+    const insertRun = database.prepare(`
+      INSERT INTO whoop_sync_runs (
+        run_id, whoop_user_id, connection_id, reconcile_generation, trigger, status,
+        expected_target_count, completed_target_count, page_count, record_count, started_at
+      ) VALUES (?, 42, ?, ?, 'scheduled', 'complete', 6, 6, 0, 0, ?)
+    `);
+    for (let index = 0; index < 102; index += 1) {
+      insertRun.run(`old-run-${index.toString().padStart(3, "0")}`, CONNECTION_ID, 1, old);
+    }
+    insertRun.run("newest-run", CONNECTION_ID, 2, newest);
+    insertRun.run("different-lifecycle", "old-connection", 1, old);
+
+    await expect(repository.pruneOperationalData(NOW)).resolves.toEqual(expect.objectContaining({
+      checkpoints: 100,
+      runs: 100,
+    }));
+    await expect(repository.pruneOperationalData(NOW)).resolves.toEqual(expect.objectContaining({
+      checkpoints: 2,
+      runs: 2,
+    }));
+    await expect(repository.pruneOperationalData(NOW)).resolves.toEqual(expect.objectContaining({
+      checkpoints: 0,
+      runs: 0,
+    }));
+
+    expect(database.prepare("SELECT sync_run_id FROM whoop_sync_checkpoints ORDER BY sync_run_id").all())
+      .toEqual([
+        { sync_run_id: "different-lifecycle" },
+        { sync_run_id: "different-resource" },
+        { sync_run_id: "newest-checkpoint" },
+      ]);
+    expect(database.prepare("SELECT run_id FROM whoop_sync_runs ORDER BY run_id").all())
+      .toEqual([{ run_id: "different-lifecycle" }, { run_id: "newest-run" }]);
+  });
 });

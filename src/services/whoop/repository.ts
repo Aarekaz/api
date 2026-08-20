@@ -1709,9 +1709,11 @@ export class WhoopRepository {
               AND (checkpoint.target_id != '' OR EXISTS (
                 SELECT 1 FROM whoop_sync_checkpoints AS newer
                 WHERE newer.whoop_user_id = checkpoint.whoop_user_id
+                  AND newer.connection_id = checkpoint.connection_id
                   AND newer.resource = checkpoint.resource
                   AND newer.mode = checkpoint.mode
                   AND newer.target_id = checkpoint.target_id
+                  AND newer.status IN ('complete', 'error')
                   AND (newer.created_at > checkpoint.created_at
                     OR (newer.created_at = checkpoint.created_at AND newer.sync_run_id > checkpoint.sync_run_id))
               )))
@@ -1737,6 +1739,8 @@ export class WhoopRepository {
               AND EXISTS (
                 SELECT 1 FROM whoop_sync_runs AS newer
                 WHERE newer.whoop_user_id = run.whoop_user_id
+                  AND newer.connection_id = run.connection_id
+                  AND newer.status IN ('complete', 'error')
                   AND (newer.started_at > run.started_at
                     OR (newer.started_at = run.started_at AND newer.run_id > run.run_id))
               ))
