@@ -919,4 +919,52 @@ describe("WHOOP repository on SQLite", () => {
     expect(database.prepare("SELECT sync_run_id FROM whoop_sync_checkpoints ORDER BY sync_run_id").all())
       .toEqual([{ sync_run_id: "latest" }]);
   });
+
+  it("prunes abandoned nonterminal work only after grace while preserving current work", async () => {
+    database.prepare("UPDATE whoop_connections SET reconcile_generation = 3, status = 'active'").run();
+    const insertCheckpoint = database.prepare(`
+      INSERT INTO whoop_sync_checkpoints (
+        whoop_user_id, connection_id, resource, mode, reconcile_generation,
+        sync_run_id, target_id, status, page_count, record_count, created_at, updated_at
+      ) VALUES (42, ?, ?, 'reconcile', ?, ?, '', ?, 0, 0, ?, ?)
+    `);
+    const old = "2026-08-17T00:00:00.000Z";
+    const withinGrace = "2026-08-19T06:00:00.000Z";
+    insertCheckpoint.run(CONNECTION_ID, "sleep", 3, "current-running", "running", old, old);
+    insertCheckpoint.run(CONNECTION_ID, "workout", 3, "current-retrying", "retrying", old, old);
+    insertCheckpoint.run(CONNECTION_ID, "cycle", 3, "current-queued", "queued", old, old);
+    insertCheckpoint.run(CONNECTION_ID, "sleep", 2, "superseded-recent", "retrying", withinGrace, withinGrace);
+    insertCheckpoint.run(CONNECTION_ID, "sleep", 1, "superseded-old", "queued", old, old);
+    insertCheckpoint.run("old-connection", "sleep", 8, "old-lifecycle", "running", old, old);
+
+    const insertRun = database.prepare(`
+      INSERT INTO whoop_sync_runs (
+        run_id, whoop_user_id, connection_id, reconcile_generation, trigger, status,
+        expected_target_count, completed_target_count, page_count, record_count, started_at
+      ) VALUES (?, 42, ?, ?, 'scheduled', ?, 6, 0, 0, 0, ?)
+    `);
+    insertRun.run("current-queued", CONNECTION_ID, 3, "queued", old);
+    insertRun.run("current-running", CONNECTION_ID, 3, "running", old);
+    insertRun.run("current-retrying", CONNECTION_ID, 3, "retrying", old);
+    insertRun.run("superseded-recent", CONNECTION_ID, 2, "retrying", withinGrace);
+    insertRun.run("superseded-old", CONNECTION_ID, 1, "running", old);
+    insertRun.run("old-lifecycle", "old-connection", 8, "queued", old);
+
+    await repository.pruneOperationalData(NOW);
+
+    expect(database.prepare("SELECT sync_run_id FROM whoop_sync_checkpoints ORDER BY sync_run_id").all())
+      .toEqual([
+        { sync_run_id: "current-queued" },
+        { sync_run_id: "current-retrying" },
+        { sync_run_id: "current-running" },
+        { sync_run_id: "superseded-recent" },
+      ]);
+    expect(database.prepare("SELECT run_id FROM whoop_sync_runs ORDER BY run_id").all())
+      .toEqual([
+        { run_id: "current-queued" },
+        { run_id: "current-retrying" },
+        { run_id: "current-running" },
+        { run_id: "superseded-recent" },
+      ]);
+  });
 });

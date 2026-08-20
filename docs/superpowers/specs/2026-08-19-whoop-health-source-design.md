@@ -145,7 +145,7 @@ Manual protected `POST /v1/integrations/whoop/sync` queues the same idempotent r
 
 Reconciliation creates its lifecycle-fenced run before queue publication. Run counters and state are recomputed from durable per-target checkpoints rather than incremented, so redelivery cannot double-count progress. Durable reconciliation and webhook success/failure also updates sanitized connection health only when the exact `connection_id` remains current.
 
-An independent scheduled retention job performs bounded deletes. It removes expired/consumed OAuth states and abandoned seen rows after one day, and superseded terminal checkpoints/runs plus processed update-webhook receipts after 30 days. Nonterminal receipts and every deletion-webhook receipt are retained; the latest useful progress is preserved.
+An independent scheduled retention job performs bounded deletes. It removes expired/consumed OAuth states, abandoned seen rows, and nonterminal checkpoint/run rows proven superseded by connection lifecycle or reconciliation generation after one day. Superseded terminal checkpoints/runs and processed update-webhook receipts are removed after 30 days. Current nonterminal work, nonterminal webhook receipts, and every deletion-webhook receipt are retained; the latest useful progress is preserved.
 
 ## Webhook Flow
 

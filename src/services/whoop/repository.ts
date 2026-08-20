@@ -31,6 +31,7 @@ export const WHOOP_OPERATIONAL_RETENTION = {
   checkpointMilliseconds: 30 * 24 * 60 * 60 * 1_000,
   syncRunMilliseconds: 30 * 24 * 60 * 60 * 1_000,
   processedWebhookMilliseconds: 30 * 24 * 60 * 60 * 1_000,
+  abandonedWorkMilliseconds: 24 * 60 * 60 * 1_000,
   deleteLimit: 100,
 } as const;
 
@@ -1689,6 +1690,7 @@ export class WhoopRepository {
     const runCutoff = cutoff(WHOOP_OPERATIONAL_RETENTION.syncRunMilliseconds);
     const seenCutoff = cutoff(WHOOP_OPERATIONAL_RETENTION.reconcileSeenMilliseconds);
     const webhookCutoff = cutoff(WHOOP_OPERATIONAL_RETENTION.processedWebhookMilliseconds);
+    const abandonedWorkCutoff = cutoff(WHOOP_OPERATIONAL_RETENTION.abandonedWorkMilliseconds);
     const limit = WHOOP_OPERATIONAL_RETENTION.deleteLimit;
     const results = await this.db.batch([
       this.db.prepare(`
@@ -1702,32 +1704,55 @@ export class WhoopRepository {
       this.db.prepare(`
         DELETE FROM whoop_sync_checkpoints WHERE rowid IN (
           SELECT checkpoint.rowid FROM whoop_sync_checkpoints AS checkpoint
-          WHERE checkpoint.status IN ('complete', 'error') AND checkpoint.updated_at < ?
-            AND (checkpoint.target_id != '' OR EXISTS (
-              SELECT 1 FROM whoop_sync_checkpoints AS newer
-              WHERE newer.whoop_user_id = checkpoint.whoop_user_id
-                AND newer.resource = checkpoint.resource
-                AND newer.mode = checkpoint.mode
-                AND newer.target_id = checkpoint.target_id
-                AND (newer.created_at > checkpoint.created_at
-                  OR (newer.created_at = checkpoint.created_at AND newer.sync_run_id > checkpoint.sync_run_id))
-            ))
+          WHERE (
+            (checkpoint.status IN ('complete', 'error') AND checkpoint.updated_at < ?
+              AND (checkpoint.target_id != '' OR EXISTS (
+                SELECT 1 FROM whoop_sync_checkpoints AS newer
+                WHERE newer.whoop_user_id = checkpoint.whoop_user_id
+                  AND newer.resource = checkpoint.resource
+                  AND newer.mode = checkpoint.mode
+                  AND newer.target_id = checkpoint.target_id
+                  AND (newer.created_at > checkpoint.created_at
+                    OR (newer.created_at = checkpoint.created_at AND newer.sync_run_id > checkpoint.sync_run_id))
+              )))
+            OR
+            (checkpoint.status IN ('queued', 'running', 'retrying') AND checkpoint.updated_at < ?
+              AND NOT EXISTS (
+                SELECT 1 FROM whoop_connections AS current_connection
+                WHERE current_connection.whoop_user_id = checkpoint.whoop_user_id
+                  AND current_connection.connection_id = checkpoint.connection_id
+                  AND current_connection.status IN ('active', 'backfilling')
+                  AND (checkpoint.mode != 'reconcile'
+                    OR current_connection.reconcile_generation = checkpoint.reconcile_generation)
+              ))
+          )
           ORDER BY checkpoint.updated_at ASC LIMIT ?
         )
-      `).bind(checkpointCutoff, limit),
+      `).bind(checkpointCutoff, abandonedWorkCutoff, limit),
       this.db.prepare(`
         DELETE FROM whoop_sync_runs WHERE rowid IN (
           SELECT run.rowid FROM whoop_sync_runs AS run
-          WHERE run.status IN ('complete', 'error') AND run.started_at < ?
-            AND EXISTS (
-              SELECT 1 FROM whoop_sync_runs AS newer
-              WHERE newer.whoop_user_id = run.whoop_user_id
-                AND (newer.started_at > run.started_at
-                  OR (newer.started_at = run.started_at AND newer.run_id > run.run_id))
-            )
+          WHERE (
+            (run.status IN ('complete', 'error') AND run.started_at < ?
+              AND EXISTS (
+                SELECT 1 FROM whoop_sync_runs AS newer
+                WHERE newer.whoop_user_id = run.whoop_user_id
+                  AND (newer.started_at > run.started_at
+                    OR (newer.started_at = run.started_at AND newer.run_id > run.run_id))
+              ))
+            OR
+            (run.status IN ('queued', 'running', 'retrying') AND run.started_at < ?
+              AND NOT EXISTS (
+                SELECT 1 FROM whoop_connections AS current_connection
+                WHERE current_connection.whoop_user_id = run.whoop_user_id
+                  AND current_connection.connection_id = run.connection_id
+                  AND current_connection.reconcile_generation = run.reconcile_generation
+                  AND current_connection.status IN ('active', 'backfilling')
+              ))
+          )
           ORDER BY run.started_at ASC LIMIT ?
         )
-      `).bind(runCutoff, limit),
+      `).bind(runCutoff, abandonedWorkCutoff, limit),
       this.db.prepare(`
         DELETE FROM whoop_reconcile_seen WHERE rowid IN (
           SELECT seen.rowid FROM whoop_reconcile_seen AS seen

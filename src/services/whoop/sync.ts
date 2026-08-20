@@ -572,7 +572,7 @@ export async function handleWhoopQueue(
           && error.status >= 400
           && error.status < 500
           && !error.retryable;
-        let failureRecorded = false;
+        let failureFinalized = false;
         try {
           const failureResult = await repository.markWebhookFailed(
             body.traceId,
@@ -586,7 +586,6 @@ export async function handleWhoopQueue(
             message.ack();
             continue;
           }
-          failureRecorded = true;
           const healthRecorded = await repository.recordSyncFailure(
             body.whoopUserId,
             body.connectionId,
@@ -597,10 +596,15 @@ export async function handleWhoopQueue(
             message.ack();
             continue;
           }
-        } catch {
+          failureFinalized = true;
+        } catch (failureWriteError) {
+          if (failureWriteError instanceof WhoopStaleConnectionError) {
+            message.ack();
+            continue;
+          }
           // Retrying preserves the webhook when its durable status write fails.
         }
-        if (permanentClientError && failureRecorded) {
+        if (permanentClientError && failureFinalized) {
           message.ack();
           continue;
         }
@@ -618,7 +622,7 @@ export async function handleWhoopQueue(
         && error.status >= 400
         && error.status < 500
         && !error.retryable;
-      let checkpointed = false;
+      let failureFinalized = false;
       try {
         const checkpointResult = await repository.upsertCheckpoint({
           whoopUserId: body.whoopUserId,
@@ -640,7 +644,21 @@ export async function handleWhoopQueue(
           message.ack();
           continue;
         }
-        checkpointed = true;
+        if (permanentClientError
+          && body.kind === "reconcile"
+          && body.recoveryCycleId === undefined) {
+          const cleaned = await repository.cleanupReconciliationSeen({
+            whoopUserId: body.whoopUserId,
+            connectionId: body.connectionId,
+            reconcileGeneration: body.reconcileGeneration,
+            reconcileRunId: body.reconcileRunId,
+            resource: body.resource,
+          });
+          if (!cleaned) {
+            message.ack();
+            continue;
+          }
+        }
         if (body.kind === "reconcile") {
           requireCurrentWrite(await repository.refreshSyncRun(
             body.reconcileRunId,
@@ -660,28 +678,15 @@ export async function handleWhoopQueue(
           message.ack();
           continue;
         }
-      } catch {
+        failureFinalized = true;
+      } catch (failureWriteError) {
+        if (failureWriteError instanceof WhoopStaleConnectionError) {
+          message.ack();
+          continue;
+        }
         // Retrying the message is the durable fallback when checkpointing fails.
       }
-      if (permanentClientError && checkpointed) {
-        if (body.kind === "reconcile" && body.recoveryCycleId === undefined) {
-          try {
-            const cleaned = await repository.cleanupReconciliationSeen({
-              whoopUserId: body.whoopUserId,
-              connectionId: body.connectionId,
-              reconcileGeneration: body.reconcileGeneration,
-              reconcileRunId: body.reconcileRunId,
-              resource: body.resource,
-            });
-            if (!cleaned) {
-              message.ack();
-              continue;
-            }
-          } catch {
-            message.retry({ delaySeconds: 30 });
-            continue;
-          }
-        }
+      if (permanentClientError && failureFinalized) {
         message.ack();
         continue;
       }

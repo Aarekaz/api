@@ -634,6 +634,65 @@ describe("WHOOP queue synchronization", () => {
     expect(message.retry).not.toHaveBeenCalled();
   });
 
+  it("retries a permanent webhook failure until connection health is durable", async () => {
+    const { client, dependencies, env, repository } = createHarness();
+    client.getWorkout.mockRejectedValue(new WhoopRequestError("get workout", 404));
+    repository.recordSyncFailure
+      .mockRejectedValueOnce(new Error("health write unavailable"))
+      .mockResolvedValueOnce(true);
+    const first = batchOf({
+      kind: "webhook",
+      traceId: "trace-permanent-health",
+      whoopUserId: 42,
+      resourceId: WORKOUT.id,
+      eventType: "workout.updated",
+    });
+
+    await handleWhoopQueue(first, env, dependencies);
+
+    expect(first.messages[0].ack).not.toHaveBeenCalled();
+    expect(first.messages[0].retry).toHaveBeenCalledWith({ delaySeconds: 30 });
+
+    const replay = batchOf(first.messages[0].body);
+    await handleWhoopQueue(replay, env, dependencies);
+
+    expect(repository.markWebhookFailed).toHaveBeenCalledTimes(2);
+    expect(repository.recordSyncFailure).toHaveBeenCalledTimes(2);
+    expect(replay.messages[0].ack).toHaveBeenCalledTimes(1);
+    expect(replay.messages[0].retry).not.toHaveBeenCalled();
+  });
+
+  it("retries a permanent reconciliation failure until run and connection health are durable", async () => {
+    const { client, dependencies, env, repository } = createHarness();
+    client.getCollection.mockRejectedValue(new WhoopRequestError("list workout", 404));
+    repository.refreshSyncRun
+      .mockRejectedValueOnce(new Error("run write unavailable"))
+      .mockResolvedValueOnce(true);
+    const first = batchOf({
+      kind: "reconcile",
+      whoopUserId: 42,
+      resource: "workout",
+      pageCount: 2,
+      recordCount: 25,
+    });
+
+    await handleWhoopQueue(first, env, dependencies);
+
+    expect(first.messages[0].ack).not.toHaveBeenCalled();
+    expect(first.messages[0].retry).toHaveBeenCalledWith({ delaySeconds: 30 });
+    expect(repository.recordSyncFailure).not.toHaveBeenCalled();
+
+    const replay = batchOf(first.messages[0].body);
+    await handleWhoopQueue(replay, env, dependencies);
+
+    expect(repository.upsertCheckpoint).toHaveBeenCalledTimes(2);
+    expect(repository.refreshSyncRun).toHaveBeenCalledTimes(2);
+    expect(repository.recordSyncFailure).toHaveBeenCalledTimes(1);
+    expect(repository.cleanupReconciliationSeen).toHaveBeenCalledTimes(2);
+    expect(replay.messages[0].ack).toHaveBeenCalledTimes(1);
+    expect(replay.messages[0].retry).not.toHaveBeenCalled();
+  });
+
   it("does not clear collection seen IDs when a targeted recovery permanently fails", async () => {
     const { client, dependencies, env, repository } = createHarness();
     client.getRecovery.mockRejectedValue(new WhoopRequestError("get recovery", 404));

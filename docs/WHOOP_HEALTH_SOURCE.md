@@ -62,7 +62,7 @@ The queue performs initial pagination, webhook fetches, and reconciliation at co
 
 Every reconciliation has a lifecycle-fenced run created before queue publication. Counters are derived from durable checkpoints so redelivery cannot double-count them. Durable reconciliation and webhook results update the exact current connection's sanitized success/failure health; work from a replaced connection cannot update it.
 
-The independent scheduled retention job deletes at most 100 eligible rows per operational table per invocation. It uses one day for expired/consumed OAuth states and abandoned reconciliation seen rows, and 30 days for superseded terminal checkpoints/runs and processed update-webhook receipts. It preserves nonterminal webhook receipts, every deletion-webhook receipt, and the latest useful checkpoint/run projection.
+The independent scheduled retention job deletes at most 100 eligible rows per operational table per invocation. It uses one day for expired/consumed OAuth states, abandoned reconciliation seen rows, and nonterminal checkpoint/run rows proven to belong to an older connection lifecycle or reconciliation generation. It uses 30 days for superseded terminal checkpoints/runs and processed update-webhook receipts. Current-lifecycle nonterminal work, nonterminal webhook receipts, every deletion-webhook receipt, and the latest useful checkpoint/run projection are preserved.
 
 ## Apple legacy history
 
