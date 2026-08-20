@@ -21,6 +21,7 @@ type Connection = {
   connectionId?: string;
   status: "not_connected" | "backfilling" | "active" | "disconnected";
   credentialVersion: number;
+  reconcileGeneration?: number;
   granted_scopes?: string[];
 };
 
@@ -28,12 +29,15 @@ function createDependencies(connection: Connection | null = null) {
   const currentConnection = connection ? {
     ...connection,
     connectionId: connection.connectionId ?? CONNECTION_ID,
+    reconcileGeneration: connection.reconcileGeneration ?? 0,
   } : null;
   const repository = {
     createOAuthState: vi.fn().mockResolvedValue(undefined),
     consumeOAuthState: vi.fn().mockResolvedValue(true),
     getCurrentConnection: vi.fn().mockResolvedValue(currentConnection),
     getSyncProgress: vi.fn().mockResolvedValue([]),
+    beginReconciliation: vi.fn().mockResolvedValue(4),
+    getPendingRecoveryCycleIds: vi.fn().mockResolvedValue([]),
     claimAndUpsertConnection: vi.fn().mockResolvedValue(1),
     markInitialBackfillQueued: vi.fn().mockResolvedValue(true),
     disconnect: vi.fn().mockResolvedValue(true),
@@ -208,16 +212,23 @@ describe("WHOOP integration management routes", () => {
     expect(client.exchangeAuthorizationCode).not.toHaveBeenCalled();
   });
 
-  it("queues only reconciliation work for a manual sync", async () => {
-    const { dependencies, client } = createDependencies({ whoopUserId: PROFILE.user_id, status: "active", credentialVersion: 1 });
+  it("uses the canonical generation-fenced reconciliation publisher for manual sync", async () => {
+    const { dependencies, repository, client } = createDependencies({ whoopUserId: PROFILE.user_id, status: "active", credentialVersion: 1 });
     const app = createApp(dependencies);
 
     const response = await app.request("/v1/integrations/whoop/sync", bearerPost(), ENV);
 
     expect(response.status).toBe(202);
-    expect(ENV.WHOOP_SYNC_QUEUE.send).toHaveBeenCalledTimes(6);
-    const messages = (ENV.WHOOP_SYNC_QUEUE.send as unknown as ReturnType<typeof vi.fn>)
-      .mock.calls.map(([message]) => message) as WhoopQueueMessage[];
+    expect(repository.beginReconciliation).toHaveBeenCalledWith(
+      PROFILE.user_id,
+      CONNECTION_ID,
+      "2026-08-19T12:00:00.000Z",
+    );
+    expect(repository.getPendingRecoveryCycleIds).toHaveBeenCalledWith(PROFILE.user_id, 25);
+    expect(ENV.WHOOP_SYNC_QUEUE.send).not.toHaveBeenCalled();
+    expect(ENV.WHOOP_SYNC_QUEUE.sendBatch).toHaveBeenCalledTimes(1);
+    const messages = (ENV.WHOOP_SYNC_QUEUE.sendBatch as unknown as ReturnType<typeof vi.fn>)
+      .mock.calls[0][0].map(({ body }: { body: WhoopQueueMessage }) => body) as WhoopQueueMessage[];
     const reconcileRunIds = messages.map((message) => {
       if (message.kind !== "reconcile") throw new Error("Expected reconciliation message");
       return message.reconcileRunId;
@@ -228,8 +239,16 @@ describe("WHOOP integration management routes", () => {
         kind: "reconcile",
         whoopUserId: PROFILE.user_id,
         connectionId: CONNECTION_ID,
+        reconcileGeneration: 4,
         reconcileRunId: reconcileRunIds[0],
         resource,
+        ...(["cycle", "recovery", "sleep", "workout"].includes(resource)
+          ? {
+              windowStart: "2026-08-05T12:00:00.000Z",
+              windowEnd: "2026-08-19T12:00:00.000Z",
+            }
+          : {}),
+        trigger: "manual",
       })));
     expect(client.exchangeAuthorizationCode).not.toHaveBeenCalled();
   });

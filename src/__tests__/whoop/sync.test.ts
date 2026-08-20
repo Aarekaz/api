@@ -29,16 +29,20 @@ const createHarness = () => {
     upsertCheckpoint: vi.fn().mockResolvedValue(undefined),
     recordReconciliationSeen: vi.fn().mockResolvedValue(undefined),
     finalizeReconciliation: vi.fn().mockResolvedValue(undefined),
+    cleanupReconciliationSeen: vi.fn().mockResolvedValue(true),
     markWebhookProcessed: vi.fn().mockResolvedValue(undefined),
     markWebhookFailed: vi.fn().mockResolvedValue(undefined),
     getPendingRecoveryCycleIds: vi.fn().mockResolvedValue([]),
+    beginReconciliation: vi.fn().mockResolvedValue(7),
     getCurrentConnection: vi.fn().mockResolvedValue({
       whoopUserId: 42,
       connectionId: CONNECTION_ID,
       credentialVersion: 1,
+      reconcileGeneration: 0,
       status: "active",
     }),
     isSyncConnectionCurrent: vi.fn().mockResolvedValue(true),
+    isReconciliationCurrent: vi.fn().mockResolvedValue(true),
     activateCompletedBackfill: vi.fn().mockResolvedValue(false),
   };
   const client = {
@@ -68,8 +72,9 @@ const createHarness = () => {
 
 type QueueMessageInput = WhoopQueueMessage extends infer Message
   ? Message extends WhoopQueueMessage
-    ? Omit<Message, "connectionId" | "reconcileRunId"> & {
+    ? Omit<Message, "connectionId" | "reconcileGeneration" | "reconcileRunId"> & {
       connectionId?: string;
+      reconcileGeneration?: number;
       reconcileRunId?: string;
     }
     : never
@@ -82,7 +87,9 @@ const batchOfMany = (...bodies: QueueMessageInput[]) => ({
     attempts: 1,
     body: {
       connectionId: CONNECTION_ID,
-      ...(body.kind === "reconcile" ? { reconcileRunId: RECONCILE_RUN_ID } : {}),
+      ...(body.kind === "reconcile"
+        ? { reconcileGeneration: 7, reconcileRunId: RECONCILE_RUN_ID }
+        : {}),
       ...body,
     },
     ack: vi.fn(),
@@ -112,6 +119,7 @@ describe("WHOOP queue synchronization", () => {
     expect(repository.upsertCheckpoint).toHaveBeenCalledWith({
       whoopUserId: 42,
       connectionId: CONNECTION_ID,
+      reconcileGeneration: 0,
       resource: "sleep",
       mode: "backfill",
       syncRunId: "initial-backfill",
@@ -207,10 +215,17 @@ describe("WHOOP queue synchronization", () => {
     expect(repository.upsertSourceRecord).toHaveBeenCalledWith(
       "sleep",
       SLEEP,
-      { tombstonePolicy: "reconcile", syncedAt: NOW, whoopUserId: 42, connectionId: CONNECTION_ID },
+      {
+        tombstonePolicy: "reconcile",
+        syncedAt: NOW,
+        whoopUserId: 42,
+        connectionId: CONNECTION_ID,
+        reconcileGeneration: 7,
+      },
     );
     expect(repository.finalizeReconciliation).toHaveBeenCalledWith(expect.objectContaining({
       mode: "reconcile",
+      reconcileGeneration: 7,
       syncRunId: RECONCILE_RUN_ID,
       targetId: "",
       windowStart: "2026-08-05T12:00:00.000Z",
@@ -239,7 +254,13 @@ describe("WHOOP queue synchronization", () => {
     expect(repository.upsertSourceRecord).toHaveBeenCalledWith(
       "recovery",
       RECOVERY,
-      { tombstonePolicy: "reconcile", syncedAt: NOW, whoopUserId: 42, connectionId: CONNECTION_ID },
+      {
+        tombstonePolicy: "reconcile",
+        syncedAt: NOW,
+        whoopUserId: 42,
+        connectionId: CONNECTION_ID,
+        reconcileGeneration: 7,
+      },
     );
     expect(batch.messages[0].ack).toHaveBeenCalledTimes(1);
   });
@@ -251,6 +272,7 @@ describe("WHOOP queue synchronization", () => {
     await enqueueReconciliation(env, 42, "scheduled", dependencies);
 
     expect(repository.getPendingRecoveryCycleIds).toHaveBeenCalledWith(42, 25);
+    expect(repository.beginReconciliation).toHaveBeenCalledWith(42, CONNECTION_ID, NOW);
     expect(env.WHOOP_SYNC_QUEUE.sendBatch).toHaveBeenCalledTimes(1);
     const queuedBodies = (env.WHOOP_SYNC_QUEUE.sendBatch as unknown as ReturnType<typeof vi.fn>)
       .mock.calls[0][0].map(({ body }: { body: WhoopQueueMessage }) => body);
@@ -262,13 +284,14 @@ describe("WHOOP queue synchronization", () => {
     expect(runIds[0]).toEqual(expect.any(String));
     const reconcileRunId = runIds[0];
     expect(env.WHOOP_SYNC_QUEUE.sendBatch).toHaveBeenCalledWith([
-      { body: { kind: "reconcile", whoopUserId: 42, connectionId: CONNECTION_ID, reconcileRunId, resource: "profile", trigger: "scheduled" } },
-      { body: { kind: "reconcile", whoopUserId: 42, connectionId: CONNECTION_ID, reconcileRunId, resource: "body_measurement", trigger: "scheduled" } },
+      { body: { kind: "reconcile", whoopUserId: 42, connectionId: CONNECTION_ID, reconcileGeneration: 7, reconcileRunId, resource: "profile", trigger: "scheduled" } },
+      { body: { kind: "reconcile", whoopUserId: 42, connectionId: CONNECTION_ID, reconcileGeneration: 7, reconcileRunId, resource: "body_measurement", trigger: "scheduled" } },
       ...(["cycle", "recovery", "sleep", "workout"] as const).map((resource) => ({
         body: {
           kind: "reconcile" as const,
           whoopUserId: 42,
           connectionId: CONNECTION_ID,
+          reconcileGeneration: 7,
           reconcileRunId,
           resource,
           windowStart: "2026-08-05T12:00:00.000Z",
@@ -276,8 +299,8 @@ describe("WHOOP queue synchronization", () => {
           trigger: "scheduled",
         },
       })),
-      { body: { kind: "reconcile", whoopUserId: 42, connectionId: CONNECTION_ID, reconcileRunId, resource: "recovery", recoveryCycleId: 9, trigger: "scheduled" } },
-      { body: { kind: "reconcile", whoopUserId: 42, connectionId: CONNECTION_ID, reconcileRunId, resource: "recovery", recoveryCycleId: 10, trigger: "scheduled" } },
+      { body: { kind: "reconcile", whoopUserId: 42, connectionId: CONNECTION_ID, reconcileGeneration: 7, reconcileRunId, resource: "recovery", recoveryCycleId: 9, trigger: "scheduled" } },
+      { body: { kind: "reconcile", whoopUserId: 42, connectionId: CONNECTION_ID, reconcileGeneration: 7, reconcileRunId, resource: "recovery", recoveryCycleId: 10, trigger: "scheduled" } },
     ]);
   });
 
@@ -291,12 +314,14 @@ describe("WHOOP queue synchronization", () => {
     expect(repository.recordReconciliationSeen).toHaveBeenCalledWith({
       whoopUserId: 42,
       connectionId: CONNECTION_ID,
+      reconcileGeneration: 7,
       reconcileRunId: RECONCILE_RUN_ID,
       resource: "sleep",
       providerId: SLEEP.id,
       seenAt: NOW,
     });
     expect(repository.finalizeReconciliation).toHaveBeenCalledWith(expect.objectContaining({
+      reconcileGeneration: 7,
       syncRunId: RECONCILE_RUN_ID,
       targetId: "",
       status: "complete",
@@ -317,11 +342,13 @@ describe("WHOOP queue synchronization", () => {
     expect(repository.recordReconciliationSeen).toHaveBeenCalledTimes(1);
     expect(repository.finalizeReconciliation).not.toHaveBeenCalled();
     expect(repository.upsertCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      reconcileGeneration: 7,
       syncRunId: RECONCILE_RUN_ID,
       targetId: "",
       status: "running",
     }));
     expect(env.WHOOP_SYNC_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      reconcileGeneration: 7,
       reconcileRunId: RECONCILE_RUN_ID,
       nextToken: "opaque-next",
     }));
@@ -467,13 +494,42 @@ describe("WHOOP queue synchronization", () => {
     await handleWhoopQueue(batch, env, dependencies);
 
     expect(repository.upsertCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      reconcileGeneration: 7,
       status: "error",
       pageCount: 2,
       recordCount: 25,
       lastError: "WHOOP request failed with status 404",
     }));
+    expect(repository.cleanupReconciliationSeen).toHaveBeenCalledWith({
+      whoopUserId: 42,
+      connectionId: CONNECTION_ID,
+      reconcileGeneration: 7,
+      reconcileRunId: RECONCILE_RUN_ID,
+      resource: "workout",
+    });
     expect(message.ack).toHaveBeenCalledTimes(1);
     expect(message.retry).not.toHaveBeenCalled();
+  });
+
+  it("does not clear collection seen IDs when a targeted recovery permanently fails", async () => {
+    const { client, dependencies, env, repository } = createHarness();
+    client.getRecovery.mockRejectedValue(new WhoopRequestError("get recovery", 404));
+    const batch = batchOf({
+      kind: "reconcile",
+      whoopUserId: 42,
+      resource: "recovery",
+      recoveryCycleId: 9,
+    });
+
+    await handleWhoopQueue(batch, env, dependencies);
+
+    expect(repository.upsertCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      targetId: "recovery-cycle:9",
+      status: "error",
+    }));
+    expect(repository.cleanupReconciliationSeen).not.toHaveBeenCalled();
+    expect(batch.messages[0].ack).toHaveBeenCalledTimes(1);
+    expect(batch.messages[0].retry).not.toHaveBeenCalled();
   });
 
   it("durably records a sanitized webhook retry before requesting redelivery", async () => {
@@ -605,6 +661,24 @@ describe("WHOOP queue synchronization", () => {
     expect(client.getCollection).not.toHaveBeenCalled();
     expect(repository.upsertSourceRecord).not.toHaveBeenCalled();
     expect(repository.upsertCheckpoint).not.toHaveBeenCalled();
+    expect(batch.messages[0].ack).toHaveBeenCalledTimes(1);
+    expect(batch.messages[0].retry).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges a superseded reconciliation generation before provider access", async () => {
+    const { client, dependencies, env, repository } = createHarness();
+    repository.isReconciliationCurrent.mockResolvedValue(false);
+    const batch = batchOf({
+      kind: "reconcile",
+      whoopUserId: 42,
+      resource: "sleep",
+    });
+
+    await handleWhoopQueue(batch, env, dependencies);
+
+    expect(repository.isReconciliationCurrent).toHaveBeenCalledWith(42, CONNECTION_ID, 7);
+    expect(client.getCollection).not.toHaveBeenCalled();
+    expect(repository.upsertSourceRecord).not.toHaveBeenCalled();
     expect(batch.messages[0].ack).toHaveBeenCalledTimes(1);
     expect(batch.messages[0].retry).not.toHaveBeenCalled();
   });

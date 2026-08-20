@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WhoopRepository, type CheckpointInput } from "../../services/whoop/repository";
-import { CONNECTION_ID, KEY, NOW, RECOVERY, WORKOUT } from "./fixtures";
+import { CONNECTION_ID, KEY, NOW, RECOVERY, SLEEP, WORKOUT } from "./fixtures";
 
 type SqliteStatement = {
   all: (...bindings: unknown[]) => unknown[];
@@ -16,38 +16,46 @@ type SqliteDatabase = {
 
 class SqliteD1Statement {
   constructor(
-    private readonly database: SqliteDatabase,
+    private readonly owner: SqliteD1,
     readonly sql: string,
     readonly bindings: unknown[] = [],
   ) {}
 
   bind(...bindings: unknown[]) {
-    return new SqliteD1Statement(this.database, this.sql, bindings);
+    return new SqliteD1Statement(this.owner, this.sql, bindings);
   }
 
   async first<T>(): Promise<T | null> {
-    return (this.database.prepare(this.sql).get(...this.bindings) ?? null) as T | null;
+    await this.owner.beforeExecute?.("first", this.sql, this.bindings);
+    return (this.owner.database.prepare(this.sql).get(...this.bindings) ?? null) as T | null;
   }
 
   async all<T>() {
     return {
-      results: this.database.prepare(this.sql).all(...this.bindings) as T[],
+      results: this.owner.database.prepare(this.sql).all(...this.bindings) as T[],
       success: true,
       meta: {},
     };
   }
 
   async run() {
-    const result = this.database.prepare(this.sql).run(...this.bindings);
+    await this.owner.beforeExecute?.("run", this.sql, this.bindings);
+    const result = this.owner.database.prepare(this.sql).run(...this.bindings);
     return { success: true, results: [], meta: { changes: Number(result.changes) } };
   }
 }
 
 class SqliteD1 {
+  beforeExecute?: (
+    operation: "first" | "run",
+    sql: string,
+    bindings: readonly unknown[],
+  ) => Promise<void>;
+
   constructor(readonly database: SqliteDatabase) {}
 
   prepare(sql: string) {
-    return new SqliteD1Statement(this.database, sql);
+    return new SqliteD1Statement(this, sql);
   }
 
   async batch(statements: D1PreparedStatement[]) {
@@ -72,6 +80,7 @@ const checkpoint = (overrides: Partial<CheckpointInput> & {
 }): CheckpointInput => ({
   whoopUserId: 42,
   connectionId: CONNECTION_ID,
+  reconcileGeneration: 0,
   resource: "recovery",
   mode: "backfill",
   windowStart: null,
@@ -148,13 +157,20 @@ describe("WHOOP repository on SQLite", () => {
     const count = database.prepare("SELECT COUNT(*) AS count FROM whoop_sync_checkpoints")
       .get() as { count: number };
     expect(count.count).toBe(3);
-    await expect(repository.getSyncProgress(42)).resolves.toEqual([expect.objectContaining({
-      resource: "recovery",
-      mode: "reconcile",
-      status: "running",
-      page_count: 1,
-      record_count: 20,
-    })]);
+    await expect(repository.getSyncProgress(42)).resolves.toEqual([
+      expect.objectContaining({
+        resource: "recovery",
+        mode: "backfill",
+        status: "complete",
+      }),
+      expect.objectContaining({
+        resource: "recovery",
+        mode: "reconcile",
+        status: "running",
+        page_count: 1,
+        record_count: 20,
+      }),
+    ]);
   });
 
   it("does not regress a completed checkpoint when an older page or failure is redelivered", async () => {
@@ -203,6 +219,178 @@ describe("WHOOP repository on SQLite", () => {
     });
   });
 
+  it("does not refresh a checkpoint timestamp for an exact equal-state redelivery", async () => {
+    await repository.upsertCheckpoint(checkpoint({
+      mode: "reconcile",
+      syncRunId: "reconcile-a",
+      targetId: "",
+      status: "complete",
+      pageCount: 3,
+      recordCount: 51,
+    }));
+    await repository.upsertCheckpoint(checkpoint({
+      mode: "reconcile",
+      syncRunId: "reconcile-a",
+      targetId: "",
+      status: "complete",
+      pageCount: 3,
+      recordCount: 51,
+      updatedAt: "2026-08-19T12:30:00.000Z",
+    }));
+
+    expect(database.prepare(`
+      SELECT updated_at FROM whoop_sync_checkpoints
+      WHERE sync_run_id = 'reconcile-a'
+    `).get()).toEqual({ updated_at: NOW });
+  });
+
+  it("fences overlapping reconciliation generations and keeps both collection progress modes", async () => {
+    const lifecycle = repository as unknown as {
+      beginReconciliation(whoopUserId: number, connectionId: string, begunAt: string): Promise<number | null>;
+    };
+    await repository.upsertCheckpoint(checkpoint({
+      resource: "sleep",
+      syncRunId: "initial-backfill",
+      targetId: "",
+      status: "complete",
+      pageCount: 4,
+      recordCount: 100,
+    }));
+    const firstGeneration = await lifecycle.beginReconciliation(42, CONNECTION_ID, NOW);
+    expect(firstGeneration).toBe(1);
+    await repository.upsertCheckpoint(checkpoint({
+      reconcileGeneration: firstGeneration!,
+      resource: "sleep",
+      mode: "reconcile",
+      syncRunId: "reconcile-old",
+      targetId: "",
+      status: "complete",
+      pageCount: 2,
+      recordCount: 40,
+      createdAt: "2026-08-19T12:10:00.000Z",
+      updatedAt: "2026-08-19T12:10:00.000Z",
+    }));
+    const currentGeneration = await lifecycle.beginReconciliation(
+      42,
+      CONNECTION_ID,
+      "2026-08-19T12:20:00.000Z",
+    );
+    expect(currentGeneration).toBe(2);
+    await repository.upsertCheckpoint(checkpoint({
+      reconcileGeneration: currentGeneration!,
+      resource: "sleep",
+      mode: "reconcile",
+      syncRunId: "reconcile-current",
+      targetId: "",
+      pageCount: 1,
+      recordCount: 10,
+      createdAt: "2026-08-19T12:05:00.000Z",
+      updatedAt: "2026-08-19T12:05:00.000Z",
+    }));
+
+    await expect(repository.upsertCheckpoint(checkpoint({
+      reconcileGeneration: firstGeneration!,
+      resource: "sleep",
+      mode: "reconcile",
+      syncRunId: "reconcile-old",
+      targetId: "",
+      status: "complete",
+      pageCount: 2,
+      recordCount: 40,
+      updatedAt: "2026-08-19T12:30:00.000Z",
+    }))).resolves.toBe(false);
+    await expect(repository.upsertSourceRecord("sleep", SLEEP, {
+      tombstonePolicy: "reconcile",
+      syncedAt: "2026-08-19T12:30:00.000Z",
+      whoopUserId: 42,
+      connectionId: CONNECTION_ID,
+      reconcileGeneration: firstGeneration!,
+    })).resolves.toBe(false);
+    expect(database.prepare("SELECT COUNT(*) AS count FROM whoop_sleeps").get())
+      .toEqual({ count: 0 });
+    await expect(repository.getSyncProgress(42)).resolves.toEqual([
+      expect.objectContaining({ resource: "sleep", mode: "backfill", status: "complete" }),
+      expect.objectContaining({ resource: "sleep", mode: "reconcile", status: "running" }),
+    ]);
+  });
+
+  it("bounds abandoned seen sets when successive reconciliation generations begin", async () => {
+    const reconciliation = repository as unknown as {
+      beginReconciliation(whoopUserId: number, connectionId: string, begunAt: string): Promise<number | null>;
+      recordReconciliationSeen(input: {
+        whoopUserId: number;
+        connectionId: string;
+        reconcileGeneration: number;
+        reconcileRunId: string;
+        resource: "sleep";
+        providerId: string;
+        seenAt: string;
+      }): Promise<boolean>;
+    };
+    for (let generation = 1; generation <= 3; generation += 1) {
+      await expect(reconciliation.beginReconciliation(42, CONNECTION_ID, NOW))
+        .resolves.toBe(generation);
+      await expect(reconciliation.recordReconciliationSeen({
+        whoopUserId: 42,
+        connectionId: CONNECTION_ID,
+        reconcileGeneration: generation,
+        reconcileRunId: `run-${generation}`,
+        resource: "sleep",
+        providerId: `sleep-${generation}`,
+        seenAt: NOW,
+      })).resolves.toBe(true);
+    }
+
+    expect(database.prepare(`
+      SELECT reconcile_generation, provider_id FROM whoop_reconcile_seen
+    `).all()).toEqual([{ reconcile_generation: 3, provider_id: "sleep-3" }]);
+  });
+
+  it("never lets a late older begin cleanup delete the current generation", async () => {
+    const begin = (repository as unknown as {
+      beginReconciliation(whoopUserId: number, connectionId: string, begunAt: string): Promise<number | null>;
+    }).beginReconciliation.bind(repository);
+    let cleanupCount = 0;
+    let releaseFirstCleanup!: () => void;
+    const firstCleanupReleased = new Promise<void>((resolve) => {
+      releaseFirstCleanup = resolve;
+    });
+    let firstCleanupStarted!: () => void;
+    const firstCleanupReached = new Promise<void>((resolve) => {
+      firstCleanupStarted = resolve;
+    });
+    d1.beforeExecute = async (operation, sql) => {
+      if (operation !== "run" || !sql.includes("DELETE FROM whoop_reconcile_seen")) return;
+      cleanupCount += 1;
+      if (cleanupCount !== 1) return;
+      firstCleanupStarted();
+      await firstCleanupReleased;
+    };
+
+    const firstBegin = begin(42, CONNECTION_ID, NOW);
+    await firstCleanupReached;
+    database.prepare(`
+      INSERT INTO whoop_reconcile_seen (
+        whoop_user_id, connection_id, reconcile_generation,
+        reconcile_run_id, resource, provider_id, seen_at
+      ) VALUES (42, ?, 1, 'run-1', 'sleep', 'sleep-1', ?)
+    `).run(CONNECTION_ID, NOW);
+    await expect(begin(42, CONNECTION_ID, "2026-08-19T12:01:00.000Z"))
+      .resolves.toBe(2);
+    database.prepare(`
+      INSERT INTO whoop_reconcile_seen (
+        whoop_user_id, connection_id, reconcile_generation,
+        reconcile_run_id, resource, provider_id, seen_at
+      ) VALUES (42, ?, 2, 'run-2', 'sleep', 'sleep-2', ?)
+    `).run(CONNECTION_ID, NOW);
+    releaseFirstCleanup();
+    await expect(firstBegin).resolves.toBe(1);
+
+    expect(database.prepare(`
+      SELECT reconcile_generation, provider_id FROM whoop_reconcile_seen
+    `).all()).toEqual([{ reconcile_generation: 2, provider_id: "sleep-2" }]);
+  });
+
   it("atomically clears publication intent and activates only a complete six-resource backfill", async () => {
     for (const resource of [
       "profile", "body_measurement", "cycle", "recovery", "sleep", "workout",
@@ -240,6 +428,7 @@ describe("WHOOP repository on SQLite", () => {
       recordReconciliationSeen(input: {
         whoopUserId: number;
         connectionId: string;
+        reconcileGeneration: number;
         reconcileRunId: string;
         resource: "sleep";
         providerId: string;
@@ -251,6 +440,7 @@ describe("WHOOP repository on SQLite", () => {
     await recordSeen.recordReconciliationSeen({
       whoopUserId: 42,
       connectionId: CONNECTION_ID,
+      reconcileGeneration: 0,
       reconcileRunId: runId,
       resource: "sleep",
       providerId: "00000000-0000-4000-8000-000000000001",
@@ -289,6 +479,7 @@ describe("WHOOP repository on SQLite", () => {
       recordReconciliationSeen(input: {
         whoopUserId: number;
         connectionId: string;
+        reconcileGeneration: number;
         reconcileRunId: string;
         resource: "sleep";
         providerId: string;
@@ -300,6 +491,7 @@ describe("WHOOP repository on SQLite", () => {
     await reconciliation.recordReconciliationSeen({
       whoopUserId: 42,
       connectionId: CONNECTION_ID,
+      reconcileGeneration: 0,
       reconcileRunId: runId,
       resource: "sleep",
       providerId: "00000000-0000-4000-8000-000000000001",
@@ -319,6 +511,7 @@ describe("WHOOP repository on SQLite", () => {
     await reconciliation.recordReconciliationSeen({
       whoopUserId: 42,
       connectionId: CONNECTION_ID,
+      reconcileGeneration: 0,
       reconcileRunId: runId,
       resource: "sleep",
       providerId: "00000000-0000-4000-8000-000000000002",
@@ -339,6 +532,7 @@ describe("WHOOP repository on SQLite", () => {
     await reconciliation.recordReconciliationSeen({
       whoopUserId: 42,
       connectionId: CONNECTION_ID,
+      reconcileGeneration: 0,
       reconcileRunId: runId,
       resource: "sleep",
       providerId: "00000000-0000-4000-8000-000000000002",
@@ -365,6 +559,7 @@ describe("WHOOP repository on SQLite", () => {
       recordReconciliationSeen(input: {
         whoopUserId: number;
         connectionId: string;
+        reconcileGeneration: number;
         reconcileRunId: string;
         resource: "sleep";
         providerId: string;
@@ -375,6 +570,7 @@ describe("WHOOP repository on SQLite", () => {
     await recordSeen({
       whoopUserId: 42,
       connectionId: CONNECTION_ID,
+      reconcileGeneration: 0,
       reconcileRunId: runId,
       resource: "sleep",
       providerId: "00000000-0000-4000-8000-000000000001",

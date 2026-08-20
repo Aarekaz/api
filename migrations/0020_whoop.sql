@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS whoop_connections (
   refresh_token_nonce TEXT,
   granted_scopes TEXT NOT NULL,
   credential_version INTEGER NOT NULL DEFAULT 1,
+  reconcile_generation INTEGER NOT NULL DEFAULT 0,
   initial_backfill_pending INTEGER NOT NULL DEFAULT 0,
   refresh_lease_id TEXT,
   refresh_lease_expires_at TEXT,
@@ -188,11 +189,12 @@ CREATE INDEX IF NOT EXISTS idx_whoop_webhook_events_user_received ON whoop_webho
 CREATE TABLE IF NOT EXISTS whoop_reconcile_seen (
   whoop_user_id INTEGER NOT NULL,
   connection_id TEXT NOT NULL,
+  reconcile_generation INTEGER NOT NULL,
   reconcile_run_id TEXT NOT NULL,
   resource TEXT NOT NULL,
   provider_id TEXT NOT NULL,
   seen_at TEXT NOT NULL,
-  PRIMARY KEY (whoop_user_id, connection_id, reconcile_run_id, resource, provider_id)
+  PRIMARY KEY (whoop_user_id, connection_id, reconcile_generation, reconcile_run_id, resource, provider_id)
 );
 
 CREATE TABLE IF NOT EXISTS whoop_sync_checkpoints (
@@ -200,6 +202,7 @@ CREATE TABLE IF NOT EXISTS whoop_sync_checkpoints (
   connection_id TEXT NOT NULL,
   resource TEXT NOT NULL,
   mode TEXT NOT NULL,
+  reconcile_generation INTEGER NOT NULL,
   sync_run_id TEXT NOT NULL,
   target_id TEXT NOT NULL,
   window_start TEXT,
@@ -211,11 +214,11 @@ CREATE TABLE IF NOT EXISTS whoop_sync_checkpoints (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   last_error TEXT,
-  PRIMARY KEY (whoop_user_id, connection_id, resource, mode, sync_run_id, target_id)
+  PRIMARY KEY (whoop_user_id, connection_id, resource, mode, reconcile_generation, sync_run_id, target_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_whoop_sync_checkpoints_progress
-  ON whoop_sync_checkpoints(whoop_user_id, connection_id, target_id, resource, updated_at);
+  ON whoop_sync_checkpoints(whoop_user_id, connection_id, target_id, resource, mode, reconcile_generation, created_at);
 
 CREATE TABLE IF NOT EXISTS whoop_sync_runs (
   run_id TEXT PRIMARY KEY,

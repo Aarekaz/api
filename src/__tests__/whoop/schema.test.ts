@@ -104,22 +104,26 @@ describe("WHOOP shared schemas", () => {
     const migrationSql = await readProjectFile("migrations/0020_whoop.sql");
     const cyclesDefinition = migrationSql.match(/CREATE TABLE IF NOT EXISTS whoop_cycles \(([\s\S]*?)\n\);/)?.[1];
     const webhookDefinition = migrationSql.match(/CREATE TABLE IF NOT EXISTS whoop_webhook_events \(([\s\S]*?)\n\);/)?.[1];
+    const connectionDefinition = migrationSql.match(/CREATE TABLE IF NOT EXISTS whoop_connections \(([\s\S]*?)\n\);/)?.[1];
+    const seenDefinition = migrationSql.match(/CREATE TABLE IF NOT EXISTS whoop_reconcile_seen \(([\s\S]*?)\n\);/)?.[1];
     const checkpointDefinition = migrationSql.match(/CREATE TABLE IF NOT EXISTS whoop_sync_checkpoints \(([\s\S]*?)\n\);/)?.[1];
 
     expect(migrationSql).not.toMatch(/(?:ALTER|CREATE\s+TABLE)[\s\S]*apple_health_/i);
     expect(migrationSql).toMatch(/CREATE TABLE IF NOT EXISTS whoop_cycles/);
     expect(cyclesDefinition).toMatch(/end_at TEXT,/);
     expect(migrationSql).toMatch(/credential_version INTEGER NOT NULL DEFAULT 1/);
+    expect(connectionDefinition).toMatch(/reconcile_generation INTEGER NOT NULL DEFAULT 0/);
     expect(migrationSql).toMatch(/initial_backfill_pending INTEGER NOT NULL DEFAULT 0/);
     expect(migrationSql).toMatch(/refresh_dispatched_at TEXT/);
     expect(migrationSql).toMatch(/status TEXT NOT NULL CHECK \(status IN/);
     expect(migrationSql).toMatch(/event_type TEXT NOT NULL CHECK \(event_type IN/);
     expect(webhookDefinition).toMatch(/connection_id TEXT NOT NULL/);
-    expect(migrationSql).toMatch(/CREATE TABLE IF NOT EXISTS whoop_reconcile_seen/);
+    expect(seenDefinition).toMatch(/reconcile_generation INTEGER NOT NULL/);
     expect(checkpointDefinition).toMatch(/sync_run_id TEXT NOT NULL/);
     expect(checkpointDefinition).toMatch(/target_id TEXT NOT NULL/);
+    expect(checkpointDefinition).toMatch(/reconcile_generation INTEGER NOT NULL/);
     expect(checkpointDefinition).toMatch(
-      /PRIMARY KEY \(whoop_user_id, connection_id, resource, mode, sync_run_id, target_id\)/,
+      /PRIMARY KEY \(whoop_user_id, connection_id, resource, mode, reconcile_generation, sync_run_id, target_id\)/,
     );
   });
 

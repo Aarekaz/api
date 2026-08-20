@@ -30,19 +30,33 @@ type SyncRepository = Pick<WhoopRepository,
   | "tombstoneSourceRecord"
   | "upsertCheckpoint"
   | "recordReconciliationSeen"
+  | "cleanupReconciliationSeen"
   | "finalizeReconciliation"
+  | "beginReconciliation"
   | "getPendingRecoveryCycleIds"
   | "markWebhookProcessed"
   | "markWebhookFailed"
   | "getCurrentConnection"
   | "isSyncConnectionCurrent"
+  | "isReconciliationCurrent"
   | "activateCompletedBackfill"
+>;
+
+type ReconciliationPublisherRepository = Pick<WhoopRepository,
+  | "beginReconciliation"
+  | "getCurrentConnection"
+  | "getPendingRecoveryCycleIds"
 >;
 
 export interface WhoopSyncDependencies {
   repository?: SyncRepository;
   client?: SyncClient;
   clientFactory?: (env: Env, accessToken: string) => SyncClient;
+  now?: () => Date;
+}
+
+export interface EnqueueReconciliationDependencies {
+  repository?: ReconciliationPublisherRepository;
   now?: () => Date;
 }
 
@@ -67,8 +81,9 @@ const RECONCILIATION_RESOURCES = [
 ] as const;
 
 const checkpointIdentity = (body: Exclude<WhoopQueueMessage, { kind: "webhook" }>) => body.kind === "backfill"
-  ? { syncRunId: "initial-backfill", targetId: "" }
+  ? { reconcileGeneration: 0, syncRunId: "initial-backfill", targetId: "" }
   : {
+      reconcileGeneration: body.reconcileGeneration,
       syncRunId: body.reconcileRunId,
       targetId: body.recoveryCycleId === undefined ? "" : `recovery-cycle:${body.recoveryCycleId}`,
     };
@@ -88,7 +103,7 @@ export async function enqueueReconciliation(
   env: Env,
   whoopUserId: number,
   trigger: string,
-  dependencies: WhoopSyncDependencies = {},
+  dependencies: EnqueueReconciliationDependencies = {},
 ): Promise<void> {
   const repository = dependencies.repository
     ?? new WhoopRepository(env.DB, env.WHOOP_TOKEN_ENCRYPTION_KEY);
@@ -102,11 +117,20 @@ export async function enqueueReconciliation(
   const windowEnd = now.toISOString();
   const windowStart = new Date(now.getTime() - RECONCILIATION_WINDOW_MILLISECONDS).toISOString();
   const reconcileRunId = crypto.randomUUID();
+  const reconcileGeneration = await repository.beginReconciliation(
+    whoopUserId,
+    connection.connectionId,
+    windowEnd,
+  );
+  if (reconcileGeneration === null) {
+    throw new Error("WHOOP connection changed before reconciliation began");
+  }
   const pendingRecoveryCycleIds = await repository.getPendingRecoveryCycleIds(whoopUserId, 25);
   const messages: WhoopQueueMessage[] = RECONCILIATION_RESOURCES.map((resource) => ({
     kind: "reconcile",
     whoopUserId,
     connectionId: connection.connectionId,
+    reconcileGeneration,
     reconcileRunId,
     resource,
     ...(isCollectionResource(resource) ? { windowStart, windowEnd } : {}),
@@ -116,6 +140,7 @@ export async function enqueueReconciliation(
     kind: "reconcile" as const,
     whoopUserId,
     connectionId: connection.connectionId,
+    reconcileGeneration,
     reconcileRunId,
     resource: "recovery" as const,
     recoveryCycleId,
@@ -187,10 +212,13 @@ export async function handleWhoopQueue(
   for (const message of batch.messages) {
     const body = message.body;
     try {
-    const currentConnection = await repository.isSyncConnectionCurrent(
-      body.whoopUserId,
-      body.connectionId,
-    );
+    const currentConnection = body.kind === "reconcile"
+      ? await repository.isReconciliationCurrent(
+          body.whoopUserId,
+          body.connectionId,
+          body.reconcileGeneration,
+        )
+      : await repository.isSyncConnectionCurrent(body.whoopUserId, body.connectionId);
     if (!currentConnection) {
       message.ack();
       continue;
@@ -252,6 +280,9 @@ export async function handleWhoopQueue(
           syncedAt,
           whoopUserId: body.whoopUserId,
           connectionId: body.connectionId,
+          ...(body.kind === "reconcile"
+            ? { reconcileGeneration: body.reconcileGeneration }
+            : {}),
         }));
         requireCurrentWrite(await repository.upsertCheckpoint({
           whoopUserId: body.whoopUserId,
@@ -292,6 +323,7 @@ export async function handleWhoopQueue(
           syncedAt,
           whoopUserId: body.whoopUserId,
           connectionId: body.connectionId,
+          reconcileGeneration: body.reconcileGeneration,
         }));
         requireCurrentWrite(await repository.upsertCheckpoint({
           whoopUserId: body.whoopUserId,
@@ -326,11 +358,15 @@ export async function handleWhoopQueue(
           syncedAt,
           whoopUserId: body.whoopUserId,
           connectionId: body.connectionId,
+          ...(body.kind === "reconcile"
+            ? { reconcileGeneration: body.reconcileGeneration }
+            : {}),
         }));
         if (body.kind === "reconcile") {
           requireCurrentWrite(await repository.recordReconciliationSeen({
             whoopUserId: body.whoopUserId,
             connectionId: body.connectionId,
+            reconcileGeneration: body.reconcileGeneration,
             reconcileRunId: body.reconcileRunId,
             resource,
             providerId: providerIdFor(resource, record as unknown as Record<string, unknown>),
@@ -368,6 +404,7 @@ export async function handleWhoopQueue(
                 kind: "reconcile",
                 whoopUserId: body.whoopUserId,
                 connectionId: body.connectionId,
+                reconcileGeneration: body.reconcileGeneration,
                 reconcileRunId: body.reconcileRunId,
                 resource,
                 nextToken: page.nextToken,
@@ -499,6 +536,24 @@ export async function handleWhoopQueue(
         // Retrying the message is the durable fallback when checkpointing fails.
       }
       if (permanentClientError && checkpointed) {
+        if (body.kind === "reconcile" && body.recoveryCycleId === undefined) {
+          try {
+            const cleaned = await repository.cleanupReconciliationSeen({
+              whoopUserId: body.whoopUserId,
+              connectionId: body.connectionId,
+              reconcileGeneration: body.reconcileGeneration,
+              reconcileRunId: body.reconcileRunId,
+              resource: body.resource,
+            });
+            if (!cleaned) {
+              message.ack();
+              continue;
+            }
+          } catch {
+            message.retry({ delaySeconds: 30 });
+            continue;
+          }
+        }
         message.ack();
         continue;
       }

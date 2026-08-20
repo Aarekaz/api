@@ -57,6 +57,7 @@ export type WhoopQueueMessage =
       kind: "reconcile";
       whoopUserId: number;
       connectionId: string;
+      reconcileGeneration: number;
       reconcileRunId: string;
       resource: WhoopResource;
       nextToken?: string;

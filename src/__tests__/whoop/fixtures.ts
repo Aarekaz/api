@@ -63,8 +63,9 @@ export const jsonResponse = (body: unknown, init?: ResponseInit) => new Response
 
 type FixtureQueueMessage = WhoopQueueMessage extends infer Message
   ? Message extends WhoopQueueMessage
-    ? Omit<Message, "connectionId" | "reconcileRunId"> & {
+    ? Omit<Message, "connectionId" | "reconcileGeneration" | "reconcileRunId"> & {
       connectionId?: string;
+      reconcileGeneration?: number;
       reconcileRunId?: string;
     }
     : never
@@ -74,7 +75,9 @@ export const batchOf = (message: FixtureQueueMessage) => ({
   messages: [{
     body: {
       connectionId: CONNECTION_ID,
-      ...(message.kind === "reconcile" ? { reconcileRunId: RECONCILE_RUN_ID } : {}),
+      ...(message.kind === "reconcile"
+        ? { reconcileGeneration: 7, reconcileRunId: RECONCILE_RUN_ID }
+        : {}),
       ...message,
     },
     ack: vi.fn(),

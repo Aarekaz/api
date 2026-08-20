@@ -389,6 +389,7 @@ async function connectionRow(overrides: DbRow = {}): Promise<DbRow> {
     refresh_token_nonce: refresh.nonce,
     granted_scopes: "offline read:workout",
     credential_version: 1,
+    reconcile_generation: 9,
     refresh_lease_id: null,
     refresh_lease_expires_at: null,
     refresh_dispatched_at: null,
@@ -445,6 +446,7 @@ describe("WHOOP repository", () => {
     expect(fake.calls[0].sql).toContain("INSERT INTO whoop_connections");
     expect(fake.calls[0].sql).toContain("WHERE NOT EXISTS");
     expect(fake.calls[0].sql).toContain("status != 'disconnected'");
+    expect(fake.calls[0].sql).toContain("reconcile_generation = 0");
   });
 
   it("projects durable initial-backfill intent for future queue or scheduler replay", async () => {
@@ -493,7 +495,8 @@ describe("WHOOP repository", () => {
     ]);
     expect(fake.calls[0].sql).toContain("initial_backfill_pending = 0");
     expect(fake.calls[0].sql).toContain("COUNT(DISTINCT resource)");
-    expect(fake.calls[0].sql).toContain("mode = 'backfill' AND target_id = '' AND status = 'complete'");
+    expect(fake.calls[0].sql).toContain("mode = 'backfill' AND reconcile_generation = 0");
+    expect(fake.calls[0].sql).toContain("target_id = '' AND status = 'complete'");
     expect(fake.calls[0].sql).not.toContain("initial_backfill_pending = 1");
   });
 
@@ -745,6 +748,7 @@ describe("WHOOP repository", () => {
     await repository.upsertCheckpoint({
       whoopUserId: 42,
       connectionId: "connection-1",
+      reconcileGeneration: 1,
       resource: "workout",
       mode: "reconcile",
       syncRunId: "reconcile-1",
@@ -759,11 +763,11 @@ describe("WHOOP repository", () => {
     });
 
     expect(fake.calls[0].bindings[3]).toBe("2026-08-19T12:00:00.250Z");
-    expect(fake.calls[1].bindings.slice(6, 8)).toEqual([
+    expect(fake.calls[1].bindings.slice(7, 9)).toEqual([
       "2026-08-18T12:00:00.000Z",
       "2026-08-19T12:00:00.500Z",
     ]);
-    expect(fake.calls[1].bindings.slice(12, 14)).toEqual([
+    expect(fake.calls[1].bindings.slice(13, 15)).toEqual([
       "2026-08-19T12:00:00.250Z",
       "2026-08-19T12:01:00.125Z",
     ]);
@@ -846,6 +850,7 @@ describe("WHOOP repository", () => {
     expect(rotation?.sql).toContain("WHERE whoop_user_id = ? AND refresh_lease_id = ? AND credential_version = ?");
     expect(rotation?.bindings.slice(-3)).toEqual([42, "lease-owner", 1]);
     expect(fake.connections.get(42)?.credential_version).toBe(2);
+    expect(fake.connections.get(42)?.reconcile_generation).toBe(9);
   });
 
   it("passes the credential generation paired with each initial and refreshed access token", async () => {

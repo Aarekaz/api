@@ -18,6 +18,7 @@ import {
 } from "../schemas/openapi";
 import type { Env } from "../types/env";
 import { WHOOP_SCOPES, type WhoopQueueMessage, type WhoopResource } from "../types/whoop";
+import { enqueueReconciliation } from "../services/whoop/sync";
 
 const WHOOP_AUTHORIZE_URL = "https://api.prod.whoop.com/oauth/oauth2/auth";
 const OAUTH_STATE_LIFETIME_MILLISECONDS = 10 * 60 * 1000;
@@ -30,6 +31,12 @@ interface IntegrationRepository {
   consumeOAuthState(stateHash: string, consumedAt: string): Promise<boolean>;
   getCurrentConnection(): Promise<CurrentWhoopConnection | null>;
   getSyncProgress(whoopUserId: number): Promise<SyncProgressProjection[]>;
+  beginReconciliation(
+    whoopUserId: number,
+    connectionId: string,
+    begunAt: string,
+  ): Promise<number | null>;
+  getPendingRecoveryCycleIds(whoopUserId: number, limit?: number): Promise<number[]>;
   claimAndUpsertConnection(input: Parameters<WhoopRepository["claimAndUpsertConnection"]>[0]): Promise<number | null>;
   markInitialBackfillQueued(
     whoopUserId: number,
@@ -96,18 +103,6 @@ const backfillMessagesFor = (
   resource,
 }));
 
-const reconciliationMessagesFor = (
-  whoopUserId: number,
-  connectionId: string,
-  reconcileRunId: string,
-): WhoopQueueMessage[] => INITIAL_RESOURCES.map((resource) => ({
-  kind: "reconcile",
-  whoopUserId,
-  connectionId,
-  reconcileRunId,
-  resource,
-}));
-
 export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDependencies = {}) {
   const app = new Hono<{ Bindings: Env }>();
   const now = dependencies.now ?? (() => new Date());
@@ -136,6 +131,7 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
       whoopUserId: _whoopUserId,
       connectionId: _connectionId,
       credentialVersion: _credentialVersion,
+      reconcileGeneration: _reconcileGeneration,
       ...status
     } = connection;
     return c.json({ ...status, progress });
@@ -221,13 +217,10 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
 
   app.post("/v1/integrations/whoop/sync", async (c) => {
     if (!configured(c.env)) return c.json({ error: "WHOOP integration is not configured" }, 503);
-    const connection = await repositoryFor(c.env).getCurrentConnection();
+    const repository = repositoryFor(c.env);
+    const connection = await repository.getCurrentConnection();
     if (!connectionCanSync(connection)) return c.json({ error: "WHOOP is not connected" }, 409);
-    await Promise.all(reconciliationMessagesFor(
-      connection.whoopUserId,
-      connection.connectionId,
-      crypto.randomUUID(),
-    ).map((message) => c.env.WHOOP_SYNC_QUEUE.send(message)));
+    await enqueueReconciliation(c.env, connection.whoopUserId, "manual", { repository, now });
     return c.json({ ok: true }, 202);
   });
 

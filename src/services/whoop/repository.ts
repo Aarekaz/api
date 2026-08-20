@@ -75,6 +75,7 @@ export interface SyncRunInput {
 export interface CheckpointInput {
   whoopUserId: number;
   connectionId: string;
+  reconcileGeneration: number;
   resource: WhoopResource;
   mode: string;
   syncRunId: string;
@@ -126,6 +127,7 @@ export interface CurrentWhoopConnection extends ConnectionStatusProjection {
   whoopUserId: number;
   connectionId: string;
   credentialVersion: number;
+  reconcileGeneration: number;
 }
 
 export interface PendingInitialBackfill {
@@ -176,6 +178,7 @@ interface WebhookTombstoneLookup {
 interface ReconciliationSeenInput {
   whoopUserId: number;
   connectionId: string;
+  reconcileGeneration: number;
   reconcileRunId: string;
   resource: "cycle" | "recovery" | "sleep" | "workout";
   providerId: string | number;
@@ -436,10 +439,10 @@ export class WhoopRepository {
     await this.db.prepare(`
       INSERT INTO whoop_connections (
         whoop_user_id, connection_id, status, access_token_ciphertext, access_token_nonce, access_token_expires_at,
-        refresh_token_ciphertext, refresh_token_nonce, granted_scopes, credential_version, refresh_lease_id,
+        refresh_token_ciphertext, refresh_token_nonce, granted_scopes, credential_version, reconcile_generation, refresh_lease_id,
         refresh_lease_expires_at, refresh_dispatched_at, connected_at, refreshed_at, last_success_at, last_error_at,
         disconnected_at, last_error, consecutive_failure_count, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, NULL, 0, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, NULL, 0, ?, ?)
       ON CONFLICT(whoop_user_id) DO UPDATE SET
         connection_id = excluded.connection_id,
         status = excluded.status,
@@ -450,6 +453,7 @@ export class WhoopRepository {
         refresh_token_nonce = excluded.refresh_token_nonce,
         granted_scopes = excluded.granted_scopes,
         credential_version = whoop_connections.credential_version + 1,
+        reconcile_generation = 0,
         refresh_lease_id = NULL,
         refresh_lease_expires_at = NULL,
         refresh_dispatched_at = NULL,
@@ -479,11 +483,11 @@ export class WhoopRepository {
     const row = await this.db.prepare(`
       INSERT INTO whoop_connections (
         whoop_user_id, connection_id, status, access_token_ciphertext, access_token_nonce, access_token_expires_at,
-        refresh_token_ciphertext, refresh_token_nonce, granted_scopes, credential_version,
+        refresh_token_ciphertext, refresh_token_nonce, granted_scopes, credential_version, reconcile_generation,
         initial_backfill_pending, refresh_lease_id, refresh_lease_expires_at, refresh_dispatched_at,
         connected_at, refreshed_at, last_success_at, last_error_at, disconnected_at, last_error,
         consecutive_failure_count, created_at, updated_at
-      ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, NULL, 0, ?, ?
+      ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, NULL, 0, ?, ?
       WHERE NOT EXISTS (
         SELECT 1 FROM whoop_connections
         WHERE whoop_user_id != ? AND status != 'disconnected'
@@ -498,6 +502,7 @@ export class WhoopRepository {
         refresh_token_nonce = excluded.refresh_token_nonce,
         granted_scopes = excluded.granted_scopes,
         credential_version = whoop_connections.credential_version + 1,
+        reconcile_generation = 0,
         initial_backfill_pending = excluded.initial_backfill_pending,
         refresh_lease_id = NULL,
         refresh_lease_expires_at = NULL,
@@ -541,14 +546,16 @@ export class WhoopRepository {
             SELECT COUNT(DISTINCT resource)
             FROM whoop_sync_checkpoints
             WHERE whoop_user_id = ? AND connection_id = ?
-              AND mode = 'backfill' AND target_id = '' AND status = 'complete'
+              AND mode = 'backfill' AND reconcile_generation = 0
+              AND target_id = '' AND status = 'complete'
               AND resource IN ('profile', 'body_measurement', 'cycle', 'recovery', 'sleep', 'workout')
           ) THEN 'active' ELSE status END,
           last_success_at = CASE WHEN 6 = (
             SELECT COUNT(DISTINCT resource)
             FROM whoop_sync_checkpoints
             WHERE whoop_user_id = ? AND connection_id = ?
-              AND mode = 'backfill' AND target_id = '' AND status = 'complete'
+              AND mode = 'backfill' AND reconcile_generation = 0
+              AND target_id = '' AND status = 'complete'
               AND resource IN ('profile', 'body_measurement', 'cycle', 'recovery', 'sleep', 'workout')
           ) THEN ? ELSE last_success_at END,
           updated_at = ?
@@ -705,6 +712,7 @@ export class WhoopRepository {
       syncedAt?: string;
       whoopUserId?: number;
       connectionId?: string;
+      reconcileGeneration?: number;
     },
   ): Promise<boolean> {
     if (options.tombstonePolicy !== "preserve" && options.tombstonePolicy !== "reconcile") {
@@ -752,15 +760,22 @@ export class WhoopRepository {
       return "?";
     });
     const hasConnectionFence = options.whoopUserId !== undefined && options.connectionId !== undefined;
+    const generationClause = options.reconcileGeneration === undefined
+      ? ""
+      : "AND reconcile_generation = ?";
     const insertExpression = hasConnectionFence
       ? `SELECT ${valueExpressions.join(", ")}
       WHERE EXISTS (
         SELECT 1 FROM whoop_connections
         WHERE whoop_user_id = ? AND connection_id = ?
           AND status IN ('active', 'backfilling')
+          ${generationClause}
       )`
       : `VALUES (${valueExpressions.join(", ")})`;
-    if (hasConnectionFence) bindings.push(options.whoopUserId, options.connectionId);
+    if (hasConnectionFence) {
+      bindings.push(options.whoopUserId, options.connectionId);
+      if (options.reconcileGeneration !== undefined) bindings.push(options.reconcileGeneration);
+    }
     const updateCondition = hasConnectionFence
       ? `(excluded.upstream_updated_at >= ${definition.table}.upstream_updated_at
         OR ${definition.table}.upstream_updated_at IS NULL)
@@ -768,10 +783,14 @@ export class WhoopRepository {
         SELECT 1 FROM whoop_connections
         WHERE whoop_user_id = ? AND connection_id = ?
           AND status IN ('active', 'backfilling')
+          ${generationClause}
       )`
       : `excluded.upstream_updated_at >= ${definition.table}.upstream_updated_at
         OR ${definition.table}.upstream_updated_at IS NULL`;
-    if (hasConnectionFence) bindings.push(options.whoopUserId, options.connectionId);
+    if (hasConnectionFence) {
+      bindings.push(options.whoopUserId, options.connectionId);
+      if (options.reconcileGeneration !== undefined) bindings.push(options.reconcileGeneration);
+    }
 
     const result = await this.db.prepare(`
       INSERT INTO ${definition.table} (${definition.columns.join(", ")})
@@ -781,7 +800,13 @@ export class WhoopRepository {
       WHERE ${updateCondition}
     `).bind(...bindings).run();
     if (hasConnectionFence && changedRows(result) === 0) {
-      return this.isSyncConnectionCurrent(options.whoopUserId!, options.connectionId!);
+      return options.reconcileGeneration === undefined
+        ? this.isSyncConnectionCurrent(options.whoopUserId!, options.connectionId!)
+        : this.isReconciliationCurrent(
+            options.whoopUserId!,
+            options.connectionId!,
+            options.reconcileGeneration,
+          );
     }
     return true;
   }
@@ -829,10 +854,40 @@ export class WhoopRepository {
     ).run();
   }
 
+  async beginReconciliation(
+    whoopUserId: number,
+    connectionId: string,
+    begunAt: string,
+  ): Promise<number | null> {
+    const canonicalBegunAt = canonicalTimestamp(begunAt)!;
+    const row = await this.db.prepare(`
+      UPDATE whoop_connections
+      SET reconcile_generation = reconcile_generation + 1,
+          updated_at = ?
+      WHERE whoop_user_id = ? AND connection_id = ?
+        AND status IN ('active', 'backfilling')
+      RETURNING reconcile_generation
+    `).bind(canonicalBegunAt, whoopUserId, connectionId)
+      .first<{ reconcile_generation: number }>();
+    if (!row) return null;
+    await this.db.prepare(`
+      DELETE FROM whoop_reconcile_seen
+      WHERE whoop_user_id = ? AND connection_id = ?
+        AND reconcile_generation < ?
+    `).bind(whoopUserId, connectionId, row.reconcile_generation).run();
+    return row.reconcile_generation;
+  }
+
   async upsertCheckpoint(input: CheckpointInput): Promise<boolean> {
     const result = await this.checkpointStatement(input).run();
     if (changedRows(result) === 0) {
-      return this.isSyncConnectionCurrent(input.whoopUserId, input.connectionId);
+      return input.mode === "reconcile"
+        ? this.isReconciliationCurrent(
+            input.whoopUserId,
+            input.connectionId,
+            input.reconcileGeneration,
+          )
+        : this.isSyncConnectionCurrent(input.whoopUserId, input.connectionId);
     }
     return true;
   }
@@ -840,16 +895,17 @@ export class WhoopRepository {
   private checkpointStatement(input: CheckpointInput): D1PreparedStatement {
     return this.db.prepare(`
       INSERT INTO whoop_sync_checkpoints (
-        whoop_user_id, connection_id, resource, mode, sync_run_id, target_id,
+        whoop_user_id, connection_id, resource, mode, reconcile_generation, sync_run_id, target_id,
         window_start, window_end, next_token, status,
         page_count, record_count, created_at, updated_at, last_error
-      ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       WHERE EXISTS (
         SELECT 1 FROM whoop_connections
         WHERE whoop_user_id = ? AND connection_id = ?
           AND status IN ('active', 'backfilling')
+          AND (? != 'reconcile' OR reconcile_generation = ?)
       )
-      ON CONFLICT(whoop_user_id, connection_id, resource, mode, sync_run_id, target_id) DO UPDATE SET
+      ON CONFLICT(whoop_user_id, connection_id, resource, mode, reconcile_generation, sync_run_id, target_id) DO UPDATE SET
         window_start = excluded.window_start,
         window_end = excluded.window_end,
         next_token = excluded.next_token,
@@ -862,6 +918,7 @@ export class WhoopRepository {
         SELECT 1 FROM whoop_connections
         WHERE whoop_user_id = ? AND connection_id = ?
           AND status IN ('active', 'backfilling')
+          AND (? != 'reconcile' OR reconcile_generation = ?)
       )
         AND (
           excluded.page_count > whoop_sync_checkpoints.page_count
@@ -877,7 +934,7 @@ export class WhoopRepository {
               WHEN 'error' THEN 2
               WHEN 'retrying' THEN 1
               ELSE 0
-            END >= CASE whoop_sync_checkpoints.status
+            END > CASE whoop_sync_checkpoints.status
               WHEN 'complete' THEN 3
               WHEN 'error' THEN 2
               WHEN 'retrying' THEN 1
@@ -890,6 +947,7 @@ export class WhoopRepository {
       input.connectionId,
       input.resource,
       input.mode,
+      input.reconcileGeneration,
       input.syncRunId,
       input.targetId,
       canonicalTimestamp(input.windowStart),
@@ -903,8 +961,12 @@ export class WhoopRepository {
       sanitizedError(input.lastError),
       input.whoopUserId,
       input.connectionId,
+      input.mode,
+      input.reconcileGeneration,
       input.whoopUserId,
       input.connectionId,
+      input.mode,
+      input.reconcileGeneration,
     );
   }
 
@@ -912,36 +974,85 @@ export class WhoopRepository {
     const seenAt = canonicalTimestamp(input.seenAt)!;
     const result = await this.db.prepare(`
       INSERT INTO whoop_reconcile_seen (
-        whoop_user_id, connection_id, reconcile_run_id, resource, provider_id, seen_at
-      ) SELECT ?, ?, ?, ?, CAST(? AS TEXT), ?
+        whoop_user_id, connection_id, reconcile_generation,
+        reconcile_run_id, resource, provider_id, seen_at
+      ) SELECT ?, ?, ?, ?, ?, CAST(? AS TEXT), ?
       WHERE EXISTS (
         SELECT 1 FROM whoop_connections
         WHERE whoop_user_id = ? AND connection_id = ?
           AND status IN ('active', 'backfilling')
+          AND reconcile_generation = ?
       )
-      ON CONFLICT(whoop_user_id, connection_id, reconcile_run_id, resource, provider_id)
+      ON CONFLICT(whoop_user_id, connection_id, reconcile_generation, reconcile_run_id, resource, provider_id)
       DO UPDATE SET seen_at = excluded.seen_at
       WHERE EXISTS (
         SELECT 1 FROM whoop_connections
         WHERE whoop_user_id = ? AND connection_id = ?
           AND status IN ('active', 'backfilling')
+          AND reconcile_generation = ?
       )
     `).bind(
       input.whoopUserId,
       input.connectionId,
+      input.reconcileGeneration,
       input.reconcileRunId,
       input.resource,
       input.providerId,
       seenAt,
       input.whoopUserId,
       input.connectionId,
+      input.reconcileGeneration,
       input.whoopUserId,
       input.connectionId,
+      input.reconcileGeneration,
     ).run();
     if (changedRows(result) === 0) {
-      return this.isSyncConnectionCurrent(input.whoopUserId, input.connectionId);
+      return this.isReconciliationCurrent(
+        input.whoopUserId,
+        input.connectionId,
+        input.reconcileGeneration,
+      );
     }
     return true;
+  }
+
+  async cleanupReconciliationSeen(input: {
+    whoopUserId: number;
+    connectionId: string;
+    reconcileGeneration: number;
+    reconcileRunId: string;
+    resource: WhoopResource;
+  }): Promise<boolean> {
+    const current = await this.isReconciliationCurrent(
+      input.whoopUserId,
+      input.connectionId,
+      input.reconcileGeneration,
+    );
+    if (!current) return false;
+    await this.db.prepare(`
+      DELETE FROM whoop_reconcile_seen
+      WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+        AND reconcile_run_id = ? AND resource = ?
+        AND EXISTS (
+          SELECT 1 FROM whoop_connections
+          WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+            AND status IN ('active', 'backfilling')
+        )
+    `).bind(
+      input.whoopUserId,
+      input.connectionId,
+      input.reconcileGeneration,
+      input.reconcileRunId,
+      input.resource,
+      input.whoopUserId,
+      input.connectionId,
+      input.reconcileGeneration,
+    ).run();
+    return this.isReconciliationCurrent(
+      input.whoopUserId,
+      input.connectionId,
+      input.reconcileGeneration,
+    );
   }
 
   async finalizeReconciliation(input: CheckpointInput): Promise<boolean> {
@@ -965,18 +1076,19 @@ export class WhoopRepository {
         AND CAST(${definition.keyColumn} AS TEXT) NOT IN (
           SELECT provider_id
           FROM whoop_reconcile_seen
-          WHERE whoop_user_id = ? AND connection_id = ?
+          WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
             AND reconcile_run_id = ? AND resource = ?
         )
         AND EXISTS (
           SELECT 1 FROM whoop_connections
-          WHERE whoop_user_id = ? AND connection_id = ?
+          WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
             AND status IN ('active', 'backfilling')
         )
         AND NOT EXISTS (
           SELECT 1 FROM whoop_sync_checkpoints
           WHERE whoop_user_id = ? AND connection_id = ? AND resource = ?
-            AND mode = 'reconcile' AND sync_run_id = ? AND target_id = ''
+            AND mode = 'reconcile' AND reconcile_generation = ?
+            AND sync_run_id = ? AND target_id = ''
             AND (
               page_count > ?
               OR (page_count = ? AND record_count > ?)
@@ -991,13 +1103,16 @@ export class WhoopRepository {
       windowEnd,
       input.whoopUserId,
       input.connectionId,
+      input.reconcileGeneration,
       input.syncRunId,
       resource,
       input.whoopUserId,
       input.connectionId,
+      input.reconcileGeneration,
       input.whoopUserId,
       input.connectionId,
       resource,
+      input.reconcileGeneration,
       input.syncRunId,
       input.pageCount,
       input.pageCount,
@@ -1007,51 +1122,58 @@ export class WhoopRepository {
     );
     const cleanup = this.db.prepare(`
       DELETE FROM whoop_reconcile_seen
-      WHERE whoop_user_id = ? AND connection_id = ?
+      WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
         AND reconcile_run_id = ? AND resource = ?
         AND EXISTS (
           SELECT 1 FROM whoop_sync_checkpoints
           WHERE whoop_user_id = ? AND connection_id = ? AND resource = ?
-            AND mode = 'reconcile' AND sync_run_id = ? AND target_id = ''
+            AND mode = 'reconcile' AND reconcile_generation = ?
+            AND sync_run_id = ? AND target_id = ''
             AND status = 'complete' AND page_count >= ?
         )
         AND EXISTS (
           SELECT 1 FROM whoop_connections
-          WHERE whoop_user_id = ? AND connection_id = ?
+          WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
             AND status IN ('active', 'backfilling')
         )
     `).bind(
       input.whoopUserId,
       input.connectionId,
+      input.reconcileGeneration,
       input.syncRunId,
       resource,
       input.whoopUserId,
       input.connectionId,
       resource,
+      input.reconcileGeneration,
       input.syncRunId,
       input.pageCount,
       input.whoopUserId,
       input.connectionId,
+      input.reconcileGeneration,
     );
     const completed = this.db.prepare(`
       UPDATE whoop_sync_checkpoints
       SET updated_at = updated_at
       WHERE whoop_user_id = ? AND connection_id = ? AND resource = ?
-        AND mode = 'reconcile' AND sync_run_id = ? AND target_id = ''
+        AND mode = 'reconcile' AND reconcile_generation = ?
+        AND sync_run_id = ? AND target_id = ''
         AND status = 'complete' AND page_count >= ?
         AND EXISTS (
           SELECT 1 FROM whoop_connections
-          WHERE whoop_user_id = ? AND connection_id = ?
+          WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
             AND status IN ('active', 'backfilling')
         )
     `).bind(
       input.whoopUserId,
       input.connectionId,
       resource,
+      input.reconcileGeneration,
       input.syncRunId,
       input.pageCount,
       input.whoopUserId,
       input.connectionId,
+      input.reconcileGeneration,
     );
     const results = await this.db.batch([
       tombstone,
@@ -1195,7 +1317,8 @@ export class WhoopRepository {
 
   async getCurrentConnection(): Promise<CurrentWhoopConnection | null> {
     const row = await this.db.prepare(`
-      SELECT whoop_user_id, connection_id, status, granted_scopes, credential_version, connected_at, refreshed_at, last_success_at,
+      SELECT whoop_user_id, connection_id, status, granted_scopes, credential_version,
+             reconcile_generation, connected_at, refreshed_at, last_success_at,
              last_error_at, disconnected_at, last_error, consecutive_failure_count, updated_at
       FROM whoop_connections
       ORDER BY CASE WHEN status = 'disconnected' THEN 1 ELSE 0 END,
@@ -1207,6 +1330,7 @@ export class WhoopRepository {
       status: Exclude<WhoopConnectionStatus, "not_connected">;
       granted_scopes: string;
       credential_version: number;
+      reconcile_generation: number;
       connected_at: string | null;
       refreshed_at: string | null;
       last_success_at: string | null;
@@ -1221,6 +1345,7 @@ export class WhoopRepository {
       whoopUserId: row.whoop_user_id,
       connectionId: row.connection_id,
       credentialVersion: row.credential_version,
+      reconcileGeneration: row.reconcile_generation,
       status: row.status,
       granted_scopes: row.granted_scopes.split(/\s+/).filter(Boolean),
       connected_at: row.connected_at,
@@ -1297,9 +1422,11 @@ export class WhoopRepository {
                checkpoint.page_count, checkpoint.record_count, checkpoint.updated_at,
                checkpoint.last_error,
                ROW_NUMBER() OVER (
-                 PARTITION BY checkpoint.resource
-                 ORDER BY checkpoint.updated_at DESC, checkpoint.page_count DESC,
-                          checkpoint.record_count DESC, checkpoint.mode DESC
+                 PARTITION BY checkpoint.resource, checkpoint.mode
+                 ORDER BY checkpoint.reconcile_generation DESC,
+                          checkpoint.created_at DESC,
+                          checkpoint.page_count DESC,
+                          checkpoint.record_count DESC
                ) AS row_number
         FROM whoop_sync_checkpoints AS checkpoint
         INNER JOIN whoop_connections AS connection
@@ -1308,7 +1435,7 @@ export class WhoopRepository {
         WHERE checkpoint.whoop_user_id = ? AND checkpoint.target_id = ''
       )
       WHERE row_number = 1
-      ORDER BY resource ASC
+      ORDER BY resource ASC, mode ASC
     `).bind(whoopUserId).all<SyncProgressProjection>();
     return result.results.map((row) => ({ ...row, last_error: sanitizedError(row.last_error) }));
   }
@@ -1333,6 +1460,7 @@ export class WhoopRepository {
         WHERE checkpoint.whoop_user_id = recovery.whoop_user_id
           AND checkpoint.connection_id = connection.connection_id
           AND checkpoint.resource = 'recovery'
+          AND checkpoint.reconcile_generation = connection.reconcile_generation
           AND checkpoint.target_id = 'recovery-cycle:' || CAST(recovery.cycle_id AS TEXT)
       ), recovery.synced_at)) ASC,
       recovery.cycle_id ASC
@@ -1348,6 +1476,20 @@ export class WhoopRepository {
       WHERE whoop_user_id = ? AND connection_id = ?
         AND status IN ('active', 'backfilling')
     `).bind(whoopUserId, connectionId).first<{ current: number }>();
+    return row?.current === 1;
+  }
+
+  async isReconciliationCurrent(
+    whoopUserId: number,
+    connectionId: string,
+    reconcileGeneration: number,
+  ): Promise<boolean> {
+    const row = await this.db.prepare(`
+      SELECT 1 AS current
+      FROM whoop_connections
+      WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+        AND status IN ('active', 'backfilling')
+    `).bind(whoopUserId, connectionId, reconcileGeneration).first<{ current: number }>();
     return row?.current === 1;
   }
 
@@ -1371,7 +1513,8 @@ export class WhoopRepository {
           SELECT COUNT(DISTINCT resource)
           FROM whoop_sync_checkpoints
           WHERE whoop_user_id = ? AND connection_id = ?
-            AND mode = 'backfill' AND target_id = '' AND status = 'complete'
+            AND mode = 'backfill' AND reconcile_generation = 0
+            AND target_id = '' AND status = 'complete'
             AND resource IN ('profile', 'body_measurement', 'cycle', 'recovery', 'sleep', 'workout')
         )
     `).bind(timestamp, timestamp, whoopUserId, connectionId, whoopUserId, connectionId).run();
