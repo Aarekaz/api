@@ -34,7 +34,7 @@ interface IntegrationRepository {
   markInitialBackfillQueued(whoopUserId: number, credentialVersion: number, queuedAt: string): Promise<boolean>;
   withWhoopAccessToken<T>(
     whoopUserId: number,
-    request: (accessToken: string) => Promise<T>,
+    request: (accessToken: string, credentialVersion: number) => Promise<T>,
     refresh: (refreshToken: string, options: { signal: AbortSignal }) => Promise<WhoopTokenResponse>,
   ): Promise<T>;
   disconnect(whoopUserId: number, credentialVersion: number, disconnectedAt: string): Promise<boolean>;
@@ -91,6 +91,13 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
     ?? new WhoopRepository(env.DB, env.WHOOP_TOKEN_ENCRYPTION_KEY);
   const clientFor = (env: Env, accessToken: string): IntegrationClient => dependencies.clientFactory?.(env, accessToken)
     ?? new WhoopClient(env, accessToken);
+  const revokeIssuedAccessToken = async (env: Env, accessToken: string): Promise<void> => {
+    try {
+      await clientFor(env, accessToken).revokeAccess(accessToken);
+    } catch {
+      // A rejected connection claim must not expose a provider revocation failure.
+    }
+  };
   const callbackFailure = (env: Env) => new Response(null, {
     status: 302,
     headers: { location: resultRedirect(env, "failed") },
@@ -129,6 +136,8 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
     if (!configured(c.env)) return callbackFailure(c.env);
     const state = c.req.query("state");
     if (!state) return callbackFailure(c.env);
+    let issuedAccessToken: string | null = null;
+    let claimAttempted = false;
     try {
       const repository = repositoryFor(c.env);
       const consumed = await repository.consumeOAuthState(await hashOAuthState(state), now().toISOString());
@@ -137,6 +146,7 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
       if (!code) return callbackFailure(c.env);
       const unauthenticatedClient = clientFor(c.env, "");
       const tokens = await unauthenticatedClient.exchangeAuthorizationCode(code);
+      issuedAccessToken = tokens.access_token;
       const authenticatedClient = clientFor(c.env, tokens.access_token);
       const profile = await authenticatedClient.getProfile();
       const connectedAt = now();
@@ -144,6 +154,7 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
         encryptWhoopToken(c.env.WHOOP_TOKEN_ENCRYPTION_KEY, profile.user_id, "access", tokens.access_token),
         encryptWhoopToken(c.env.WHOOP_TOKEN_ENCRYPTION_KEY, profile.user_id, "refresh", tokens.refresh_token),
       ]);
+      claimAttempted = true;
       const credentialVersion = await repository.claimAndUpsertConnection({
         whoopUserId: profile.user_id,
         status: "backfilling",
@@ -154,7 +165,10 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
         connectedAt: connectedAt.toISOString(),
         initialBackfillPending: true,
       });
-      if (credentialVersion === null) return callbackFailure(c.env);
+      if (credentialVersion === null) {
+        await revokeIssuedAccessToken(c.env, tokens.access_token);
+        return callbackFailure(c.env);
+      }
       await c.env.WHOOP_SYNC_QUEUE.sendBatch(
         messagesFor("backfill", profile.user_id).map((body) => ({ body })),
       );
@@ -166,6 +180,9 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
       if (!markedQueued) return callbackFailure(c.env);
       return c.redirect(resultRedirect(c.env, "connected"));
     } catch {
+      if (issuedAccessToken !== null && !claimAttempted) {
+        await revokeIssuedAccessToken(c.env, issuedAccessToken);
+      }
       return callbackFailure(c.env);
     }
   });
@@ -184,14 +201,19 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
     const connection = await repository.getCurrentConnection();
     if (!connectionCanSync(connection)) return c.json({ error: "WHOOP is not connected" }, 409);
     try {
+      let revokedCredentialVersion: number | null = null;
       await repository.withWhoopAccessToken(
         connection.whoopUserId,
-        (accessToken) => clientFor(c.env, accessToken).revokeAccess(accessToken),
+        async (accessToken, credentialVersion) => {
+          await clientFor(c.env, accessToken).revokeAccess(accessToken);
+          revokedCredentialVersion = credentialVersion;
+        },
         (refreshToken, options) => clientFor(c.env, "").refreshToken(refreshToken, options),
       );
+      if (revokedCredentialVersion === null) return c.json({ error: "WHOOP connection changed before disconnect" }, 409);
       const disconnected = await repository.disconnect(
         connection.whoopUserId,
-        connection.credentialVersion,
+        revokedCredentialVersion,
         now().toISOString(),
       );
       if (!disconnected) return c.json({ error: "WHOOP connection changed before disconnect" }, 409);

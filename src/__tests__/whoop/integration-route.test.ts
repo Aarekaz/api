@@ -31,7 +31,7 @@ function createDependencies(connection: Connection | null = null) {
     markInitialBackfillQueued: vi.fn().mockResolvedValue(true),
     disconnect: vi.fn().mockResolvedValue(true),
     deleteLocalData: vi.fn().mockResolvedValue(true),
-    withWhoopAccessToken: vi.fn(async (_userId, request) => request("fixture-access-token")),
+    withWhoopAccessToken: vi.fn(async (_userId, request) => request("fixture-access-token", connection?.credentialVersion ?? 1)),
   };
   const client = {
     exchangeAuthorizationCode: vi.fn().mockResolvedValue({
@@ -139,7 +139,7 @@ describe("WHOOP integration management routes", () => {
   });
 
   it("does not replace an existing active WHOOP identity", async () => {
-    const { dependencies, repository } = createDependencies({ whoopUserId: 7, status: "active", credentialVersion: 1 });
+    const { dependencies, repository, client } = createDependencies({ whoopUserId: 7, status: "active", credentialVersion: 1 });
     repository.claimAndUpsertConnection.mockResolvedValue(null);
     const app = createApp(dependencies);
 
@@ -147,11 +147,24 @@ describe("WHOOP integration management routes", () => {
 
     expect(response.headers.get("location")).toBe(FIXED_FAILED_REDIRECT);
     expect(repository.claimAndUpsertConnection).toHaveBeenCalledTimes(1);
+    expect(client.revokeAccess).toHaveBeenCalledWith("fixture-access-token");
     expect(ENV.WHOOP_SYNC_QUEUE.sendBatch).not.toHaveBeenCalled();
   });
 
+  it("best-effort revokes an exchanged token when pre-claim persistence fails", async () => {
+    const { dependencies, repository, client } = createDependencies();
+    const app = createApp(dependencies);
+    const env = { ...ENV, WHOOP_TOKEN_ENCRYPTION_KEY: "invalid" } as Env;
+
+    const response = await app.request("/integrations/whoop/callback?code=redacted-code&state=fresh-state", {}, env);
+
+    expect(response.headers.get("location")).toBe(FIXED_FAILED_REDIRECT);
+    expect(repository.claimAndUpsertConnection).not.toHaveBeenCalled();
+    expect(client.revokeAccess).toHaveBeenCalledWith("fixture-access-token");
+  });
+
   it("keeps durable initial-backfill intent when the atomic queue batch is ambiguous", async () => {
-    const { dependencies, repository } = createDependencies();
+    const { dependencies, repository, client } = createDependencies();
     const app = createApp(dependencies);
     (ENV.WHOOP_SYNC_QUEUE.sendBatch as unknown as ReturnType<typeof vi.fn>)
       .mockRejectedValueOnce(new Error("queue publication unknown"));
@@ -163,6 +176,7 @@ describe("WHOOP integration management routes", () => {
     expect(repository.markInitialBackfillQueued).not.toHaveBeenCalled();
     expect(ENV.WHOOP_SYNC_QUEUE.send).not.toHaveBeenCalled();
     expect(ENV.WHOOP_SYNC_QUEUE.sendBatch).toHaveBeenCalledTimes(1);
+    expect(client.revokeAccess).not.toHaveBeenCalled();
   });
 
   it("consumes a valid state before failing a provider denial without code exchange", async () => {
@@ -199,6 +213,18 @@ describe("WHOOP integration management routes", () => {
     expect(client.revokeAccess).toHaveBeenCalledWith("fixture-access-token");
     expect(repository.disconnect).toHaveBeenCalledWith(PROFILE.user_id, 1, expect.any(String));
     expect(repository.deleteLocalData).not.toHaveBeenCalled();
+  });
+
+  it("disconnects using the refreshed generation that successfully revoked WHOOP access", async () => {
+    const { dependencies, repository, client } = createDependencies({ whoopUserId: PROFILE.user_id, status: "active", credentialVersion: 1 });
+    repository.withWhoopAccessToken.mockImplementation(async (_userId, request) => request("rotated-access-token", 2));
+    const app = createApp(dependencies);
+
+    const response = await app.request("/v1/integrations/whoop", { method: "DELETE", ...bearerGet() }, ENV);
+
+    expect(response.status).toBe(200);
+    expect(client.revokeAccess).toHaveBeenCalledWith("rotated-access-token");
+    expect(repository.disconnect).toHaveBeenCalledWith(PROFILE.user_id, 2, expect.any(String));
   });
 
   it("does not clear credentials when WHOOP revocation fails", async () => {

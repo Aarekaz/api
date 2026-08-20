@@ -145,7 +145,7 @@ interface AccessTokenOptions {
   sleep?: (milliseconds: number) => Promise<void>;
 }
 
-type AccessTokenRequest<T> = (accessToken: string) => Promise<T>;
+type AccessTokenRequest<T> = (accessToken: string, credentialVersion: number) => Promise<T>;
 type RefreshTokenRequest = (
   refreshToken: string,
   options: { signal: AbortSignal },
@@ -918,7 +918,7 @@ export class WhoopRepository {
     const initialAccessToken = await this.decryptToken(initial, "access");
 
     try {
-      return await request(initialAccessToken);
+      return await request(initialAccessToken, initialCredentialVersion);
     } catch (error) {
       if (!(error instanceof WhoopUnauthorizedError)) throw error;
     }
@@ -1033,7 +1033,7 @@ export class WhoopRepository {
     }
 
     try {
-      return await request(retryAccessToken);
+      return await request(retryAccessToken, retryCredentialVersion);
     } catch (error) {
       if (error instanceof WhoopUnauthorizedError) {
         await this.markNeedsReauth(whoopUserId, retryCredentialVersion, now().toISOString());

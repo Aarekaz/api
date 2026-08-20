@@ -788,6 +788,29 @@ describe("WHOOP repository", () => {
     expect(fake.connections.get(42)?.credential_version).toBe(2);
   });
 
+  it("passes the credential generation paired with each initial and refreshed access token", async () => {
+    const fake = new FakeD1();
+    fake.connections.set(42, await connectionRow());
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+    const request = vi.fn()
+      .mockRejectedValueOnce(new WhoopUnauthorizedError("fixture request"))
+      .mockResolvedValueOnce("revoked");
+    const refresh = vi.fn().mockResolvedValue({
+      access_token: "rotated-access",
+      refresh_token: "rotated-refresh",
+      expires_in: 3600,
+      token_type: "bearer",
+    });
+
+    await expect(withWhoopAccessToken(repository, 42, request, refresh, {
+      now: () => new Date(NOW),
+      leaseId: () => "lease-owner",
+      sleep: vi.fn(),
+    })).resolves.toBe("revoked");
+
+    expect(request.mock.calls.map(([, credentialVersion]) => credentialVersion)).toEqual([1, 2]);
+  });
+
   it("clears its dispatch latch and owned lease after an explicit definite refresh failure", async () => {
     const fake = new FakeD1();
     fake.connections.set(42, await connectionRow());
