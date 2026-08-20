@@ -377,10 +377,10 @@ const sourceDefinitions: Record<WhoopResource, SourceDefinition> = {
 };
 
 const reconciliationDefinitions = {
-  cycle: { table: "whoop_cycles", keyColumn: "cycle_id", windowColumn: "start_at" },
-  recovery: { table: "whoop_recoveries", keyColumn: "sleep_id", windowColumn: "upstream_created_at" },
-  sleep: { table: "whoop_sleeps", keyColumn: "sleep_id", windowColumn: "start_at" },
-  workout: { table: "whoop_workouts", keyColumn: "workout_id", windowColumn: "start_at" },
+  cycle: { table: "whoop_cycles", keyColumn: "cycle_id", windowColumn: "start_at", syncedColumn: "synced_at" },
+  recovery: { table: "whoop_recoveries", keyColumn: "sleep_id", windowColumn: "upstream_created_at", syncedColumn: "synced_at" },
+  sleep: { table: "whoop_sleeps", keyColumn: "sleep_id", windowColumn: "start_at", syncedColumn: "synced_at" },
+  workout: { table: "whoop_workouts", keyColumn: "workout_id", windowColumn: "start_at", syncedColumn: "synced_at" },
 } as const;
 
 const changedRows = (result: D1Result): number => Number(result.meta.changes ?? 0);
@@ -1073,6 +1073,7 @@ export class WhoopRepository {
       SET deleted_at = ?, synced_at = ?
       WHERE whoop_user_id = ? AND deleted_at IS NULL
         AND ${definition.windowColumn} >= ? AND ${definition.windowColumn} <= ?
+        AND ${definition.syncedColumn} <= ?
         AND CAST(${definition.keyColumn} AS TEXT) NOT IN (
           SELECT provider_id
           FROM whoop_reconcile_seen
@@ -1100,6 +1101,7 @@ export class WhoopRepository {
       completedAt,
       input.whoopUserId,
       windowStart,
+      windowEnd,
       windowEnd,
       input.whoopUserId,
       input.connectionId,

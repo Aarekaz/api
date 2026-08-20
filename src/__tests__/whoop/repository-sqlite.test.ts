@@ -470,6 +470,70 @@ describe("WHOOP repository on SQLite", () => {
       .toEqual({ count: 0 });
   });
 
+  it("preserves a post-snapshot write while tombstoning an untouched omission", async () => {
+    const seenId = "00000000-0000-4000-8000-000000000001";
+    const lateWriteId = "00000000-0000-4000-8000-000000000002";
+    const untouchedId = "00000000-0000-4000-8000-000000000003";
+    insertSleep(database, seenId, "2026-08-18T08:00:00.000Z");
+    insertSleep(database, lateWriteId, "2026-08-17T08:00:00.000Z");
+    insertSleep(database, untouchedId, "2026-08-16T08:00:00.000Z");
+    const runId = "00000000-0000-4000-8000-000000000099";
+    const reconciliation = repository as unknown as {
+      recordReconciliationSeen(input: {
+        whoopUserId: number;
+        connectionId: string;
+        reconcileGeneration: number;
+        reconcileRunId: string;
+        resource: "sleep";
+        providerId: string;
+        seenAt: string;
+      }): Promise<boolean>;
+      finalizeReconciliation(input: CheckpointInput): Promise<boolean>;
+    };
+    await reconciliation.recordReconciliationSeen({
+      whoopUserId: 42,
+      connectionId: CONNECTION_ID,
+      reconcileGeneration: 0,
+      reconcileRunId: runId,
+      resource: "sleep",
+      providerId: seenId,
+      seenAt: NOW,
+    });
+
+    await repository.upsertSourceRecord("sleep", {
+      ...SLEEP,
+      id: lateWriteId,
+    }, {
+      tombstonePolicy: "preserve",
+      syncedAt: "2026-08-19T08:00:00.250-04:00",
+      whoopUserId: 42,
+      connectionId: CONNECTION_ID,
+    });
+    await expect(reconciliation.finalizeReconciliation(checkpoint({
+      mode: "reconcile",
+      syncRunId: runId,
+      targetId: "",
+      resource: "sleep",
+      windowStart: "2026-08-05T08:00:00-04:00",
+      windowEnd: "2026-08-19T08:00:00-04:00",
+      status: "complete",
+      pageCount: 1,
+      recordCount: 1,
+    }))).resolves.toBe(true);
+
+    expect(database.prepare(`
+      SELECT sleep_id, deleted_at, synced_at FROM whoop_sleeps ORDER BY sleep_id
+    `).all()).toEqual([
+      { sleep_id: seenId, deleted_at: null, synced_at: NOW },
+      {
+        sleep_id: lateWriteId,
+        deleted_at: null,
+        synced_at: "2026-08-19T12:00:00.250Z",
+      },
+      { sleep_id: untouchedId, deleted_at: NOW, synced_at: NOW },
+    ]);
+  });
+
   it("retains seen identifiers across pages and finalizes idempotently", async () => {
     insertSleep(database, "00000000-0000-4000-8000-000000000001", "2026-08-18T08:00:00.000Z");
     insertSleep(database, "00000000-0000-4000-8000-000000000002", "2026-08-17T08:00:00.000Z");
