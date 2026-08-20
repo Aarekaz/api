@@ -5,6 +5,7 @@ import type { WhoopQueueMessage, WhoopWebhookEvent } from "../../types/whoop";
 export const NOW = "2026-08-19T12:00:00.000Z";
 export const NOW_MS = String(Date.parse(NOW));
 export const NOW_MINUS_SIX_MINUTES_MS = String(Date.parse(NOW) - 6 * 60 * 1000);
+export const CONNECTION_ID = "00000000-0000-4000-8000-000000000042";
 export const PROFILE = { user_id: 42, email: "fixture@whoop.test", first_name: "Fixture", last_name: "User" };
 export const BODY_MEASUREMENT = { height_meter: 1.8, weight_kilogram: 75, max_heart_rate: 190 };
 export const CYCLE = {
@@ -59,8 +60,14 @@ export const jsonResponse = (body: unknown, init?: ResponseInit) => new Response
   ...init,
 });
 
-export const batchOf = (message: WhoopQueueMessage) => ({
-  messages: [{ body: message, ack: vi.fn(), retry: vi.fn() }],
+type FixtureQueueMessage = WhoopQueueMessage extends infer Message
+  ? Message extends WhoopQueueMessage
+    ? Omit<Message, "connectionId"> & { connectionId?: string }
+    : never
+  : never;
+
+export const batchOf = (message: FixtureQueueMessage) => ({
+  messages: [{ body: { connectionId: CONNECTION_ID, ...message }, ack: vi.fn(), retry: vi.fn() }],
 }) as unknown as MessageBatch<WhoopQueueMessage>;
 
 const TEST_WHOOP_CLIENT_SECRET = "test-whoop-client-secret";

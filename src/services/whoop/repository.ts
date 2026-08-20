@@ -46,6 +46,7 @@ interface SourceRecordMap {
 
 export interface UpsertConnectionInput {
   whoopUserId: number;
+  connectionId: string;
   status: Exclude<WhoopConnectionStatus, "not_connected">;
   accessToken: EncryptedToken;
   accessTokenExpiresAt: string;
@@ -73,6 +74,7 @@ export interface SyncRunInput {
 
 export interface CheckpointInput {
   whoopUserId: number;
+  connectionId: string;
   resource: WhoopResource;
   mode: string;
   windowStart?: string | null;
@@ -119,16 +121,19 @@ export interface SyncProgressProjection {
 
 export interface CurrentWhoopConnection extends ConnectionStatusProjection {
   whoopUserId: number;
+  connectionId: string;
   credentialVersion: number;
 }
 
 export interface PendingInitialBackfill {
   whoopUserId: number;
+  connectionId: string;
   credentialVersion: number;
 }
 
 interface TokenConnectionRow {
   whoop_user_id: number;
+  connection_id: string;
   status: Exclude<WhoopConnectionStatus, "not_connected">;
   access_token_ciphertext: string | null;
   access_token_nonce: string | null;
@@ -143,6 +148,7 @@ interface AccessTokenOptions {
   now?: () => Date;
   leaseId?: () => string;
   sleep?: (milliseconds: number) => Promise<void>;
+  expectedConnectionId?: string;
 }
 
 type AccessTokenRequest<T> = (accessToken: string, credentialVersion: number) => Promise<T>;
@@ -375,6 +381,12 @@ const ambiguousRefreshFailure = (error: unknown): WhoopRefreshAmbiguousError =>
     ? error
     : new WhoopRefreshAmbiguousError("token refresh");
 
+export class WhoopStaleConnectionError extends Error {
+  constructor() {
+    super("WHOOP queue connection is stale");
+  }
+}
+
 export class WhoopRepository {
   constructor(
     private readonly db: D1Database,
@@ -404,12 +416,13 @@ export class WhoopRepository {
     const updatedAt = input.updatedAt ?? input.connectedAt;
     await this.db.prepare(`
       INSERT INTO whoop_connections (
-        whoop_user_id, status, access_token_ciphertext, access_token_nonce, access_token_expires_at,
+        whoop_user_id, connection_id, status, access_token_ciphertext, access_token_nonce, access_token_expires_at,
         refresh_token_ciphertext, refresh_token_nonce, granted_scopes, credential_version, refresh_lease_id,
         refresh_lease_expires_at, refresh_dispatched_at, connected_at, refreshed_at, last_success_at, last_error_at,
         disconnected_at, last_error, consecutive_failure_count, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, NULL, 0, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, NULL, 0, ?, ?)
       ON CONFLICT(whoop_user_id) DO UPDATE SET
+        connection_id = excluded.connection_id,
         status = excluded.status,
         access_token_ciphertext = excluded.access_token_ciphertext,
         access_token_nonce = excluded.access_token_nonce,
@@ -428,6 +441,7 @@ export class WhoopRepository {
         updated_at = excluded.updated_at
     `).bind(
       input.whoopUserId,
+      input.connectionId,
       input.status,
       input.accessToken.ciphertext,
       input.accessToken.nonce,
@@ -445,17 +459,18 @@ export class WhoopRepository {
     const updatedAt = input.updatedAt ?? input.connectedAt;
     const row = await this.db.prepare(`
       INSERT INTO whoop_connections (
-        whoop_user_id, status, access_token_ciphertext, access_token_nonce, access_token_expires_at,
+        whoop_user_id, connection_id, status, access_token_ciphertext, access_token_nonce, access_token_expires_at,
         refresh_token_ciphertext, refresh_token_nonce, granted_scopes, credential_version,
         initial_backfill_pending, refresh_lease_id, refresh_lease_expires_at, refresh_dispatched_at,
         connected_at, refreshed_at, last_success_at, last_error_at, disconnected_at, last_error,
         consecutive_failure_count, created_at, updated_at
-      ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, NULL, 0, ?, ?
+      ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, NULL, 0, ?, ?
       WHERE NOT EXISTS (
         SELECT 1 FROM whoop_connections
         WHERE whoop_user_id != ? AND status != 'disconnected'
       )
       ON CONFLICT(whoop_user_id) DO UPDATE SET
+        connection_id = excluded.connection_id,
         status = excluded.status,
         access_token_ciphertext = excluded.access_token_ciphertext,
         access_token_nonce = excluded.access_token_nonce,
@@ -476,6 +491,7 @@ export class WhoopRepository {
       RETURNING credential_version
     `).bind(
       input.whoopUserId,
+      input.connectionId,
       input.status,
       input.accessToken.ciphertext,
       input.accessToken.nonce,
@@ -509,13 +525,14 @@ export class WhoopRepository {
 
   async getPendingInitialBackfills(): Promise<PendingInitialBackfill[]> {
     const result = await this.db.prepare(`
-      SELECT whoop_user_id, credential_version
+      SELECT whoop_user_id, connection_id, credential_version
       FROM whoop_connections
       WHERE status = 'backfilling' AND initial_backfill_pending = 1
       ORDER BY connected_at ASC, whoop_user_id ASC
-    `).all<{ whoop_user_id: number; credential_version: number }>();
+    `).all<{ whoop_user_id: number; connection_id: string; credential_version: number }>();
     return result.results.map((row) => ({
       whoopUserId: row.whoop_user_id,
+      connectionId: row.connection_id,
       credentialVersion: row.credential_version,
     }));
   }
@@ -638,8 +655,13 @@ export class WhoopRepository {
   async upsertSourceRecord<R extends WhoopResource>(
     resource: R,
     record: SourceRecordMap[R],
-    options: { tombstonePolicy: TombstonePolicy; syncedAt?: string },
-  ): Promise<void> {
+    options: {
+      tombstonePolicy: TombstonePolicy;
+      syncedAt?: string;
+      whoopUserId?: number;
+      connectionId?: string;
+    },
+  ): Promise<boolean> {
     if (options.tombstonePolicy !== "preserve" && options.tombstonePolicy !== "reconcile") {
       throw new Error("Invalid WHOOP tombstone policy");
     }
@@ -678,29 +700,68 @@ export class WhoopRepository {
       bindings.push(values[index]);
       return "?";
     });
+    const hasConnectionFence = options.whoopUserId !== undefined && options.connectionId !== undefined;
+    const insertExpression = hasConnectionFence
+      ? `SELECT ${valueExpressions.join(", ")}
+      WHERE EXISTS (
+        SELECT 1 FROM whoop_connections
+        WHERE whoop_user_id = ? AND connection_id = ?
+          AND status IN ('active', 'backfilling')
+      )`
+      : `VALUES (${valueExpressions.join(", ")})`;
+    if (hasConnectionFence) bindings.push(options.whoopUserId, options.connectionId);
+    const updateCondition = hasConnectionFence
+      ? `(excluded.upstream_updated_at >= ${definition.table}.upstream_updated_at
+        OR ${definition.table}.upstream_updated_at IS NULL)
+        AND EXISTS (
+        SELECT 1 FROM whoop_connections
+        WHERE whoop_user_id = ? AND connection_id = ?
+          AND status IN ('active', 'backfilling')
+      )`
+      : `excluded.upstream_updated_at >= ${definition.table}.upstream_updated_at
+        OR ${definition.table}.upstream_updated_at IS NULL`;
+    if (hasConnectionFence) bindings.push(options.whoopUserId, options.connectionId);
 
-    await this.db.prepare(`
+    const result = await this.db.prepare(`
       INSERT INTO ${definition.table} (${definition.columns.join(", ")})
-      VALUES (${valueExpressions.join(", ")})
+      ${insertExpression}
       ON CONFLICT(${definition.keyColumn}) DO UPDATE SET
         ${updates}
-      WHERE excluded.upstream_updated_at >= ${definition.table}.upstream_updated_at
-        OR ${definition.table}.upstream_updated_at IS NULL
+      WHERE ${updateCondition}
     `).bind(...bindings).run();
+    if (hasConnectionFence && changedRows(result) === 0) {
+      return this.isSyncConnectionCurrent(options.whoopUserId!, options.connectionId!);
+    }
+    return true;
   }
 
   async tombstoneSourceRecord(
     resource: WhoopResource,
     providerId: string | number,
     deletedAt: string,
-  ): Promise<void> {
+    connection?: { whoopUserId: number; connectionId: string },
+  ): Promise<boolean> {
     const definition = sourceDefinitions[resource];
     const canonicalDeletedAt = canonicalTimestamp(deletedAt)!;
-    await this.db.prepare(`
+    const result = await this.db.prepare(`
       UPDATE ${definition.table}
       SET deleted_at = ?, synced_at = ?
       WHERE ${definition.keyColumn} = ?
-    `).bind(canonicalDeletedAt, canonicalDeletedAt, providerId).run();
+        ${connection ? `AND EXISTS (
+          SELECT 1 FROM whoop_connections
+          WHERE whoop_user_id = ? AND connection_id = ?
+            AND status IN ('active', 'backfilling')
+        )` : ""}
+    `).bind(
+      canonicalDeletedAt,
+      canonicalDeletedAt,
+      providerId,
+      ...(connection ? [connection.whoopUserId, connection.connectionId] : []),
+    ).run();
+    if (connection && changedRows(result) === 0) {
+      return this.isSyncConnectionCurrent(connection.whoopUserId, connection.connectionId);
+    }
+    return true;
   }
 
   async createSyncRun(input: SyncRunInput): Promise<void> {
@@ -717,13 +778,19 @@ export class WhoopRepository {
     ).run();
   }
 
-  async upsertCheckpoint(input: CheckpointInput): Promise<void> {
-    await this.db.prepare(`
+  async upsertCheckpoint(input: CheckpointInput): Promise<boolean> {
+    const result = await this.db.prepare(`
       INSERT INTO whoop_sync_checkpoints (
-        whoop_user_id, resource, mode, window_start, window_end, next_token, status,
+        whoop_user_id, connection_id, resource, mode, window_start, window_end, next_token, status,
         page_count, record_count, created_at, updated_at, last_error
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM whoop_connections
+        WHERE whoop_user_id = ? AND connection_id = ?
+          AND status IN ('active', 'backfilling')
+      )
       ON CONFLICT(whoop_user_id, resource) DO UPDATE SET
+        connection_id = excluded.connection_id,
         mode = excluded.mode,
         window_start = excluded.window_start,
         window_end = excluded.window_end,
@@ -733,8 +800,14 @@ export class WhoopRepository {
         record_count = excluded.record_count,
         updated_at = excluded.updated_at,
         last_error = excluded.last_error
+      WHERE EXISTS (
+        SELECT 1 FROM whoop_connections
+        WHERE whoop_user_id = ? AND connection_id = ?
+          AND status IN ('active', 'backfilling')
+      )
     `).bind(
       input.whoopUserId,
+      input.connectionId,
       input.resource,
       input.mode,
       canonicalTimestamp(input.windowStart),
@@ -746,7 +819,12 @@ export class WhoopRepository {
       canonicalTimestamp(input.createdAt)!,
       canonicalTimestamp(input.updatedAt)!,
       sanitizedError(input.lastError),
+      input.whoopUserId,
+      input.connectionId,
+      input.whoopUserId,
+      input.connectionId,
     ).run();
+    return changedRows(result) > 0;
   }
 
   async recordWebhookEvent(input: WebhookEventInput): Promise<boolean> {
@@ -772,6 +850,59 @@ export class WhoopRepository {
       SET status = 'queued'
       WHERE trace_id = ? AND status = 'received'
     `).bind(traceId).run();
+    return changedRows(result) === 1;
+  }
+
+  async markWebhookProcessed(
+    traceId: string,
+    whoopUserId: number,
+    connectionId: string,
+    processedAt: string,
+  ): Promise<boolean> {
+    const timestamp = canonicalTimestamp(processedAt)!;
+    const result = await this.db.prepare(`
+      UPDATE whoop_webhook_events
+      SET status = 'processed', processed_at = ?, attempts = attempts + 1, last_error = NULL
+      WHERE trace_id = ?
+        AND EXISTS (
+          SELECT 1 FROM whoop_connections
+          WHERE whoop_user_id = ? AND connection_id = ?
+            AND status IN ('active', 'backfilling')
+        )
+    `).bind(timestamp, traceId, whoopUserId, connectionId).run();
+    return changedRows(result) === 1;
+  }
+
+  async markWebhookFailed(
+    traceId: string,
+    whoopUserId: number,
+    connectionId: string,
+    status: "retrying" | "error",
+    lastError: string,
+    failedAt: string,
+  ): Promise<boolean> {
+    const timestamp = canonicalTimestamp(failedAt)!;
+    const result = await this.db.prepare(`
+      UPDATE whoop_webhook_events
+      SET status = ?,
+          processed_at = CASE WHEN ? = 'error' THEN ? ELSE processed_at END,
+          attempts = attempts + 1,
+          last_error = ?
+      WHERE trace_id = ?
+        AND EXISTS (
+          SELECT 1 FROM whoop_connections
+          WHERE whoop_user_id = ? AND connection_id = ?
+            AND status IN ('active', 'backfilling')
+        )
+    `).bind(
+      status,
+      status,
+      timestamp,
+      sanitizedError(lastError),
+      traceId,
+      whoopUserId,
+      connectionId,
+    ).run();
     return changedRows(result) === 1;
   }
 
@@ -803,7 +934,7 @@ export class WhoopRepository {
 
   async getCurrentConnection(): Promise<CurrentWhoopConnection | null> {
     const row = await this.db.prepare(`
-      SELECT whoop_user_id, status, granted_scopes, credential_version, connected_at, refreshed_at, last_success_at,
+      SELECT whoop_user_id, connection_id, status, granted_scopes, credential_version, connected_at, refreshed_at, last_success_at,
              last_error_at, disconnected_at, last_error, consecutive_failure_count, updated_at
       FROM whoop_connections
       ORDER BY CASE WHEN status = 'disconnected' THEN 1 ELSE 0 END,
@@ -811,6 +942,7 @@ export class WhoopRepository {
       LIMIT 1
     `).first<{
       whoop_user_id: number;
+      connection_id: string;
       status: Exclude<WhoopConnectionStatus, "not_connected">;
       granted_scopes: string;
       credential_version: number;
@@ -826,6 +958,7 @@ export class WhoopRepository {
     if (!row) return null;
     return {
       whoopUserId: row.whoop_user_id,
+      connectionId: row.connection_id,
       credentialVersion: row.credential_version,
       status: row.status,
       granted_scopes: row.granted_scopes.split(/\s+/).filter(Boolean),
@@ -904,6 +1037,59 @@ export class WhoopRepository {
     return result.results.map((row) => ({ ...row, last_error: sanitizedError(row.last_error) }));
   }
 
+  async getPendingRecoveryCycleIds(whoopUserId: number, limit = 25): Promise<number[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 25) {
+      throw new Error("WHOOP pending recovery limit must be an integer from 1 to 25");
+    }
+    const result = await this.db.prepare(`
+      SELECT DISTINCT cycle_id
+      FROM whoop_recoveries
+      WHERE whoop_user_id = ?
+        AND deleted_at IS NULL
+        AND score_state IN ('PENDING_SCORE', 'UNSCORABLE')
+      ORDER BY upstream_updated_at DESC, cycle_id DESC
+      LIMIT ?
+    `).bind(whoopUserId, limit).all<{ cycle_id: number }>();
+    return result.results.map((row) => row.cycle_id);
+  }
+
+  async isSyncConnectionCurrent(whoopUserId: number, connectionId: string): Promise<boolean> {
+    const row = await this.db.prepare(`
+      SELECT 1 AS current
+      FROM whoop_connections
+      WHERE whoop_user_id = ? AND connection_id = ?
+        AND status IN ('active', 'backfilling')
+    `).bind(whoopUserId, connectionId).first<{ current: number }>();
+    return row?.current === 1;
+  }
+
+  async activateCompletedBackfill(
+    whoopUserId: number,
+    connectionId: string,
+    completedAt: string,
+  ): Promise<boolean> {
+    const timestamp = canonicalTimestamp(completedAt)!;
+    const result = await this.db.prepare(`
+      UPDATE whoop_connections
+      SET status = 'active',
+          last_success_at = ?,
+          last_error = NULL,
+          consecutive_failure_count = 0,
+          updated_at = ?
+      WHERE whoop_user_id = ? AND connection_id = ?
+        AND status = 'backfilling'
+        AND initial_backfill_pending = 0
+        AND 6 = (
+          SELECT COUNT(DISTINCT resource)
+          FROM whoop_sync_checkpoints
+          WHERE whoop_user_id = ? AND connection_id = ?
+            AND mode = 'backfill' AND status = 'complete'
+            AND resource IN ('profile', 'body_measurement', 'cycle', 'recovery', 'sleep', 'workout')
+        )
+    `).bind(timestamp, timestamp, whoopUserId, connectionId, whoopUserId, connectionId).run();
+    return changedRows(result) === 1;
+  }
+
   async withWhoopAccessToken<T>(
     whoopUserId: number,
     request: AccessTokenRequest<T>,
@@ -914,6 +1100,10 @@ export class WhoopRepository {
     const createLeaseId = options.leaseId ?? (() => crypto.randomUUID());
     const sleep = options.sleep ?? defaultSleep;
     const initial = await this.requireTokenConnection(whoopUserId);
+    if (options.expectedConnectionId !== undefined
+      && initial.connection_id !== options.expectedConnectionId) {
+      throw new WhoopStaleConnectionError();
+    }
     const initialCredentialVersion = initial.credential_version;
     const initialAccessToken = await this.decryptToken(initial, "access");
 
@@ -1025,6 +1215,10 @@ export class WhoopRepository {
     } else {
       await sleep(REFRESH_WAIT_MILLISECONDS);
       const reread = await this.requireTokenConnection(whoopUserId);
+      if (options.expectedConnectionId !== undefined
+        && reread.connection_id !== options.expectedConnectionId) {
+        throw new WhoopStaleConnectionError();
+      }
       retryAccessToken = await this.decryptToken(reread, "access");
       retryCredentialVersion = reread.credential_version;
       if (retryAccessToken === initialAccessToken) {
@@ -1044,7 +1238,7 @@ export class WhoopRepository {
 
   private async requireTokenConnection(whoopUserId: number): Promise<TokenConnectionRow> {
     const row = await this.db.prepare(`
-      SELECT whoop_user_id, status, access_token_ciphertext, access_token_nonce,
+      SELECT whoop_user_id, connection_id, status, access_token_ciphertext, access_token_nonce,
              access_token_expires_at, refresh_token_ciphertext, refresh_token_nonce,
              granted_scopes, credential_version
       FROM whoop_connections
@@ -1061,7 +1255,7 @@ export class WhoopRepository {
     now: string,
   ): Promise<TokenConnectionRow | null> {
     return this.db.prepare(`
-      SELECT whoop_user_id, status, access_token_ciphertext, access_token_nonce,
+      SELECT whoop_user_id, connection_id, status, access_token_ciphertext, access_token_nonce,
              access_token_expires_at, refresh_token_ciphertext, refresh_token_nonce,
              granted_scopes, credential_version
       FROM whoop_connections

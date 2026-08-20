@@ -12,20 +12,26 @@ import { ENV, PROFILE, bearerGet, bearerPost } from "./fixtures";
 
 const FIXED_CONNECTED_REDIRECT = "https://os.example.test/health/source?result=connected";
 const FIXED_FAILED_REDIRECT = "https://os.example.test/health/source?result=failed";
+const CONNECTION_ID = "00000000-0000-4000-8000-000000000042";
 const RESOURCES = ["profile", "body_measurement", "cycle", "recovery", "sleep", "workout"] as const;
 
 type Connection = {
   whoopUserId: number;
+  connectionId?: string;
   status: "not_connected" | "backfilling" | "active" | "disconnected";
   credentialVersion: number;
   granted_scopes?: string[];
 };
 
 function createDependencies(connection: Connection | null = null) {
+  const currentConnection = connection ? {
+    ...connection,
+    connectionId: connection.connectionId ?? CONNECTION_ID,
+  } : null;
   const repository = {
     createOAuthState: vi.fn().mockResolvedValue(undefined),
     consumeOAuthState: vi.fn().mockResolvedValue(true),
-    getCurrentConnection: vi.fn().mockResolvedValue(connection),
+    getCurrentConnection: vi.fn().mockResolvedValue(currentConnection),
     getSyncProgress: vi.fn().mockResolvedValue([]),
     claimAndUpsertConnection: vi.fn().mockResolvedValue(1),
     markInitialBackfillQueued: vi.fn().mockResolvedValue(true),
@@ -126,6 +132,7 @@ describe("WHOOP integration management routes", () => {
     expect(response.headers.get("location")).toBe(FIXED_CONNECTED_REDIRECT);
     expect(repository.claimAndUpsertConnection).toHaveBeenCalledWith(expect.objectContaining({
       whoopUserId: PROFILE.user_id,
+      connectionId: expect.any(String),
       status: "backfilling",
       initialBackfillPending: true,
       accessToken: expect.objectContaining({ ciphertext: expect.any(String), nonce: expect.any(String) }),
@@ -133,7 +140,12 @@ describe("WHOOP integration management routes", () => {
     }));
     expect(ENV.WHOOP_SYNC_QUEUE.send).not.toHaveBeenCalled();
     expect(ENV.WHOOP_SYNC_QUEUE.sendBatch).toHaveBeenCalledWith(RESOURCES.map((resource) => ({
-      body: { kind: "backfill", whoopUserId: PROFILE.user_id, resource },
+      body: {
+        kind: "backfill",
+        whoopUserId: PROFILE.user_id,
+        connectionId: expect.any(String),
+        resource,
+      },
     })));
     expect(repository.markInitialBackfillQueued).toHaveBeenCalledWith(PROFILE.user_id, 1, expect.any(String));
   });
@@ -199,7 +211,12 @@ describe("WHOOP integration management routes", () => {
     expect(response.status).toBe(202);
     expect(ENV.WHOOP_SYNC_QUEUE.send).toHaveBeenCalledTimes(6);
     expect((ENV.WHOOP_SYNC_QUEUE.send as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([message]) => message))
-      .toEqual(RESOURCES.map((resource) => ({ kind: "reconcile", whoopUserId: PROFILE.user_id, resource })));
+      .toEqual(RESOURCES.map((resource) => ({
+        kind: "reconcile",
+        whoopUserId: PROFILE.user_id,
+        connectionId: CONNECTION_ID,
+        resource,
+      })));
     expect(client.exchangeAuthorizationCode).not.toHaveBeenCalled();
   });
 

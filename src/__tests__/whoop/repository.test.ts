@@ -69,6 +69,12 @@ class FakeD1 {
     if (sql.includes("FROM whoop_connections")) {
       const row = this.connections.get(Number(bindings[0]));
       if (!row) return null;
+      if (sql.includes("SELECT 1 AS current")) {
+        return row.connection_id === bindings[1]
+          && ["active", "backfilling"].includes(String(row.status))
+          ? { current: 1 } as T
+          : null;
+      }
       if (sql.includes("refresh_lease_id = ?")) {
         const [, credentialVersion, leaseId, now] = bindings;
         if (!["active", "backfilling"].includes(String(row.status))
@@ -201,12 +207,13 @@ class FakeD1 {
     }
 
     if (normalized.startsWith("INSERT INTO whoop_connections")) {
-      const [whoopUserId, status, accessCiphertext, accessNonce, accessExpiresAt,
+      const [whoopUserId, connectionId, status, accessCiphertext, accessNonce, accessExpiresAt,
         refreshCiphertext, refreshNonce, grantedScopes, connectedAt, createdAt, updatedAt] = bindings;
       const current = this.connections.get(Number(whoopUserId));
       this.connections.set(Number(whoopUserId), {
         ...current,
         whoop_user_id: whoopUserId,
+        connection_id: connectionId,
         status,
         access_token_ciphertext: accessCiphertext,
         access_token_nonce: accessNonce,
@@ -324,7 +331,8 @@ class ClaimD1 {
     const credentialVersion = Number(current?.credential_version ?? 0) + 1;
     this.connections.set(whoopUserId, {
       whoop_user_id: whoopUserId,
-      status: bindings[1],
+      connection_id: bindings[1],
+      status: bindings[2],
       credential_version: credentialVersion,
     });
     return { credential_version: credentialVersion } as T;
@@ -368,6 +376,7 @@ async function connectionRow(overrides: DbRow = {}): Promise<DbRow> {
   const refresh = await encryptWhoopToken(KEY, 42, "refresh", "refresh-before-lease");
   return {
     whoop_user_id: 42,
+    connection_id: "connection-1",
     status: "active",
     access_token_ciphertext: access.ciphertext,
     access_token_nonce: access.nonce,
@@ -397,6 +406,7 @@ async function reconnectInput(accessPlaintext = "reconnected-access") {
   const refreshToken = await encryptWhoopToken(KEY, 42, "refresh", "reconnected-refresh");
   return {
     whoopUserId: 42,
+    connectionId: "connection-2",
     status: "active" as const,
     accessToken,
     accessTokenExpiresAt: "2026-08-19T14:00:00.000Z",
@@ -435,14 +445,52 @@ describe("WHOOP repository", () => {
 
   it("projects durable initial-backfill intent for future queue or scheduler replay", async () => {
     const fake = new FakeD1();
-    fake.pendingInitialBackfills = [{ whoop_user_id: 42, credential_version: 3 }];
+    fake.pendingInitialBackfills = [{
+      whoop_user_id: 42,
+      connection_id: "connection-3",
+      credential_version: 3,
+    }];
     const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
 
     await expect(repository.getPendingInitialBackfills()).resolves.toEqual([
-      { whoopUserId: 42, credentialVersion: 3 },
+      { whoopUserId: 42, connectionId: "connection-3", credentialVersion: 3 },
     ]);
     expect(fake.calls[0].sql).toContain("initial_backfill_pending = 1");
     expect(fake.calls[0].sql).toContain("status = 'backfilling'");
+  });
+
+  it("guards queue work by stable connection identity and live status", async () => {
+    const fake = new FakeD1();
+    fake.connections.set(42, await connectionRow({ connection_id: "connection-current" }));
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+
+    await expect(repository.isSyncConnectionCurrent(42, "connection-current")).resolves.toBe(true);
+    await expect(repository.isSyncConnectionCurrent(42, "connection-stale")).resolves.toBe(false);
+    fake.connections.get(42)!.status = "disconnected";
+    await expect(repository.isSyncConnectionCurrent(42, "connection-current")).resolves.toBe(false);
+
+    expect(fake.calls[0].sql).toContain("connection_id = ?");
+    expect(fake.calls[0].sql).toContain("status IN ('active', 'backfilling')");
+  });
+
+  it("activates only six-resource current-connection backfills after durable publication intent clears", async () => {
+    const fake = new CasD1();
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+
+    await expect(repository.activateCompletedBackfill(42, "connection-current", NOW)).resolves.toBe(true);
+
+    expect(fake.calls[0].bindings).toEqual([
+      NOW,
+      NOW,
+      42,
+      "connection-current",
+      42,
+      "connection-current",
+    ]);
+    expect(fake.calls[0].sql).toContain("initial_backfill_pending = 0");
+    expect(fake.calls[0].sql).toContain("COUNT(DISTINCT resource)");
+    expect(fake.calls[0].sql).toContain("mode = 'backfill' AND status = 'complete'");
+    expect(fake.calls[0].sql).not.toContain("initial_backfill_pending = 1");
   });
 
   it("uses observed credential generation to fence disconnect and every atomic local-data delete", async () => {
@@ -688,6 +736,7 @@ describe("WHOOP repository", () => {
     });
     await repository.upsertCheckpoint({
       whoopUserId: 42,
+      connectionId: "connection-1",
       resource: "workout",
       mode: "reconcile",
       windowStart: "2026-08-18T08:00:00-04:00",
@@ -700,11 +749,11 @@ describe("WHOOP repository", () => {
     });
 
     expect(fake.calls[0].bindings[3]).toBe("2026-08-19T12:00:00.250Z");
-    expect(fake.calls[1].bindings.slice(3, 5)).toEqual([
+    expect(fake.calls[1].bindings.slice(4, 6)).toEqual([
       "2026-08-18T12:00:00.000Z",
       "2026-08-19T12:00:00.500Z",
     ]);
-    expect(fake.calls[1].bindings.slice(9, 11)).toEqual([
+    expect(fake.calls[1].bindings.slice(10, 12)).toEqual([
       "2026-08-19T12:00:00.250Z",
       "2026-08-19T12:01:00.125Z",
     ]);
@@ -1182,6 +1231,23 @@ describe("WHOOP repository", () => {
 
     expect(request).toHaveBeenCalledTimes(2);
     expect(fake.connections.get(42)?.status).toBe("needs_reauth");
+  });
+
+  it("refuses stale queue work before using a reconnected generation's access token", async () => {
+    const fake = new FakeD1();
+    fake.connections.set(42, await connectionRow({ connection_id: "new-connection" }));
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+    const request = vi.fn().mockResolvedValue("must-not-run");
+    const refresh = vi.fn();
+
+    await expect(withWhoopAccessToken(repository, 42, request, refresh, {
+      expectedConnectionId: "stale-connection",
+    } as unknown as Parameters<typeof withWhoopAccessToken>[4])).rejects.toThrow(
+      "WHOOP queue connection is stale",
+    );
+
+    expect(request).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
   });
 
   it("does not let a stale second 401 poison a reconnected credential generation", async () => {

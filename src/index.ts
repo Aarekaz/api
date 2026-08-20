@@ -7,6 +7,8 @@ import { requestLogger } from "./middleware/request-logger";
 import { getOpenApiDocument } from "./schemas/openapi";
 import { getSwaggerUiHtml } from "./utils/swagger";
 import { handleScheduled } from "./scheduled";
+import { handleWhoopQueue } from "./services/whoop/sync";
+import type { WhoopQueueMessage } from "./types/whoop";
 
 // Import route modules
 import healthRoute from "./routes/health";
@@ -169,5 +171,8 @@ export default {
   },
   async scheduled(event: ScheduledEvent, env: Env): Promise<void> {
     return handleScheduled(event, env);
+  },
+  async queue(batch: MessageBatch<WhoopQueueMessage>, env: Env): Promise<void> {
+    return handleWhoopQueue(batch, env);
   },
 };

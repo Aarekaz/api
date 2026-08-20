@@ -81,8 +81,16 @@ const resultRedirect = (env: Env, result: "connected" | "failed"): string =>
 const connectionCanSync = (connection: CurrentWhoopConnection | null): connection is CurrentWhoopConnection =>
   connection !== null && (connection.status === "active" || connection.status === "backfilling");
 
-const messagesFor = (kind: "backfill" | "reconcile", whoopUserId: number): WhoopQueueMessage[] =>
-  INITIAL_RESOURCES.map((resource) => ({ kind, whoopUserId, resource }));
+const messagesFor = (
+  kind: "backfill" | "reconcile",
+  whoopUserId: number,
+  connectionId: string,
+): WhoopQueueMessage[] => INITIAL_RESOURCES.map((resource) => ({
+  kind,
+  whoopUserId,
+  connectionId,
+  resource,
+}));
 
 export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDependencies = {}) {
   const app = new Hono<{ Bindings: Env }>();
@@ -108,7 +116,12 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
     const connection = await repository.getCurrentConnection();
     if (!connection) return c.json({ status: "not_connected", progress: [] });
     const progress = await repository.getSyncProgress(connection.whoopUserId);
-    const { whoopUserId: _whoopUserId, credentialVersion: _credentialVersion, ...status } = connection;
+    const {
+      whoopUserId: _whoopUserId,
+      connectionId: _connectionId,
+      credentialVersion: _credentialVersion,
+      ...status
+    } = connection;
     return c.json({ ...status, progress });
   });
 
@@ -150,6 +163,7 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
       const authenticatedClient = clientFor(c.env, tokens.access_token);
       const profile = await authenticatedClient.getProfile();
       const connectedAt = now();
+      const connectionId = crypto.randomUUID();
       const [accessToken, refreshToken] = await Promise.all([
         encryptWhoopToken(c.env.WHOOP_TOKEN_ENCRYPTION_KEY, profile.user_id, "access", tokens.access_token),
         encryptWhoopToken(c.env.WHOOP_TOKEN_ENCRYPTION_KEY, profile.user_id, "refresh", tokens.refresh_token),
@@ -157,6 +171,7 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
       claimAttempted = true;
       const credentialVersion = await repository.claimAndUpsertConnection({
         whoopUserId: profile.user_id,
+        connectionId,
         status: "backfilling",
         accessToken,
         accessTokenExpiresAt: new Date(connectedAt.getTime() + tokens.expires_in * 1000).toISOString(),
@@ -170,7 +185,7 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
         return callbackFailure(c.env);
       }
       await c.env.WHOOP_SYNC_QUEUE.sendBatch(
-        messagesFor("backfill", profile.user_id).map((body) => ({ body })),
+        messagesFor("backfill", profile.user_id, connectionId).map((body) => ({ body })),
       );
       const markedQueued = await repository.markInitialBackfillQueued(
         profile.user_id,
@@ -191,7 +206,11 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
     if (!configured(c.env)) return c.json({ error: "WHOOP integration is not configured" }, 503);
     const connection = await repositoryFor(c.env).getCurrentConnection();
     if (!connectionCanSync(connection)) return c.json({ error: "WHOOP is not connected" }, 409);
-    await Promise.all(messagesFor("reconcile", connection.whoopUserId).map((message) => c.env.WHOOP_SYNC_QUEUE.send(message)));
+    await Promise.all(messagesFor(
+      "reconcile",
+      connection.whoopUserId,
+      connection.connectionId,
+    ).map((message) => c.env.WHOOP_SYNC_QUEUE.send(message)));
     return c.json({ ok: true }, 202);
   });
 

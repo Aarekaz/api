@@ -3,6 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS whoop_connections (
   whoop_user_id INTEGER PRIMARY KEY,
+  connection_id TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('connecting', 'backfilling', 'active', 'needs_reauth', 'disconnected', 'error')),
   access_token_ciphertext TEXT,
   access_token_nonce TEXT,
@@ -185,6 +186,7 @@ CREATE INDEX IF NOT EXISTS idx_whoop_webhook_events_user_received ON whoop_webho
 
 CREATE TABLE IF NOT EXISTS whoop_sync_checkpoints (
   whoop_user_id INTEGER NOT NULL,
+  connection_id TEXT NOT NULL,
   resource TEXT NOT NULL,
   mode TEXT NOT NULL,
   window_start TEXT,
