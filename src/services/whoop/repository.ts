@@ -123,6 +123,7 @@ interface TokenConnectionRow {
   refresh_token_ciphertext: string | null;
   refresh_token_nonce: string | null;
   granted_scopes: string;
+  credential_version: number;
 }
 
 interface AccessTokenOptions {
@@ -141,6 +142,12 @@ interface SourceDefinition {
   values: (record: SourceRecordMap[WhoopResource], syncedAt: string) => unknown[];
 }
 
+interface WebhookTombstoneLookup {
+  whoopUserId: number;
+  providerId: string | number;
+  eventType: WhoopWebhookEventType;
+}
+
 const objectAt = (value: unknown, key: string): Record<string, unknown> => {
   if (typeof value !== "object" || value === null) return {};
   const nested = (value as Record<string, unknown>)[key];
@@ -152,6 +159,13 @@ const nullableNumber = (value: unknown): number | null =>
 
 const nullableString = (value: unknown): string | null =>
   typeof value === "string" ? value : null;
+
+const canonicalTimestamp = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const milliseconds = Date.parse(value);
+  if (Number.isNaN(milliseconds)) throw new Error("Invalid WHOOP timestamp");
+  return new Date(milliseconds).toISOString();
+};
 
 const firstNumber = (...values: unknown[]): number | null => {
   for (const value of values) {
@@ -169,6 +183,23 @@ const rawJson = (record: Record<string, unknown>): string => {
 
 const scoreOf = (record: Record<string, unknown>): Record<string, unknown> => objectAt(record, "score");
 
+const webhookTombstoneLookup = (
+  resource: WhoopResource,
+  record: SourceRecordMap[WhoopResource],
+): WebhookTombstoneLookup | null => {
+  if (resource !== "recovery" && resource !== "sleep" && resource !== "workout") return null;
+  const source = record as unknown as Record<string, unknown>;
+  const providerId = resource === "recovery" ? source.sleep_id : source.id;
+  if (typeof source.user_id !== "number" || (typeof providerId !== "string" && typeof providerId !== "number")) {
+    throw new Error("WHOOP webhook source identity is not available");
+  }
+  return {
+    whoopUserId: source.user_id,
+    providerId,
+    eventType: `${resource}.deleted`,
+  };
+};
+
 const sourceDefinitions: Record<WhoopResource, SourceDefinition> = {
   profile: {
     table: "whoop_profiles",
@@ -181,7 +212,7 @@ const sourceDefinitions: Record<WhoopResource, SourceDefinition> = {
       const profile = record as unknown as Record<string, unknown>;
       return [
         profile.user_id, nullableString(profile.first_name), nullableString(profile.last_name),
-        nullableString(profile.email), nullableString(profile.created_at), nullableString(profile.updated_at),
+        nullableString(profile.email), canonicalTimestamp(profile.created_at), canonicalTimestamp(profile.updated_at),
         null, syncedAt, rawJson(profile),
       ];
     },
@@ -201,7 +232,7 @@ const sourceDefinitions: Record<WhoopResource, SourceDefinition> = {
       }
       return [
         whoopUserId, nullableNumber(body.height_meter), nullableNumber(body.weight_kilogram),
-        nullableNumber(body.max_heart_rate), nullableString(body.created_at), nullableString(body.updated_at),
+        nullableNumber(body.max_heart_rate), canonicalTimestamp(body.created_at), canonicalTimestamp(body.updated_at),
         null, syncedAt, rawJson(body),
       ];
     },
@@ -220,7 +251,8 @@ const sourceDefinitions: Record<WhoopResource, SourceDefinition> = {
       return [
         cycle.id, cycle.user_id, cycle.start, cycle.end ?? null, cycle.timezone_offset, cycle.score_state,
         nullableNumber(score.strain), nullableNumber(score.kilojoule), nullableNumber(score.average_heart_rate),
-        nullableNumber(score.max_heart_rate), cycle.created_at, cycle.updated_at, null, syncedAt, rawJson(cycle),
+        nullableNumber(score.max_heart_rate), canonicalTimestamp(cycle.created_at), canonicalTimestamp(cycle.updated_at),
+        null, syncedAt, rawJson(cycle),
       ];
     },
   },
@@ -240,8 +272,8 @@ const sourceDefinitions: Record<WhoopResource, SourceDefinition> = {
         typeof score.user_calibrating === "boolean" ? Number(score.user_calibrating) : null,
         nullableNumber(score.recovery_score), nullableNumber(score.resting_heart_rate),
         firstNumber(score.hrv_rmssd_milli, score.hrv_rmssd_milliseconds), nullableNumber(score.spo2_percentage),
-        firstNumber(score.skin_temp_celsius, score.skin_temperature_celsius), recovery.created_at,
-        recovery.updated_at, null, syncedAt, rawJson(recovery),
+        firstNumber(score.skin_temp_celsius, score.skin_temperature_celsius), canonicalTimestamp(recovery.created_at),
+        canonicalTimestamp(recovery.updated_at), null, syncedAt, rawJson(recovery),
       ];
     },
   },
@@ -271,7 +303,7 @@ const sourceDefinitions: Record<WhoopResource, SourceDefinition> = {
         firstNumber(needed.need_from_sleep_debt_milli, needed.sleep_debt_milli),
         nullableNumber(score.sleep_efficiency_percentage), nullableNumber(score.sleep_consistency_percentage),
         nullableNumber(score.sleep_performance_percentage), nullableNumber(score.respiratory_rate),
-        sleep.created_at, sleep.updated_at, null, syncedAt, rawJson(sleep),
+        canonicalTimestamp(sleep.created_at), canonicalTimestamp(sleep.updated_at), null, syncedAt, rawJson(sleep),
       ];
     },
   },
@@ -300,7 +332,8 @@ const sourceDefinitions: Record<WhoopResource, SourceDefinition> = {
         firstNumber(zones.zone_three_milli, zones.zone_three_milliseconds),
         firstNumber(zones.zone_four_milli, zones.zone_four_milliseconds),
         firstNumber(zones.zone_five_milli, zones.zone_five_milliseconds),
-        workout.created_at, workout.updated_at, null, syncedAt, rawJson(workout),
+        canonicalTimestamp(workout.created_at), canonicalTimestamp(workout.updated_at),
+        null, syncedAt, rawJson(workout),
       ];
     },
   },
@@ -336,10 +369,10 @@ export class WhoopRepository {
     await this.db.prepare(`
       INSERT INTO whoop_connections (
         whoop_user_id, status, access_token_ciphertext, access_token_nonce, access_token_expires_at,
-        refresh_token_ciphertext, refresh_token_nonce, granted_scopes, refresh_lease_id,
+        refresh_token_ciphertext, refresh_token_nonce, granted_scopes, credential_version, refresh_lease_id,
         refresh_lease_expires_at, connected_at, refreshed_at, last_success_at, last_error_at,
         disconnected_at, last_error, consecutive_failure_count, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, NULL, NULL, NULL, 0, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, NULL, NULL, NULL, NULL, NULL, 0, ?, ?)
       ON CONFLICT(whoop_user_id) DO UPDATE SET
         status = excluded.status,
         access_token_ciphertext = excluded.access_token_ciphertext,
@@ -348,6 +381,7 @@ export class WhoopRepository {
         refresh_token_ciphertext = excluded.refresh_token_ciphertext,
         refresh_token_nonce = excluded.refresh_token_nonce,
         granted_scopes = excluded.granted_scopes,
+        credential_version = whoop_connections.credential_version + 1,
         refresh_lease_id = NULL,
         refresh_lease_expires_at = NULL,
         connected_at = excluded.connected_at,
@@ -370,33 +404,41 @@ export class WhoopRepository {
     ).run();
   }
 
-  async acquireRefreshLease(whoopUserId: number, leaseId: string, now: string): Promise<boolean> {
+  async acquireRefreshLease(
+    whoopUserId: number,
+    leaseId: string,
+    now: string,
+    credentialVersion: number,
+  ): Promise<boolean> {
     const expiresAt = new Date(Date.parse(now) + REFRESH_LEASE_MILLISECONDS).toISOString();
     const result = await this.db.prepare(`
       UPDATE whoop_connections
       SET refresh_lease_id = ?, refresh_lease_expires_at = ?
       WHERE whoop_user_id = ?
+        AND credential_version = ?
         AND (refresh_lease_id IS NULL OR refresh_lease_expires_at <= ?)
-    `).bind(leaseId, expiresAt, whoopUserId, now).run();
+    `).bind(leaseId, expiresAt, whoopUserId, credentialVersion, now).run();
     return changedRows(result) === 1;
   }
 
   async releaseRefreshLease(
     whoopUserId: number,
     leaseId: string,
+    credentialVersion: number,
     updatedAt = new Date().toISOString(),
   ): Promise<boolean> {
     const result = await this.db.prepare(`
       UPDATE whoop_connections
       SET refresh_lease_id = NULL, refresh_lease_expires_at = NULL, updated_at = ?
-      WHERE whoop_user_id = ? AND refresh_lease_id = ?
-    `).bind(updatedAt, whoopUserId, leaseId).run();
+      WHERE whoop_user_id = ? AND refresh_lease_id = ? AND credential_version = ?
+    `).bind(updatedAt, whoopUserId, leaseId, credentialVersion).run();
     return changedRows(result) === 1;
   }
 
   async storeRotatedTokens(
     whoopUserId: number,
     leaseId: string,
+    credentialVersion: number,
     input: RotatedTokenInput,
   ): Promise<boolean> {
     const result = await this.db.prepare(`
@@ -410,8 +452,9 @@ export class WhoopRepository {
           refreshed_at = ?,
           updated_at = ?,
           refresh_lease_id = NULL,
-          refresh_lease_expires_at = NULL
-      WHERE whoop_user_id = ? AND refresh_lease_id = ?
+          refresh_lease_expires_at = NULL,
+          credential_version = credential_version + 1
+      WHERE whoop_user_id = ? AND refresh_lease_id = ? AND credential_version = ?
     `).bind(
       input.accessToken.ciphertext,
       input.accessToken.nonce,
@@ -423,6 +466,7 @@ export class WhoopRepository {
       input.refreshedAt,
       whoopUserId,
       leaseId,
+      credentialVersion,
     ).run();
     return changedRows(result) === 1;
   }
@@ -438,28 +482,47 @@ export class WhoopRepository {
     const definition = sourceDefinitions[resource];
     const values = definition.values(
       record as SourceRecordMap[WhoopResource],
-      options.syncedAt ?? new Date().toISOString(),
+      canonicalTimestamp(options.syncedAt ?? new Date().toISOString())!,
     );
+    const tombstoneLookup = options.tombstonePolicy === "preserve"
+      ? webhookTombstoneLookup(resource, record as SourceRecordMap[WhoopResource])
+      : null;
     const updates = definition.columns
       .filter((column) => column !== definition.keyColumn)
       .map((column) => {
         if (column === "deleted_at") {
-          return options.tombstonePolicy === "preserve"
-            ? `deleted_at = ${definition.table}.deleted_at`
-            : "deleted_at = NULL";
+          if (options.tombstonePolicy === "reconcile") return "deleted_at = NULL";
+          if (!tombstoneLookup) return `deleted_at = ${definition.table}.deleted_at`;
+          return `deleted_at = CASE
+            WHEN ${definition.table}.deleted_at IS NULL THEN excluded.deleted_at
+            WHEN excluded.deleted_at IS NULL THEN ${definition.table}.deleted_at
+            WHEN ${definition.table}.deleted_at >= excluded.deleted_at THEN ${definition.table}.deleted_at
+            ELSE excluded.deleted_at
+          END`;
         }
         return `${column} = excluded.${column}`;
       })
       .join(",\n        ");
+    const bindings: unknown[] = [];
+    const valueExpressions = definition.columns.map((column, index) => {
+      if (column === "deleted_at" && tombstoneLookup) {
+        bindings.push(tombstoneLookup.whoopUserId, tombstoneLookup.providerId, tombstoneLookup.eventType);
+        return `(SELECT MAX(received_at)
+          FROM whoop_webhook_events
+          WHERE whoop_user_id = ? AND resource_id = CAST(? AS TEXT) AND event_type = ?)`;
+      }
+      bindings.push(values[index]);
+      return "?";
+    });
 
     await this.db.prepare(`
       INSERT INTO ${definition.table} (${definition.columns.join(", ")})
-      VALUES (${definition.columns.map(() => "?").join(", ")})
+      VALUES (${valueExpressions.join(", ")})
       ON CONFLICT(${definition.keyColumn}) DO UPDATE SET
         ${updates}
       WHERE excluded.upstream_updated_at >= ${definition.table}.upstream_updated_at
         OR ${definition.table}.upstream_updated_at IS NULL
-    `).bind(...values).run();
+    `).bind(...bindings).run();
   }
 
   async tombstoneSourceRecord(
@@ -468,11 +531,12 @@ export class WhoopRepository {
     deletedAt: string,
   ): Promise<void> {
     const definition = sourceDefinitions[resource];
+    const canonicalDeletedAt = canonicalTimestamp(deletedAt)!;
     await this.db.prepare(`
       UPDATE ${definition.table}
       SET deleted_at = ?, synced_at = ?
       WHERE ${definition.keyColumn} = ?
-    `).bind(deletedAt, deletedAt, providerId).run();
+    `).bind(canonicalDeletedAt, canonicalDeletedAt, providerId).run();
   }
 
   async createSyncRun(input: SyncRunInput): Promise<void> {
@@ -518,16 +582,17 @@ export class WhoopRepository {
 
   async recordWebhookEvent(input: WebhookEventInput): Promise<boolean> {
     const result = await this.db.prepare(`
-      INSERT OR IGNORE INTO whoop_webhook_events (
+      INSERT INTO whoop_webhook_events (
         trace_id, whoop_user_id, resource_id, event_type, received_at,
         processed_at, status, attempts, last_error
       ) VALUES (?, ?, ?, ?, ?, NULL, 'received', 0, NULL)
+      ON CONFLICT(trace_id) DO NOTHING
     `).bind(
       input.traceId,
       input.whoopUserId,
       input.resourceId,
       input.eventType,
-      input.receivedAt,
+      canonicalTimestamp(input.receivedAt)!,
     ).run();
     return changedRows(result) === 1;
   }
@@ -587,6 +652,7 @@ export class WhoopRepository {
     const createLeaseId = options.leaseId ?? (() => crypto.randomUUID());
     const sleep = options.sleep ?? defaultSleep;
     const initial = await this.requireTokenConnection(whoopUserId);
+    const initialCredentialVersion = initial.credential_version;
     const initialAccessToken = await this.decryptToken(initial, "access");
 
     try {
@@ -597,13 +663,25 @@ export class WhoopRepository {
 
     const leaseId = createLeaseId();
     const refreshStartedAt = now();
-    const ownsLease = await this.acquireRefreshLease(whoopUserId, leaseId, refreshStartedAt.toISOString());
+    const ownsLease = await this.acquireRefreshLease(
+      whoopUserId,
+      leaseId,
+      refreshStartedAt.toISOString(),
+      initialCredentialVersion,
+    );
     let retryAccessToken: string;
+    let retryCredentialVersion: number;
 
     if (ownsLease) {
       let leaseCleared = false;
       try {
-        const latest = await this.requireTokenConnection(whoopUserId);
+        const latest = await this.findOwnedRefreshLease(
+          whoopUserId,
+          initialCredentialVersion,
+          leaseId,
+          now().toISOString(),
+        );
+        if (!latest) throw new Error("WHOOP refresh lease ownership was lost before refresh");
         const latestRefreshToken = await this.decryptToken(latest, "refresh");
         const tokens = await refresh(latestRefreshToken);
         const rotatedAt = now();
@@ -611,7 +689,7 @@ export class WhoopRepository {
           encryptWhoopToken(this.tokenEncryptionKey, whoopUserId, "access", tokens.access_token),
           encryptWhoopToken(this.tokenEncryptionKey, whoopUserId, "refresh", tokens.refresh_token),
         ]);
-        const stored = await this.storeRotatedTokens(whoopUserId, leaseId, {
+        const stored = await this.storeRotatedTokens(whoopUserId, leaseId, initialCredentialVersion, {
           accessToken,
           accessTokenExpiresAt: new Date(rotatedAt.getTime() + tokens.expires_in * 1000).toISOString(),
           refreshToken,
@@ -622,15 +700,22 @@ export class WhoopRepository {
         if (!stored) throw new Error("WHOOP refresh lease ownership was lost");
         leaseCleared = true;
         retryAccessToken = tokens.access_token;
+        retryCredentialVersion = initialCredentialVersion + 1;
       } finally {
         if (!leaseCleared) {
-          await this.releaseRefreshLease(whoopUserId, leaseId, now().toISOString());
+          await this.releaseRefreshLease(
+            whoopUserId,
+            leaseId,
+            initialCredentialVersion,
+            now().toISOString(),
+          );
         }
       }
     } else {
       await sleep(REFRESH_WAIT_MILLISECONDS);
       const reread = await this.requireTokenConnection(whoopUserId);
       retryAccessToken = await this.decryptToken(reread, "access");
+      retryCredentialVersion = reread.credential_version;
       if (retryAccessToken === initialAccessToken) {
         throw new Error("WHOOP access token refresh is still in progress");
       }
@@ -640,7 +725,7 @@ export class WhoopRepository {
       return await request(retryAccessToken);
     } catch (error) {
       if (error instanceof WhoopUnauthorizedError) {
-        await this.markNeedsReauth(whoopUserId, now().toISOString());
+        await this.markNeedsReauth(whoopUserId, retryCredentialVersion, now().toISOString());
       }
       throw error;
     }
@@ -649,12 +734,29 @@ export class WhoopRepository {
   private async requireTokenConnection(whoopUserId: number): Promise<TokenConnectionRow> {
     const row = await this.db.prepare(`
       SELECT whoop_user_id, status, access_token_ciphertext, access_token_nonce,
-             access_token_expires_at, refresh_token_ciphertext, refresh_token_nonce, granted_scopes
+             access_token_expires_at, refresh_token_ciphertext, refresh_token_nonce,
+             granted_scopes, credential_version
       FROM whoop_connections
       WHERE whoop_user_id = ?
     `).bind(whoopUserId).first<TokenConnectionRow>();
     if (!row) throw new Error("WHOOP connection is not available");
     return row;
+  }
+
+  private async findOwnedRefreshLease(
+    whoopUserId: number,
+    credentialVersion: number,
+    leaseId: string,
+    now: string,
+  ): Promise<TokenConnectionRow | null> {
+    return this.db.prepare(`
+      SELECT whoop_user_id, status, access_token_ciphertext, access_token_nonce,
+             access_token_expires_at, refresh_token_ciphertext, refresh_token_nonce,
+             granted_scopes, credential_version
+      FROM whoop_connections
+      WHERE whoop_user_id = ? AND credential_version = ?
+        AND refresh_lease_id = ? AND refresh_lease_expires_at > ?
+    `).bind(whoopUserId, credentialVersion, leaseId, now).first<TokenConnectionRow>();
   }
 
   private async decryptToken(row: TokenConnectionRow, kind: "access" | "refresh"): Promise<string> {
@@ -664,12 +766,12 @@ export class WhoopRepository {
     return decryptWhoopToken(this.tokenEncryptionKey, row.whoop_user_id, kind, { ciphertext, nonce });
   }
 
-  private async markNeedsReauth(whoopUserId: number, now: string): Promise<void> {
+  private async markNeedsReauth(whoopUserId: number, credentialVersion: number, now: string): Promise<void> {
     await this.db.prepare(`
       UPDATE whoop_connections
       SET status = 'needs_reauth', last_error_at = ?, updated_at = ?
-      WHERE whoop_user_id = ?
-    `).bind(now, now, whoopUserId).run();
+      WHERE whoop_user_id = ? AND credential_version = ?
+    `).bind(now, now, whoopUserId, credentialVersion).run();
   }
 }
 

@@ -25,7 +25,8 @@ class FakeD1 {
   readonly connections = new Map<number, DbRow>();
   readonly oauthStates = new Map<string, DbRow>();
   readonly webhookEvents = new Map<string, DbRow>();
-  onLeaseAcquired?: () => void;
+  onLeaseAcquired?: () => void | Promise<void>;
+  onStoreRotated?: () => void | Promise<void>;
 
   prepare(sql: string) {
     return {
@@ -59,7 +60,15 @@ class FakeD1 {
   private async first<T>(sql: string, bindings: unknown[]): Promise<T | null> {
     this.record(sql, bindings);
     if (sql.includes("FROM whoop_connections")) {
-      return (this.connections.get(Number(bindings[0])) ?? null) as T | null;
+      const row = this.connections.get(Number(bindings[0]));
+      if (!row) return null;
+      if (sql.includes("refresh_lease_id = ?")) {
+        const [, credentialVersion, leaseId, now] = bindings;
+        if (row.credential_version !== credentialVersion
+          || row.refresh_lease_id !== leaseId
+          || String(row.refresh_lease_expires_at) <= String(now)) return null;
+      }
+      return row as T;
     }
     return null;
   }
@@ -82,20 +91,22 @@ class FakeD1 {
     }
 
     if (normalized.startsWith("UPDATE whoop_connections SET refresh_lease_id = ?")) {
-      const [leaseId, expiresAt, whoopUserId, now] = bindings as [string, string, number, string];
+      const [leaseId, expiresAt, whoopUserId, credentialVersion, now] = bindings as [string, string, number, number, string];
       const row = this.connections.get(whoopUserId);
-      if (!row || (row.refresh_lease_id !== null && String(row.refresh_lease_expires_at) > now)) return result(0);
+      if (!row || row.credential_version !== credentialVersion
+        || (row.refresh_lease_id !== null && String(row.refresh_lease_expires_at) > now)) return result(0);
       row.refresh_lease_id = leaseId;
       row.refresh_lease_expires_at = expiresAt;
-      this.onLeaseAcquired?.();
+      await this.onLeaseAcquired?.();
       return result(1);
     }
 
     if (normalized.startsWith("UPDATE whoop_connections SET access_token_ciphertext = ?")) {
       const [accessCiphertext, accessNonce, accessExpiresAt, refreshCiphertext, refreshNonce,
-        grantedScopes, refreshedAt, updatedAt, whoopUserId, leaseId] = bindings;
+        grantedScopes, refreshedAt, updatedAt, whoopUserId, leaseId, credentialVersion] = bindings;
       const row = this.connections.get(Number(whoopUserId));
-      if (!row || row.refresh_lease_id !== leaseId) return result(0);
+      await this.onStoreRotated?.();
+      if (!row || row.refresh_lease_id !== leaseId || row.credential_version !== credentialVersion) return result(0);
       Object.assign(row, {
         access_token_ciphertext: accessCiphertext,
         access_token_nonce: accessNonce,
@@ -107,14 +118,15 @@ class FakeD1 {
         updated_at: updatedAt,
         refresh_lease_id: null,
         refresh_lease_expires_at: null,
+        credential_version: Number(credentialVersion) + 1,
       });
       return result(1);
     }
 
     if (normalized.startsWith("UPDATE whoop_connections SET refresh_lease_id = NULL")) {
-      const [updatedAt, whoopUserId, leaseId] = bindings;
+      const [updatedAt, whoopUserId, leaseId, credentialVersion] = bindings;
       const row = this.connections.get(Number(whoopUserId));
-      if (!row || row.refresh_lease_id !== leaseId) return result(0);
+      if (!row || row.refresh_lease_id !== leaseId || row.credential_version !== credentialVersion) return result(0);
       row.refresh_lease_id = null;
       row.refresh_lease_expires_at = null;
       row.updated_at = updatedAt;
@@ -122,10 +134,37 @@ class FakeD1 {
     }
 
     if (normalized.startsWith("UPDATE whoop_connections SET status = 'needs_reauth'")) {
-      const [lastErrorAt, updatedAt, whoopUserId] = bindings;
+      const [lastErrorAt, updatedAt, whoopUserId, credentialVersion] = bindings;
       const row = this.connections.get(Number(whoopUserId));
-      if (!row) return result(0);
+      if (!row || row.credential_version !== credentialVersion) return result(0);
       Object.assign(row, { status: "needs_reauth", last_error_at: lastErrorAt, updated_at: updatedAt });
+      return result(1);
+    }
+
+    if (normalized.startsWith("INSERT INTO whoop_connections")) {
+      const [whoopUserId, status, accessCiphertext, accessNonce, accessExpiresAt,
+        refreshCiphertext, refreshNonce, grantedScopes, connectedAt, createdAt, updatedAt] = bindings;
+      const current = this.connections.get(Number(whoopUserId));
+      this.connections.set(Number(whoopUserId), {
+        ...current,
+        whoop_user_id: whoopUserId,
+        status,
+        access_token_ciphertext: accessCiphertext,
+        access_token_nonce: accessNonce,
+        access_token_expires_at: accessExpiresAt,
+        refresh_token_ciphertext: refreshCiphertext,
+        refresh_token_nonce: refreshNonce,
+        granted_scopes: grantedScopes,
+        refresh_lease_id: null,
+        refresh_lease_expires_at: null,
+        connected_at: connectedAt,
+        disconnected_at: null,
+        last_error: null,
+        consecutive_failure_count: 0,
+        credential_version: current ? Number(current.credential_version) + 1 : 1,
+        created_at: current?.created_at ?? createdAt,
+        updated_at: updatedAt,
+      });
       return result(1);
     }
 
@@ -137,7 +176,7 @@ class FakeD1 {
       return result(1);
     }
 
-    if (normalized.startsWith("INSERT OR IGNORE INTO whoop_webhook_events")) {
+    if (normalized.startsWith("INSERT INTO whoop_webhook_events")) {
       const columns = insertColumns(sql);
       const row = Object.fromEntries(columns.map((column, index) => [column, bindings[index]]));
       row.status = "received";
@@ -154,6 +193,7 @@ class FakeD1 {
       const [deletedAt, syncedAt, id] = bindings;
       const mapKey = `${table}:${id}`;
       const row = this.sourceRows.get(mapKey) ?? { [keyColumn]: id };
+      if (!this.sourceRows.has(mapKey)) return result(0);
       Object.assign(row, { deleted_at: deletedAt, synced_at: syncedAt });
       this.sourceRows.set(mapKey, row);
       return result(1);
@@ -163,14 +203,34 @@ class FakeD1 {
     if (insertMatch && TABLE_KEYS[insertMatch[1]]) {
       const table = insertMatch[1];
       const columns = insertColumns(sql);
-      const incoming = Object.fromEntries(columns.map((column, index) => [column, bindings[index]]));
+      let bindingIndex = 0;
+      const incoming: DbRow = {};
+      for (const column of columns) {
+        if (column === "deleted_at" && normalized.includes("SELECT MAX(received_at)")) {
+          const [whoopUserId, resourceId, eventType] = bindings.slice(bindingIndex, bindingIndex + 3);
+          bindingIndex += 3;
+          const deletedAt = [...this.webhookEvents.values()]
+            .filter((event) => event.whoop_user_id === whoopUserId
+              && event.resource_id === String(resourceId)
+              && event.event_type === eventType)
+            .map((event) => String(event.received_at))
+            .sort()
+            .at(-1);
+          incoming[column] = deletedAt ?? null;
+        } else {
+          incoming[column] = bindings[bindingIndex++];
+        }
+      }
       const mapKey = `${table}:${incoming[TABLE_KEYS[table]]}`;
       const current = this.sourceRows.get(mapKey);
       if (current && String(incoming.upstream_updated_at ?? "") < String(current.upstream_updated_at ?? "")) {
         return result(0);
       }
-      if (current && normalized.includes(`deleted_at = ${table}.deleted_at`)) {
-        incoming.deleted_at = current.deleted_at;
+      if (current && normalized.includes("deleted_at = CASE") && normalized.includes(`${table}.deleted_at`)) {
+        incoming.deleted_at = [current.deleted_at, incoming.deleted_at]
+          .filter((value): value is string => typeof value === "string")
+          .sort()
+          .at(-1) ?? null;
       }
       this.sourceRows.set(mapKey, { ...current, ...incoming });
       return result(1);
@@ -200,6 +260,7 @@ async function connectionRow(overrides: DbRow = {}): Promise<DbRow> {
     refresh_token_ciphertext: refresh.ciphertext,
     refresh_token_nonce: refresh.nonce,
     granted_scopes: "offline read:workout",
+    credential_version: 1,
     refresh_lease_id: null,
     refresh_lease_expires_at: null,
     connected_at: NOW,
@@ -212,6 +273,20 @@ async function connectionRow(overrides: DbRow = {}): Promise<DbRow> {
     created_at: NOW,
     updated_at: NOW,
     ...overrides,
+  };
+}
+
+async function reconnectInput(accessPlaintext = "reconnected-access") {
+  const accessToken = await encryptWhoopToken(KEY, 42, "access", accessPlaintext);
+  const refreshToken = await encryptWhoopToken(KEY, 42, "refresh", "reconnected-refresh");
+  return {
+    whoopUserId: 42,
+    status: "active" as const,
+    accessToken,
+    accessTokenExpiresAt: "2026-08-19T14:00:00.000Z",
+    refreshToken,
+    grantedScopes: ["offline", "read:workout"],
+    connectedAt: "2026-08-19T12:00:01.000Z",
   };
 }
 
@@ -247,6 +322,51 @@ describe("WHOOP repository", () => {
       .toBe("2026-08-19T10:00:00.000Z");
   });
 
+  it("canonicalizes equal upstream instants before deterministic ordering", async () => {
+    const fake = new FakeD1();
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+
+    await repository.upsertSourceRecord("workout", {
+      ...WORKOUT,
+      created_at: "2026-08-19T06:00:00-04:00",
+      updated_at: "2026-08-19T10:00:00Z",
+      score: { strain: 1 },
+    }, { tombstonePolicy: "reconcile" });
+    await repository.upsertSourceRecord("workout", {
+      ...WORKOUT,
+      created_at: "2026-08-19T10:00:00.0000Z",
+      updated_at: "2026-08-19T06:00:00.000-04:00",
+      score: { strain: 2 },
+    }, { tombstonePolicy: "reconcile" });
+
+    expect(fake.sourceRow("whoop_workouts", WORKOUT.id)).toMatchObject({
+      upstream_created_at: "2026-08-19T10:00:00.000Z",
+      upstream_updated_at: "2026-08-19T10:00:00.000Z",
+      strain: 2,
+    });
+  });
+
+  it("does not let an older instant overwrite a newer instant through offset formatting", async () => {
+    const fake = new FakeD1();
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+
+    await repository.upsertSourceRecord("workout", {
+      ...WORKOUT,
+      updated_at: "2026-08-19T10:00:00.000Z",
+      score: { strain: 5 },
+    }, { tombstonePolicy: "reconcile" });
+    await repository.upsertSourceRecord("workout", {
+      ...WORKOUT,
+      updated_at: "2026-08-19T05:30:00-04:00",
+      score: { strain: 1 },
+    }, { tombstonePolicy: "reconcile" });
+
+    expect(fake.sourceRow("whoop_workouts", WORKOUT.id)).toMatchObject({
+      upstream_updated_at: "2026-08-19T10:00:00.000Z",
+      strain: 5,
+    });
+  });
+
   it("preserves a webhook tombstone until authoritative reconciliation", async () => {
     const fake = new FakeD1();
     const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
@@ -255,6 +375,35 @@ describe("WHOOP repository", () => {
     await repository.tombstoneSourceRecord("workout", WORKOUT.id, NOW);
     await repository.upsertSourceRecord("workout", WORKOUT, { tombstonePolicy: "preserve" });
     expect(fake.sourceRow("whoop_workouts", WORKOUT.id)).toMatchObject({ deleted_at: NOW });
+
+    await repository.upsertSourceRecord("workout", WORKOUT, { tombstonePolicy: "reconcile" });
+    expect(fake.sourceRow("whoop_workouts", WORKOUT.id)).toMatchObject({ deleted_at: null });
+  });
+
+  it("uses a durable delete event to tombstone a record first seen after the webhook", async () => {
+    const fake = new FakeD1();
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+    await repository.recordWebhookEvent({
+      traceId: "delete-before-backfill",
+      whoopUserId: 42,
+      resourceId: WORKOUT.id,
+      eventType: "workout.deleted",
+      receivedAt: "2026-08-19T08:00:00-04:00",
+    });
+
+    await repository.tombstoneSourceRecord("workout", WORKOUT.id, NOW);
+    expect(fake.sourceRow("whoop_workouts", WORKOUT.id)).toBeUndefined();
+
+    await repository.upsertSourceRecord("workout", WORKOUT, { tombstonePolicy: "preserve" });
+    expect(fake.sourceRow("whoop_workouts", WORKOUT.id)).toMatchObject({
+      deleted_at: "2026-08-19T12:00:00.000Z",
+    });
+
+    await repository.tombstoneSourceRecord("workout", WORKOUT.id, "2026-08-19T13:00:00Z");
+    await repository.upsertSourceRecord("workout", WORKOUT, { tombstonePolicy: "preserve" });
+    expect(fake.sourceRow("whoop_workouts", WORKOUT.id)).toMatchObject({
+      deleted_at: "2026-08-19T13:00:00.000Z",
+    });
 
     await repository.upsertSourceRecord("workout", WORKOUT, { tombstonePolicy: "reconcile" });
     expect(fake.sourceRow("whoop_workouts", WORKOUT.id)).toMatchObject({ deleted_at: null });
@@ -276,12 +425,27 @@ describe("WHOOP repository", () => {
     fake.connections.set(42, await connectionRow());
     const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
 
-    await expect(repository.acquireRefreshLease(42, "lease-a", NOW)).resolves.toBe(true);
-    await expect(repository.acquireRefreshLease(42, "lease-b", NOW)).resolves.toBe(false);
+    await expect(repository.acquireRefreshLease(42, "lease-a", NOW, 1)).resolves.toBe(true);
+    await expect(repository.acquireRefreshLease(42, "lease-b", NOW, 1)).resolves.toBe(false);
 
     expect(fake.connections.get(42)).toMatchObject({
       refresh_lease_id: "lease-a",
       refresh_lease_expires_at: "2026-08-19T12:00:30.000Z",
+    });
+  });
+
+  it("allows an expired lease to be taken over within the same credential generation", async () => {
+    const fake = new FakeD1();
+    fake.connections.set(42, await connectionRow({
+      refresh_lease_id: "expired-owner",
+      refresh_lease_expires_at: "2026-08-19T11:59:59.000Z",
+    }));
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+
+    await expect(repository.acquireRefreshLease(42, "new-owner", NOW, 1)).resolves.toBe(true);
+    expect(fake.connections.get(42)).toMatchObject({
+      refresh_lease_id: "new-owner",
+      credential_version: 1,
     });
   });
 
@@ -301,6 +465,9 @@ describe("WHOOP repository", () => {
     await expect(repository.markWebhookQueued(event.traceId)).resolves.toBe(true);
     await expect(repository.markWebhookQueued(event.traceId)).resolves.toBe(false);
     expect(fake.webhookEvents.get(event.traceId)?.status).toBe("queued");
+    const insert = fake.calls.find(({ sql }) => sql.includes("whoop_webhook_events") && sql.includes("INSERT"));
+    expect(insert?.sql).toContain("ON CONFLICT(trace_id) DO NOTHING");
+    expect(insert?.sql).not.toContain("INSERT OR IGNORE");
   });
 
   it("returns a virtual missing status and projects no token, nonce, lease, or raw columns", async () => {
@@ -317,10 +484,12 @@ describe("WHOOP repository", () => {
     const fake = new FakeD1();
     fake.connections.set(42, await connectionRow());
     const refreshAfterLease = await encryptWhoopToken(KEY, 42, "refresh", "refresh-after-lease");
-    fake.onLeaseAcquired = () => Object.assign(fake.connections.get(42)!, {
-      refresh_token_ciphertext: refreshAfterLease.ciphertext,
-      refresh_token_nonce: refreshAfterLease.nonce,
-    });
+    fake.onLeaseAcquired = () => {
+      Object.assign(fake.connections.get(42)!, {
+        refresh_token_ciphertext: refreshAfterLease.ciphertext,
+        refresh_token_nonce: refreshAfterLease.nonce,
+      });
+    };
     const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
     const request = vi.fn()
       .mockRejectedValueOnce(new WhoopUnauthorizedError("fixture request"))
@@ -344,8 +513,111 @@ describe("WHOOP repository", () => {
     expect(fake.connections.get(42)).toMatchObject({ refresh_lease_id: null, refresh_lease_expires_at: null });
     const rotation = fake.calls.find(({ sql }) => sql.includes("SET access_token_ciphertext = ?"));
     expect(rotation?.sql).toContain("refresh_lease_id = NULL");
-    expect(rotation?.sql).toContain("WHERE whoop_user_id = ? AND refresh_lease_id = ?");
-    expect(rotation?.bindings.slice(-2)).toEqual([42, "lease-owner"]);
+    expect(rotation?.sql).toContain("WHERE whoop_user_id = ? AND refresh_lease_id = ? AND credential_version = ?");
+    expect(rotation?.bindings.slice(-3)).toEqual([42, "lease-owner", 1]);
+    expect(fake.connections.get(42)?.credential_version).toBe(2);
+  });
+
+  it("releases its owned lease when refresh fails", async () => {
+    const fake = new FakeD1();
+    fake.connections.set(42, await connectionRow());
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+    const request = vi.fn().mockRejectedValue(new WhoopUnauthorizedError("fixture request"));
+
+    await expect(withWhoopAccessToken(repository, 42, request, vi.fn().mockRejectedValue(
+      new Error("sanitized refresh failure"),
+    ), {
+      now: () => new Date(NOW),
+      leaseId: () => "lease-owner",
+      sleep: vi.fn(),
+    })).rejects.toThrow("sanitized refresh failure");
+
+    expect(fake.connections.get(42)).toMatchObject({
+      refresh_lease_id: null,
+      refresh_lease_expires_at: null,
+      credential_version: 1,
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases its owned lease when rotated-token encryption fails", async () => {
+    const fake = new FakeD1();
+    fake.connections.set(42, await connectionRow());
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+    const request = vi.fn().mockRejectedValue(new WhoopUnauthorizedError("fixture request"));
+    const refresh = vi.fn().mockResolvedValue({
+      access_token: Symbol("invalid-token-input") as unknown as string,
+      refresh_token: "unused-refresh-value",
+      expires_in: 3600,
+      token_type: "bearer",
+    });
+
+    await expect(withWhoopAccessToken(repository, 42, request, refresh, {
+      now: () => new Date(NOW),
+      leaseId: () => "lease-owner",
+      sleep: vi.fn(),
+    })).rejects.toBeInstanceOf(TypeError);
+
+    expect(fake.connections.get(42)).toMatchObject({
+      refresh_lease_id: null,
+      refresh_lease_expires_at: null,
+      credential_version: 1,
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not submit refresh after reconnect invalidates the acquired lease", async () => {
+    const fake = new FakeD1();
+    fake.connections.set(42, await connectionRow());
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+    const reconnect = await reconnectInput();
+    fake.onLeaseAcquired = () => repository.upsertConnection(reconnect);
+    const request = vi.fn().mockRejectedValue(new WhoopUnauthorizedError("fixture request"));
+    const refresh = vi.fn();
+
+    await expect(withWhoopAccessToken(repository, 42, request, refresh, {
+      now: () => new Date(NOW),
+      leaseId: () => "stale-owner",
+      sleep: vi.fn(),
+    })).rejects.toThrow("WHOOP refresh lease ownership was lost before refresh");
+
+    expect(refresh).not.toHaveBeenCalled();
+    expect(fake.connections.get(42)).toMatchObject({
+      status: "active",
+      credential_version: 2,
+      refresh_lease_id: null,
+    });
+  });
+
+  it("does not use rotated credentials after losing ownership during token storage", async () => {
+    const fake = new FakeD1();
+    fake.connections.set(42, await connectionRow());
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+    fake.onStoreRotated = () => {
+      Object.assign(fake.connections.get(42)!, {
+        refresh_lease_id: "takeover-owner",
+      });
+    };
+    const request = vi.fn().mockRejectedValue(new WhoopUnauthorizedError("fixture request"));
+    const refresh = vi.fn().mockResolvedValue({
+      access_token: "must-not-be-used",
+      refresh_token: "must-not-be-stored",
+      expires_in: 3600,
+      token_type: "bearer",
+    });
+
+    await expect(withWhoopAccessToken(repository, 42, request, refresh, {
+      now: () => new Date(NOW),
+      leaseId: () => "lease-owner",
+      sleep: vi.fn(),
+    })).rejects.toThrow("WHOOP refresh lease ownership was lost");
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(fake.connections.get(42)).toMatchObject({
+      credential_version: 1,
+      refresh_lease_id: "takeover-owner",
+    });
   });
 
   it("non-owner waits, rereads once, and never resubmits its pre-wait access token", async () => {
@@ -360,6 +632,9 @@ describe("WHOOP repository", () => {
       Object.assign(fake.connections.get(42)!, {
         access_token_ciphertext: afterWait.ciphertext,
         access_token_nonce: afterWait.nonce,
+        credential_version: 2,
+        refresh_lease_id: null,
+        refresh_lease_expires_at: null,
       });
     });
     const request = vi.fn()
@@ -416,5 +691,36 @@ describe("WHOOP repository", () => {
 
     expect(request).toHaveBeenCalledTimes(2);
     expect(fake.connections.get(42)?.status).toBe("needs_reauth");
+  });
+
+  it("does not let a stale second 401 poison a reconnected credential generation", async () => {
+    const fake = new FakeD1();
+    fake.connections.set(42, await connectionRow());
+    const repository = new WhoopRepository(fake as unknown as D1Database, KEY);
+    const reconnect = await reconnectInput("new-generation-access");
+    let attempts = 0;
+    const request = vi.fn().mockImplementation(async () => {
+      attempts += 1;
+      if (attempts === 2) await repository.upsertConnection(reconnect);
+      throw new WhoopUnauthorizedError("fixture request");
+    });
+    const refresh = vi.fn().mockResolvedValue({
+      access_token: "rotated-access",
+      refresh_token: "rotated-refresh",
+      expires_in: 3600,
+      token_type: "bearer",
+    });
+
+    await expect(withWhoopAccessToken(repository, 42, request, refresh, {
+      now: () => new Date(NOW),
+      leaseId: () => "lease-owner",
+      sleep: vi.fn(),
+    })).rejects.toBeInstanceOf(WhoopUnauthorizedError);
+
+    expect(fake.connections.get(42)).toMatchObject({
+      status: "active",
+      credential_version: 3,
+      refresh_lease_id: null,
+    });
   });
 });
