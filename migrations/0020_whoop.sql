@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS whoop_connections (
   credential_version INTEGER NOT NULL DEFAULT 1,
   refresh_lease_id TEXT,
   refresh_lease_expires_at TEXT,
+  refresh_dispatched_at TEXT,
   connected_at TEXT,
   refreshed_at TEXT,
   last_success_at TEXT,

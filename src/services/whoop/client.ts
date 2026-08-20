@@ -89,6 +89,26 @@ export class WhoopUnauthorizedError extends WhoopRequestError {
   }
 }
 
+export class WhoopRefreshAmbiguousError extends WhoopRequestError {
+  readonly name = "WhoopRefreshAmbiguousError";
+  readonly refreshOutcome = "ambiguous" as const;
+
+  constructor(
+    operation: string,
+    status?: number,
+    retryable = false,
+    retryAfterSeconds?: number,
+  ) {
+    super(operation, status, retryable, retryAfterSeconds);
+    this.message = "WHOOP token refresh outcome is unknown";
+  }
+}
+
+export class WhoopRefreshDefiniteError extends WhoopRequestError {
+  readonly name = "WhoopRefreshDefiniteError";
+  readonly refreshOutcome = "definite" as const;
+}
+
 const retryAfterSeconds = (response: Response): number | undefined => {
   const retryAfter = response.headers.get("retry-after");
   if (retryAfter) {
@@ -231,14 +251,42 @@ export class WhoopClient {
     body: URLSearchParams,
     options: WhoopRefreshOptions = {},
   ): Promise<WhoopTokenResponse> {
-    const payload = await this.requestJson(operation, WHOOP_TOKEN_PATH, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: body.toString(),
-      signal: options.signal,
-    }, false);
+    let payload: unknown;
+    try {
+      payload = await this.requestJson(operation, WHOOP_TOKEN_PATH, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+        signal: options.signal,
+      }, false);
+    } catch (error) {
+      if (operation !== "token refresh") throw error;
+      if (error instanceof WhoopRequestError
+        && error.status !== undefined
+        && error.status >= 400
+        && error.status < 500) {
+        throw new WhoopRefreshDefiniteError(
+          operation,
+          error.status,
+          error.retryable,
+          error.retryAfterSeconds,
+        );
+      }
+      if (error instanceof WhoopRequestError) {
+        throw new WhoopRefreshAmbiguousError(
+          operation,
+          error.status,
+          error.retryable,
+          error.retryAfterSeconds,
+        );
+      }
+      throw new WhoopRefreshAmbiguousError(operation);
+    }
     const parsed = tokenResponseSchema.safeParse(payload);
     if (!parsed.success) {
+      if (operation === "token refresh") {
+        throw new WhoopRefreshAmbiguousError(operation, 200);
+      }
       throw new Error(`WHOOP ${operation} response did not match the provider schema`);
     }
     return parsed.data;

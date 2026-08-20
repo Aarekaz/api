@@ -127,6 +127,53 @@ describe("WHOOP v2 client", () => {
     );
   });
 
+  it("classifies a rejected refresh transport as an ambiguous rotation outcome", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("connection lost"));
+    const client = new WhoopClient(ENV, "access");
+
+    await expect(client.refreshToken("test-refresh")).rejects.toMatchObject({
+      name: "WhoopRefreshAmbiguousError",
+      refreshOutcome: "ambiguous",
+      status: undefined,
+    });
+  });
+
+  it.each([
+    ["truncated JSON", new Response("{", { status: 200, headers: { "content-type": "application/json" } })],
+    ["schema-invalid JSON", jsonResponse({ access_token: "only-one-field" })],
+  ])("classifies a 2xx refresh response with %s as ambiguous", async (_label, response) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+    const client = new WhoopClient(ENV, "access");
+
+    await expect(client.refreshToken("test-refresh")).rejects.toMatchObject({
+      name: "WhoopRefreshAmbiguousError",
+      refreshOutcome: "ambiguous",
+    });
+  });
+
+  it("classifies a refresh 5xx as ambiguous after dispatch", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 503 }));
+    const client = new WhoopClient(ENV, "access");
+
+    await expect(client.refreshToken("test-refresh")).rejects.toMatchObject({
+      name: "WhoopRefreshAmbiguousError",
+      refreshOutcome: "ambiguous",
+      status: 503,
+      retryable: true,
+    });
+  });
+
+  it.each([400, 401, 429])("classifies an explicit refresh %i as a definite failure", async (status) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status }));
+    const client = new WhoopClient(ENV, "access");
+
+    await expect(client.refreshToken("test-refresh")).rejects.toMatchObject({
+      name: "WhoopRefreshDefiniteError",
+      refreshOutcome: "definite",
+      status,
+    });
+  });
+
   it("revokes access at the documented v2 endpoint", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
     const client = new WhoopClient(ENV, "access");
