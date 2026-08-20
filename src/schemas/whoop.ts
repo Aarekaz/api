@@ -27,24 +27,26 @@ export const whoopCollectionQuerySchema = z.object({
 
 export const whoopProfileSchema = z.object({
   user_id: z.number().int().positive(),
-  created_at: whoopDateTime.optional(),
-  updated_at: whoopDateTime.optional(),
+  email: z.string(),
+  first_name: z.string(),
+  last_name: z.string(),
 }).passthrough();
 
 export const whoopBodyMeasurementSchema = z.object({
-  user_id: z.number().int().positive(),
-  created_at: whoopDateTime.optional(),
-  updated_at: whoopDateTime.optional(),
+  height_meter: z.number(),
+  weight_kilogram: z.number(),
+  max_heart_rate: z.number().int(),
 }).passthrough();
 
 export const whoopCycleSchema = z.object({
   id: z.number().int().positive(),
   user_id: z.number().int().positive(),
   start: whoopDateTime,
-  end: whoopDateTime,
+  end: whoopDateTime.nullish(),
   created_at: whoopDateTime,
   updated_at: whoopDateTime,
-  score_state: scoreStateSchema.optional(),
+  timezone_offset: z.string(),
+  score_state: scoreStateSchema,
 }).passthrough();
 
 export const whoopRecoverySchema = z.object({
@@ -53,28 +55,32 @@ export const whoopRecoverySchema = z.object({
   user_id: z.number().int().positive(),
   created_at: whoopDateTime,
   updated_at: whoopDateTime,
-  score_state: scoreStateSchema.optional(),
+  score_state: scoreStateSchema,
 }).passthrough();
 
 export const whoopSleepSchema = z.object({
   id: whoopUuid,
   cycle_id: z.number().int().positive(),
   user_id: z.number().int().positive(),
-  start: whoopDateTime.optional(),
-  end: whoopDateTime.optional(),
+  start: whoopDateTime,
+  end: whoopDateTime,
   created_at: whoopDateTime,
   updated_at: whoopDateTime,
-  score_state: scoreStateSchema.optional(),
+  timezone_offset: z.string(),
+  nap: z.boolean(),
+  score_state: scoreStateSchema,
 }).passthrough();
 
 export const whoopWorkoutSchema = z.object({
   id: whoopUuid,
   user_id: z.number().int().positive(),
-  start: whoopDateTime.optional(),
-  end: whoopDateTime.optional(),
+  start: whoopDateTime,
+  end: whoopDateTime,
   created_at: whoopDateTime,
   updated_at: whoopDateTime,
-  score_state: scoreStateSchema.optional(),
+  timezone_offset: z.string(),
+  sport_name: z.string(),
+  score_state: scoreStateSchema,
 }).passthrough();
 
 export const whoopCollectionResponseSchema = <T extends z.ZodTypeAny>(recordSchema: T) => z.object({

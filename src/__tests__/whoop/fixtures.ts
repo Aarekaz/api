@@ -5,8 +5,42 @@ import type { WhoopQueueMessage, WhoopWebhookEvent } from "../../types/whoop";
 export const NOW = "2026-08-19T12:00:00.000Z";
 export const NOW_MS = String(Date.parse(NOW));
 export const NOW_MINUS_SIX_MINUTES_MS = String(Date.parse(NOW) - 6 * 60 * 1000);
-export const SLEEP = { id: "f7c85ce7-7e44-4bb4-8cb4-ee5b94b54e1c", cycle_id: 9, user_id: 42, created_at: NOW, updated_at: NOW };
-export const WORKOUT = { id: "a2f0c3df-cdb4-48f8-a39b-221b5d8b7a34", user_id: 42, created_at: NOW, updated_at: NOW };
+export const PROFILE = { user_id: 42, email: "fixture@whoop.test", first_name: "Fixture", last_name: "User" };
+export const BODY_MEASUREMENT = { height_meter: 1.8, weight_kilogram: 75, max_heart_rate: 190 };
+export const CYCLE = {
+  id: 9,
+  user_id: 42,
+  created_at: NOW,
+  updated_at: NOW,
+  start: "2026-08-19T08:00:00.000Z",
+  end: "2026-08-19T10:00:00.000Z",
+  timezone_offset: "-04:00",
+  score_state: "SCORED",
+} as const;
+export const CURRENT_CYCLE = { ...CYCLE, end: null };
+export const SLEEP = {
+  id: "f7c85ce7-7e44-4bb4-8cb4-ee5b94b54e1c",
+  cycle_id: 9,
+  user_id: 42,
+  created_at: NOW,
+  updated_at: NOW,
+  start: "2026-08-19T04:00:00.000Z",
+  end: "2026-08-19T11:00:00.000Z",
+  timezone_offset: "-04:00",
+  nap: false,
+  score_state: "SCORED",
+} as const;
+export const WORKOUT = {
+  id: "a2f0c3df-cdb4-48f8-a39b-221b5d8b7a34",
+  user_id: 42,
+  created_at: NOW,
+  updated_at: NOW,
+  start: "2026-08-19T10:30:00.000Z",
+  end: "2026-08-19T11:30:00.000Z",
+  timezone_offset: "-04:00",
+  sport_name: "running",
+  score_state: "SCORED",
+} as const;
 export const SLEEP_UPDATED = { user_id: 42, id: SLEEP.id, type: "sleep.updated", trace_id: "7b2dc91e-7423-42b1-a3cb-ecce1a0e2de8" } as const;
 export const KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
 

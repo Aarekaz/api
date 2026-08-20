@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS whoop_cycles (
   cycle_id INTEGER PRIMARY KEY,
   whoop_user_id INTEGER NOT NULL,
   start_at TEXT NOT NULL,
-  end_at TEXT NOT NULL,
+  end_at TEXT,
   timezone_offset TEXT,
   score_state TEXT,
   strain REAL,
