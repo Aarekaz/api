@@ -88,33 +88,8 @@ const stripSqlComments = (sql: string): string => {
   return result;
 };
 
-const stripSqlStringLiterals = (sql: string): string => {
-  let result = "";
-  let index = 0;
-  let inString = false;
-
-  while (index < sql.length) {
-    const character = sql[index];
-    const next = sql[index + 1];
-    if (character === "'") {
-      if (inString && next === "'") {
-        index += 2;
-        continue;
-      }
-      inString = !inString;
-      result += " ";
-      index += 1;
-      continue;
-    }
-    if (!inString) result += character;
-    index += 1;
-  }
-
-  return result;
-};
-
-const hasExecutableAppleHealthSql = (sql: string) => (
-  /\bapple_health_[A-Za-z0-9_]*\b/i.test(stripSqlStringLiterals(stripSqlComments(sql)))
+const hasAppleHealthReferenceOutsideComments = (sql: string) => (
+  /\bapple_health_[A-Za-z0-9_]*\b/i.test(stripSqlComments(sql))
 );
 
 const WHOOP_TABLES = [
@@ -197,7 +172,7 @@ describe("WHOOP fresh D1 migration", () => {
 
   it("applies every migration from empty state and creates the final WHOOP schema", async () => {
     const migrationSql = await readFile("migrations/0020_whoop.sql", "utf8");
-    expect(hasExecutableAppleHealthSql(migrationSql)).toBe(false);
+    expect(hasAppleHealthReferenceOutsideComments(migrationSql)).toBe(false);
 
     await wrangler(
       "d1", "migrations", "apply", "personal_api", "--local", "--persist-to", tempDir,
@@ -266,13 +241,19 @@ describe("WHOOP fresh D1 migration", () => {
     });
   });
 
-  it("ignores Apple identifiers in comments but rejects executable Apple SQL", () => {
-    expect(hasExecutableAppleHealthSql("-- apple_health_daily is intentionally untouched\nSELECT 1")).toBe(false);
-    expect(hasExecutableAppleHealthSql("/* apple_health_workouts */ SELECT 'apple_health_daily'")).toBe(false);
-    expect(hasExecutableAppleHealthSql("SELECT '-- apple_health_daily' AS note")).toBe(false);
-    expect(hasExecutableAppleHealthSql("CREATE INDEX changed ON apple_health_daily(date)")).toBe(true);
-    expect(hasExecutableAppleHealthSql("INSERT INTO apple_health_daily(date) VALUES ('2026-08-20')")).toBe(true);
-    expect(hasExecutableAppleHealthSql("UPDATE apple_health_workouts SET source = 'whoop'")).toBe(true);
-    expect(hasExecutableAppleHealthSql("DELETE FROM [apple_health_sleep_sessions]")).toBe(true);
+  it("ignores Apple identifiers in comments but rejects Apple references elsewhere", () => {
+    expect(hasAppleHealthReferenceOutsideComments("-- apple_health_daily is intentionally untouched\nSELECT 1")).toBe(false);
+    expect(hasAppleHealthReferenceOutsideComments("/* apple_health_workouts */ SELECT 'ordinary value'")).toBe(false);
+    expect(hasAppleHealthReferenceOutsideComments("SELECT '-- ordinary string, not a comment' AS note")).toBe(false);
+    // SQLite accepts single-quoted identifiers, so this migration deliberately rejects the
+    // Apple prefix even inside string values. There is no legitimate Apple value in 0020.
+    expect(hasAppleHealthReferenceOutsideComments("SELECT 'apple_health_daily' AS note")).toBe(true);
+    expect(hasAppleHealthReferenceOutsideComments("CREATE INDEX changed ON apple_health_daily(date)")).toBe(true);
+    expect(hasAppleHealthReferenceOutsideComments("INSERT INTO apple_health_daily(date) VALUES ('2026-08-20')")).toBe(true);
+    expect(hasAppleHealthReferenceOutsideComments("UPDATE apple_health_workouts SET source = 'whoop'")).toBe(true);
+    expect(hasAppleHealthReferenceOutsideComments("DELETE FROM [apple_health_sleep_sessions]")).toBe(true);
+    expect(hasAppleHealthReferenceOutsideComments("CREATE TABLE 'apple_health_evil' (id INTEGER)")).toBe(true);
+    expect(hasAppleHealthReferenceOutsideComments("DELETE FROM 'apple_health_daily'")).toBe(true);
+    expect(hasAppleHealthReferenceOutsideComments("CREATE INDEX changed ON 'apple_health_daily'(date)")).toBe(true);
   });
 });
