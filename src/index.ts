@@ -7,6 +7,8 @@ import { requestLogger } from "./middleware/request-logger";
 import { getOpenApiDocument } from "./schemas/openapi";
 import { getSwaggerUiHtml } from "./utils/swagger";
 import { handleScheduled } from "./scheduled";
+import { handleWhoopQueue } from "./services/whoop/sync";
+import type { WhoopQueueMessage } from "./types/whoop";
 
 // Import route modules
 import healthRoute from "./routes/health";
@@ -37,6 +39,8 @@ import logsRoute from "./routes/logs";
 import mediaRoute from "./routes/media";
 import financeRoute from "./routes/finance";
 import crowdRoute from "./routes/crowd";
+import whoopIntegrationRoute from "./routes/whoop-integration";
+import whoopHealthRoute from "./routes/whoop-health";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -132,6 +136,7 @@ app.route("/health", healthRoute);
 
 // Protected v1 routes
 app.use("/v1/*", requireAuth);
+app.route("/", whoopIntegrationRoute);
 app.route("/v1/profile", profileRoute);
 app.route("/v1/now", nowRoute);
 app.route("/v1/settings", settingsRoute);
@@ -153,6 +158,7 @@ app.route("/v1/github", githubRoute);
 app.route("/v1/wrapped", wrappedRoute);
 app.route("/v1/refresh", refreshRoute);
 app.route("/v1/export", exportRoute);
+app.route("/v1/health/whoop", whoopHealthRoute);
 app.route("/v1/health", healthDataRoute);
 app.route("/v1/location", locationRoute);
 app.route("/v1/custom", customRoute);
@@ -167,5 +173,8 @@ export default {
   },
   async scheduled(event: ScheduledEvent, env: Env): Promise<void> {
     return handleScheduled(event, env);
+  },
+  async queue(batch: MessageBatch<WhoopQueueMessage>, env: Env): Promise<void> {
+    return handleWhoopQueue(batch, env);
   },
 };

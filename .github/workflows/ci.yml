@@ -27,5 +27,8 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Test WHOOP
+        run: npm run test:whoop
+
       - name: Test
         run: npm test

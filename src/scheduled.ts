@@ -9,19 +9,62 @@ import {
   markRefreshed,
 } from "./services/wakatime";
 import { refreshGitHub } from "./services/github";
+import {
+  WhoopRepository,
+  type CurrentWhoopConnection,
+  type PendingInitialBackfill,
+} from "./services/whoop/repository";
+import { WhoopClient } from "./services/whoop/client";
+import { enqueueReconciliation } from "./services/whoop/sync";
+import type { WhoopQueueMessage, WhoopResource } from "./types/whoop";
+
+const WHOOP_RESOURCES: readonly WhoopResource[] = [
+  "profile", "body_measurement", "cycle", "recovery", "sleep", "workout",
+];
+const WHOOP_REFRESH_WINDOW_MILLISECONDS = 5 * 60 * 1000;
+
+type ScheduledWhoopRepository = Pick<WhoopRepository,
+  | "getPendingInitialBackfills"
+  | "markInitialBackfillQueued"
+  | "getCurrentConnection"
+  | "beginReconciliation"
+  | "getPendingRecoveryCycleIds"
+  | "withWhoopAccessToken"
+  | "pruneOperationalData"
+  | "createSyncRun"
+  | "markSyncRunPublicationFailure"
+  | "recordSyncFailure"
+>;
+
+interface ScheduledRefreshJobs {
+  lanyard: () => Promise<void>;
+  wakatime: () => Promise<void>;
+  github: () => Promise<void>;
+}
+
+export interface ScheduledDependencies {
+  repository?: ScheduledWhoopRepository;
+  enqueueReconciliation?: typeof enqueueReconciliation;
+  now?: () => Date;
+  refreshJobs?: ScheduledRefreshJobs;
+  refreshClientFactory?: (env: Env) => Pick<WhoopClient, "refreshToken">;
+}
 
 export async function handleScheduled(
   _event: ScheduledEvent,
-  env: Env
+  env: Env,
+  dependencies: ScheduledDependencies = {},
 ): Promise<void> {
   // Each refresh runs independently. Previously the WakaTime block had
   // early `return`s that exited the whole handler, so GitHub would never
   // refresh on cron ticks where today's WakaTime row already existed —
   // i.e. most of the day.
   const jobs = [
-    { name: "lanyard", task: () => refreshLanyard(env) },
-    { name: "wakatime", task: () => refreshWakaTimeIfDue(env) },
-    { name: "github", task: () => refreshGitHubIfDue(env) },
+    { name: "lanyard", task: dependencies.refreshJobs?.lanyard ?? (() => refreshLanyard(env)) },
+    { name: "wakatime", task: dependencies.refreshJobs?.wakatime ?? (() => refreshWakaTimeIfDue(env)) },
+    { name: "github", task: dependencies.refreshJobs?.github ?? (() => refreshGitHubIfDue(env)) },
+    { name: "whoop", task: () => refreshWhoop(env, dependencies) },
+    { name: "whoop-retention", task: () => pruneWhoopOperations(env, dependencies) },
   ];
 
   const results = await Promise.allSettled(
@@ -32,6 +75,66 @@ export async function handleScheduled(
     if (result.status === "rejected") {
       console.error(`Scheduled refresh failed: ${jobs[index].name}`, result.reason);
     }
+  });
+}
+
+async function pruneWhoopOperations(env: Env, dependencies: ScheduledDependencies): Promise<void> {
+  const repository = dependencies.repository
+    ?? new WhoopRepository(env.DB, env.WHOOP_TOKEN_ENCRYPTION_KEY);
+  const now = dependencies.now ?? (() => new Date());
+  await repository.pruneOperationalData(now().toISOString());
+}
+
+const backfillMessagesFor = (intent: PendingInitialBackfill): WhoopQueueMessage[] =>
+  WHOOP_RESOURCES.map((resource) => ({
+    kind: "backfill",
+    whoopUserId: intent.whoopUserId,
+    connectionId: intent.connectionId,
+    resource,
+  }));
+
+const activeConnection = (
+  connection: CurrentWhoopConnection | null,
+): connection is CurrentWhoopConnection => connection?.status === "active";
+
+async function refreshWhoop(env: Env, dependencies: ScheduledDependencies): Promise<void> {
+  const repository = dependencies.repository
+    ?? new WhoopRepository(env.DB, env.WHOOP_TOKEN_ENCRYPTION_KEY);
+  const now = dependencies.now ?? (() => new Date());
+  const publishReconciliation = dependencies.enqueueReconciliation ?? enqueueReconciliation;
+  const pendingBackfills = await repository.getPendingInitialBackfills();
+
+  for (const intent of pendingBackfills) {
+    await env.WHOOP_SYNC_QUEUE.sendBatch(
+      backfillMessagesFor(intent).map((body) => ({ body })),
+    );
+    const marked = await repository.markInitialBackfillQueued(
+      intent.whoopUserId,
+      intent.connectionId,
+      intent.credentialVersion,
+      now().toISOString(),
+    );
+    if (!marked) throw new Error("WHOOP initial backfill lifecycle changed");
+  }
+
+  const connection = await repository.getCurrentConnection();
+  if (!activeConnection(connection)) return;
+  await repository.withWhoopAccessToken(
+    connection.whoopUserId,
+    async () => undefined,
+    (refreshToken, options) => (
+      dependencies.refreshClientFactory?.(env) ?? new WhoopClient(env, "")
+    ).refreshToken(refreshToken, options),
+    {
+      expectedConnectionId: connection.connectionId,
+      refreshBeforeExpirationMilliseconds: WHOOP_REFRESH_WINDOW_MILLISECONDS,
+    },
+  );
+  await publishReconciliation(env, connection.whoopUserId, "scheduled", {
+    repository,
+    now,
+    expectedConnectionId: connection.connectionId,
+    requireActiveConnection: true,
   });
 }
 
