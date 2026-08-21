@@ -172,6 +172,9 @@ describe("WHOOP shared schemas", () => {
     const wranglerToml = await readProjectFile("wrangler.toml");
 
     expect(wranglerToml).toMatch(/^account_id = "313c4e6e881f1e07c880d7230541200a"$/m);
+    expect(wranglerToml).toMatch(/^WHOOP_REDIRECT_URI = "https:\/\/api\.anuragd\.me\/integrations\/whoop\/callback"$/m);
+    expect(wranglerToml).toMatch(/^OS_BASE_URL = "https:\/\/os\.anuragd\.me"$/m);
+    expect(wranglerToml).not.toMatch(/^WHOOP_(?:CLIENT_ID|CLIENT_SECRET|TOKEN_ENCRYPTION_KEY)\s*=/m);
     expect(wranglerToml).toMatch(/\[\[queues\.producers\]\][\s\S]*binding = "WHOOP_SYNC_QUEUE"[\s\S]*queue = "whoop-health-sync"/);
     expect(wranglerToml).toMatch(/\[\[queues\.consumers\]\][\s\S]*queue = "whoop-health-sync"[\s\S]*dead_letter_queue = "whoop-health-sync-dlq"[\s\S]*max_batch_size = 1[\s\S]*max_batch_timeout = 1[\s\S]*max_concurrency = 1[\s\S]*max_retries = 5/);
   });
