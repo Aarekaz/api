@@ -4,7 +4,7 @@ import type {
   WhoopResource,
   WhoopWebhookEventType,
 } from "../../types/whoop";
-import { WhoopClient, WhoopRequestError } from "./client";
+import { WhoopClient, WhoopRequestError, WhoopResponseSchemaError } from "./client";
 import { WhoopRepository, WhoopStaleConnectionError } from "./repository";
 
 const RECONCILIATION_WINDOW_MILLISECONDS = 14 * 24 * 60 * 60 * 1000;
@@ -77,6 +77,14 @@ export interface ProcessWebhookInput {
 
 const requireCurrentWrite = (written: boolean | void): void => {
   if (written === false) throw new WhoopStaleConnectionError();
+};
+
+const sanitizedSyncError = (error: unknown): string => {
+  if (error instanceof WhoopRequestError && error.status !== undefined) {
+    return `WHOOP request failed with status ${error.status}`;
+  }
+  if (error instanceof WhoopResponseSchemaError) return error.message;
+  return "WHOOP synchronization failed";
 };
 
 const isCollectionResource = (
@@ -564,9 +572,7 @@ export async function handleWhoopQueue(
         continue;
       }
       if (body.kind === "webhook") {
-        const lastError = error instanceof WhoopRequestError && error.status !== undefined
-          ? `WHOOP request failed with status ${error.status}`
-          : "WHOOP synchronization failed";
+        const lastError = sanitizedSyncError(error);
         const permanentClientError = error instanceof WhoopRequestError
           && error.status !== undefined
           && error.status >= 400
@@ -614,9 +620,7 @@ export async function handleWhoopQueue(
         continue;
       }
       const failedAt = now().toISOString();
-      const lastError = error instanceof WhoopRequestError && error.status !== undefined
-        ? `WHOOP request failed with status ${error.status}`
-        : "WHOOP synchronization failed";
+      const lastError = sanitizedSyncError(error);
       const permanentClientError = error instanceof WhoopRequestError
         && error.status !== undefined
         && error.status >= 400

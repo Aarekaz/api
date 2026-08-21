@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../../index";
-import { WhoopRequestError } from "../../services/whoop/client";
+import { WhoopRequestError, WhoopResponseSchemaError } from "../../services/whoop/client";
 import {
   enqueueReconciliation,
   handleWhoopQueue,
@@ -600,6 +600,19 @@ describe("WHOOP queue synchronization", () => {
     }));
     expect(message.retry).toHaveBeenCalledWith({ delaySeconds: 30 });
     expect(message.ack).not.toHaveBeenCalled();
+  });
+
+  it("checkpoints a bounded provider schema summary without response values", async () => {
+    const { client, dependencies, env, repository } = createHarness();
+    client.getCollection.mockRejectedValue(new WhoopResponseSchemaError("list sleep", []));
+    const batch = batchOf({ kind: "backfill", whoopUserId: 42, resource: "sleep" });
+
+    await handleWhoopQueue(batch, env, dependencies);
+
+    expect(repository.upsertCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      status: "retrying",
+      lastError: "WHOOP list sleep response schema mismatch at response:invalid",
+    }));
   });
 
   it("durably terminates an explicit permanent 4xx without a retry loop", async () => {

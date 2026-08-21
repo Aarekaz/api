@@ -81,6 +81,18 @@ export class WhoopRequestError extends Error {
   }
 }
 
+export class WhoopResponseSchemaError extends Error {
+  readonly name = "WhoopResponseSchemaError";
+
+  constructor(operation: string, issues: z.ZodIssue[]) {
+    const summary = issues.slice(0, 3).map((issue) => {
+      const path = issue.path.length === 0 ? "response" : issue.path.map(String).join(".");
+      return `${path}:${issue.code}`;
+    }).join(", ");
+    super(`WHOOP ${operation} response schema mismatch at ${summary || "response:invalid"}`);
+  }
+}
+
 export class WhoopUnauthorizedError extends WhoopRequestError {
   readonly name = "WhoopUnauthorizedError";
 
@@ -146,7 +158,7 @@ const parseProviderPayload = <T>(schema: z.ZodType<T>, payload: unknown, operati
   const rawJson = JSON.stringify(payload);
   const parsed = schema.safeParse(payload);
   if (!parsed.success) {
-    throw new Error(`WHOOP ${operation} response did not match the provider schema`);
+    throw new WhoopResponseSchemaError(operation, parsed.error.issues);
   }
   return asProviderRecord(parsed.data, rawJson);
 };
@@ -214,7 +226,7 @@ export class WhoopClient {
       : [];
     const parsed = whoopCollectionResponseSchema(definition.schema).safeParse(payload);
     if (!parsed.success) {
-      throw new Error(`WHOOP list ${resource} response did not match the provider schema`);
+      throw new WhoopResponseSchemaError(`list ${resource}`, parsed.error.issues);
     }
 
     return {

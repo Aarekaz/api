@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   WhoopClient,
+  WhoopResponseSchemaError,
   WhoopRequestError,
   WhoopUnauthorizedError,
 } from "../../services/whoop/client";
@@ -264,9 +265,17 @@ describe("WHOOP v2 client", () => {
   });
 
   it("rejects malformed successful provider payloads without treating them as HTTP retry errors", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ user_id: 42 }));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({
+      user_id: 42,
+      access_token: "must-not-leak",
+    }));
     const client = new WhoopClient(ENV, "access");
 
-    await expect(client.getProfile()).rejects.not.toBeInstanceOf(WhoopRequestError);
+    const request = client.getProfile();
+    await expect(request).rejects.toBeInstanceOf(WhoopResponseSchemaError);
+    await expect(request).rejects.toMatchObject({
+      message: "WHOOP profile response schema mismatch at email:invalid_type, first_name:invalid_type, last_name:invalid_type",
+    });
+    await expect(request).rejects.not.toThrow("must-not-leak");
   });
 });
