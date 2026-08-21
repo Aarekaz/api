@@ -234,7 +234,7 @@ export class WhoopClient {
         record,
         rawRecords[index],
       )) as Array<WhoopProviderRecord<WhoopCollectionRecordMap[R]>>,
-      nextToken: parsed.data.next_token,
+      nextToken: parsed.data.next_token ?? undefined,
     };
   }
 
