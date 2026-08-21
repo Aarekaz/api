@@ -105,7 +105,7 @@ export const whoopWorkoutSchema = z.object({
 
 export const whoopCollectionResponseSchema = <T extends z.ZodTypeAny>(recordSchema: T) => z.object({
   records: z.array(recordSchema),
-  next_token: z.string().optional(),
+  next_token: z.string().nullish(),
 }).passthrough();
 
 export type WhoopWebhook = z.infer<typeof whoopWebhookSchema>;

@@ -232,6 +232,19 @@ describe("WHOOP v2 client", () => {
     );
   });
 
+  it("treats a live null next token as collection exhaustion", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({
+      records: [SLEEP],
+      next_token: null,
+    }));
+    const client = new WhoopClient(ENV, "access");
+
+    await expect(client.getCollection("sleep")).resolves.toMatchObject({
+      nextToken: undefined,
+      records: [{ id: SLEEP.id }],
+    });
+  });
+
   it("rejects provider collection limits outside the whole-number range 1 through 25 before fetching", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     const client = new WhoopClient(ENV, "access");
