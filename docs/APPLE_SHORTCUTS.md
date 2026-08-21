@@ -20,7 +20,7 @@ A practical guide to creating iOS Shortcuts that export your Apple Health data t
 - Apple Watch (recommended for comprehensive data)
 - iOS Shortcuts app (pre-installed)
 - Your API endpoint: `https://api.anuragd.me`
-- Your API token: `c3ab8ff13720e8ad9047dd39466b3c8974e592c2fa383d4a3960714caef0c4f2`
+- Your API token: `${API_TOKEN}`
 
 ### Enable Health Data Access
 
@@ -122,7 +122,7 @@ A practical guide to creating iOS Shortcuts that export your Apple Health data t
     - Method: POST
     - Headers:
       * Content-Type: application/json
-      * Authorization: Bearer c3ab8ff13720e8ad9047dd39466b3c8974e592c2fa383d4a3960714caef0c4f2
+      * Authorization: Bearer ${API_TOKEN}
     - Request Body: JSON
     - Body: HealthPayload
     → Variable: Response
@@ -209,7 +209,7 @@ A practical guide to creating iOS Shortcuts that export your Apple Health data t
     - Method: POST
     - Headers:
       * Content-Type: application/json
-      * Authorization: Bearer c3ab8ff13720e8ad9047dd39466b3c8974e592c2fa383d4a3960714caef0c4f2
+      * Authorization: Bearer ${API_TOKEN}
     - Request Body: JSON
     - Body: SleepPayload
 
@@ -292,7 +292,7 @@ A practical guide to creating iOS Shortcuts that export your Apple Health data t
     - Method: POST
     - Headers:
       * Content-Type: application/json
-      * Authorization: Bearer c3ab8ff13720e8ad9047dd39466b3c8974e592c2fa383d4a3960714caef0c4f2
+      * Authorization: Bearer ${API_TOKEN}
     - Request Body: JSON
     - Body: WorkoutPayload
 
@@ -525,7 +525,7 @@ A practical guide to creating iOS Shortcuts that export your Apple Health data t
    - Method: **POST**
    - Headers: Tap "Add new field"
      - Key: `Content-Type`, Value: `application/json`
-     - Key: `Authorization`, Value: `Bearer c3ab8ff13720e8ad9047dd39466b3c8974e592c2fa383d4a3960714caef0c4f2`
+     - Key: `Authorization`, Value: `Bearer ${API_TOKEN}`
    - Request Body: **JSON**
    - Body: Tap and select **HealthPayload** variable
 
@@ -713,7 +713,7 @@ Calculate Statistics
 **Solution:**
 - Verify Authorization header is set correctly:
   - Key: `Authorization`
-  - Value: `Bearer c3ab8ff13720e8ad9047dd39466b3c8974e592c2fa383d4a3960714caef0c4f2`
+  - Value: `Bearer ${API_TOKEN}`
 - Check for typos in the token
 
 ---

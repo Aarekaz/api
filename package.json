@@ -14,6 +14,7 @@
     "enrich:shelf-books": "node scripts/enrich-shelf-books.mjs",
     "sync:shelf-posters": "node scripts/enrich-shelf-posters-tmdb.mjs --commit",
     "test": "vitest run",
+    "test:whoop": "vitest run src/__tests__/whoop",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
