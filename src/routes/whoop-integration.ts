@@ -25,6 +25,8 @@ import { WHOOP_SCOPES, type WhoopQueueMessage, type WhoopResource } from "../typ
 import { enqueueReconciliation } from "../services/whoop/sync";
 import { whoopWebhookSchema } from "../schemas/whoop";
 
+const syncOptionsSchema = z.object({ full_history: z.boolean().optional() }).strict();
+
 const WHOOP_AUTHORIZE_URL = "https://api.prod.whoop.com/oauth/oauth2/auth";
 const OAUTH_STATE_LIFETIME_MILLISECONDS = 10 * 60 * 1000;
 const WEBHOOK_MAX_SKEW_MILLISECONDS = 5 * 60 * 1000;
@@ -362,6 +364,13 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
   });
 
   app.post("/v1/integrations/whoop/sync", async (c) => {
+    let options: z.infer<typeof syncOptionsSchema>;
+    try {
+      const body = await c.req.text();
+      options = syncOptionsSchema.parse(body.trim() === "" ? {} : JSON.parse(body));
+    } catch {
+      return c.json({ error: "Invalid WHOOP sync options" }, 400);
+    }
     if (!configured(c.env)) return c.json({ error: "WHOOP integration is not configured" }, 503);
     const repository = repositoryFor(c.env);
     const connection = await repository.getCurrentConnection();
@@ -371,6 +380,7 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
       now,
       expectedConnectionId: connection.connectionId,
       requireActiveConnection: false,
+      fullHistory: options.full_history,
     });
     return c.json({ ok: true }, 202);
   });
@@ -458,6 +468,7 @@ openApiRegistry.registerPath({
   method: "post",
   path: "/v1/integrations/whoop/sync",
   summary: "Queue WHOOP reconciliation",
+  request: { body: { ...openApiJsonRequestBody(syncOptionsSchema), required: false } },
   security: authSecurity,
   responses: {
     202: openApiResponse(okSchema, "Reconciliation queued"),

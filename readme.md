@@ -239,7 +239,7 @@ WHOOP is the sole ongoing wearable source. See [WHOOP_HEALTH_SOURCE.md](docs/WHO
 
 - `GET /v1/integrations/whoop` - Get connection and synchronization status
 - `POST /v1/integrations/whoop/connect` - Begin WHOOP OAuth
-- `POST /v1/integrations/whoop/sync` - Request asynchronous reconciliation
+- `POST /v1/integrations/whoop/sync` - Request asynchronous reconciliation (14 days by default; optional JSON `{ "full_history": true }` rechecks all history against WHOOP)
 - `DELETE /v1/integrations/whoop` - Revoke and disconnect WHOOP
 - `DELETE /v1/integrations/whoop/data` - Delete local WHOOP data after disconnect
 - `GET /v1/health/whoop/overview` - Get current health state and bounded trends

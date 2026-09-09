@@ -130,6 +130,68 @@ describe("WHOOP repository on SQLite", () => {
 
   afterEach(() => database.close());
 
+  it("stores all v2 workout zones including zero without losing the raw payload", async () => {
+    const workout = { ...WORKOUT, score: { zone_durations: {
+      zone_zero_milli: 0, zone_one_milli: 1000, zone_two_milli: 2000,
+      zone_three_milli: 3000, zone_four_milli: 4000, zone_five_milli: 5000,
+    }, altitude_change_meter: -12.5 } };
+    await repository.upsertSourceRecord("workout", workout, { tombstonePolicy: "reconcile", syncedAt: NOW });
+    expect(database.prepare(`SELECT zone_zero_milliseconds, zone_one_milliseconds,
+      zone_two_milliseconds, zone_three_milliseconds, zone_four_milliseconds,
+      zone_five_milliseconds FROM whoop_workouts`).get()).toEqual({
+      zone_zero_milliseconds: 0, zone_one_milliseconds: 1000, zone_two_milliseconds: 2000,
+      zone_three_milliseconds: 3000, zone_four_milliseconds: 4000, zone_five_milliseconds: 5000,
+    });
+    expect(database.prepare("SELECT raw_json FROM whoop_workouts").get()).toEqual({ raw_json: JSON.stringify(workout) });
+  });
+
+  it("repairs historical zones idempotently while retaining raw data and deletion state", async () => {
+    const workout = { ...WORKOUT, score: { zone_durations: {
+      zone_zero_milli: 0, zone_one_milli: 1000, zone_two_milli: 2000,
+      zone_three_milli: 3000, zone_four_milli: 4000, zone_five_milli: 5000,
+    } } };
+    await repository.upsertSourceRecord("workout", workout, { tombstonePolicy: "reconcile", syncedAt: NOW });
+    database.prepare(`UPDATE whoop_workouts SET zone_zero_milliseconds = NULL,
+      zone_one_milliseconds = NULL, zone_two_milliseconds = NULL, zone_three_milliseconds = NULL,
+      zone_four_milliseconds = NULL, zone_five_milliseconds = NULL, deleted_at = ?`).run(NOW);
+    // @ts-expect-error The Worker typecheck excludes Node test-runtime declarations.
+    const { readFile } = await import("node:fs/promises");
+    const migration = await readFile("migrations/0021_whoop_workout_zones.sql", "utf8");
+    database.exec(migration);
+    database.exec(migration);
+    expect(database.prepare(`SELECT zone_zero_milliseconds, zone_one_milliseconds,
+      zone_two_milliseconds, zone_three_milliseconds, zone_four_milliseconds,
+      zone_five_milliseconds, raw_json, deleted_at, synced_at FROM whoop_workouts`).get()).toEqual({
+      zone_zero_milliseconds: 0, zone_one_milliseconds: 1000, zone_two_milliseconds: 2000,
+      zone_three_milliseconds: 3000, zone_four_milliseconds: 4000, zone_five_milliseconds: 5000,
+      raw_json: JSON.stringify(workout), deleted_at: NOW, synced_at: NOW,
+    });
+  });
+
+  it("never deletes recovery history using its later creation time instead of the sleep window", async () => {
+    const cases = [
+      { id: "00000000-0000-4000-8000-000000000001", start: "2026-08-05T04:00:00.000Z" },
+      { id: "00000000-0000-4000-8000-000000000002", start: "2026-08-06T04:00:00.000Z" },
+      { id: "00000000-0000-4000-8000-000000000003", start: null },
+      { id: "00000000-0000-4000-8000-000000000004", start: NOW },
+    ];
+    for (const item of cases) {
+      if (item.start) insertSleep(database, item.id, item.start);
+      await repository.upsertSourceRecord("recovery", { ...RECOVERY, sleep_id: item.id,
+        created_at: "2026-08-05T13:00:00.000Z", updated_at: "2026-08-05T13:00:00.000Z" },
+        { tombstonePolicy: "reconcile", syncedAt: "2026-08-06T14:00:00.000Z" });
+    }
+    await repository.finalizeReconciliation(checkpoint({ mode: "reconcile", syncRunId: "window-test",
+      targetId: "", resource: "recovery", windowStart: "2026-08-05T12:00:00.000Z",
+      windowEnd: NOW, status: "complete", pageCount: 1, recordCount: 0 }));
+    expect(database.prepare("SELECT sleep_id, deleted_at FROM whoop_recoveries ORDER BY sleep_id").all()).toEqual([
+      { sleep_id: cases[0].id, deleted_at: null },
+      { sleep_id: cases[1].id, deleted_at: NOW },
+      { sleep_id: cases[2].id, deleted_at: null },
+      { sleep_id: cases[3].id, deleted_at: null },
+    ]);
+  });
+
   it("isolates backfill, reconciliation, and targeted recovery checkpoints", async () => {
     await repository.upsertCheckpoint(checkpoint({
       syncRunId: "initial",

@@ -62,6 +62,7 @@ export interface WhoopSyncDependencies {
 }
 
 export interface EnqueueReconciliationDependencies {
+  fullHistory?: boolean;
   repository?: ReconciliationPublisherRepository;
   now?: () => Date;
   expectedConnectionId?: string;
@@ -135,7 +136,9 @@ export async function enqueueReconciliation(
     throw new Error("WHOOP connection is not available for reconciliation");
   }
   const windowEnd = now.toISOString();
-  const windowStart = new Date(now.getTime() - RECONCILIATION_WINDOW_MILLISECONDS).toISOString();
+  const windowStart = dependencies.fullHistory
+    ? "1970-01-01T00:00:00.000Z"
+    : new Date(now.getTime() - RECONCILIATION_WINDOW_MILLISECONDS).toISOString();
   const reconcileRunId = crypto.randomUUID();
   const reconcileGeneration = dependencies.requireActiveConnection
     ? await repository.beginReconciliation(whoopUserId, connection.connectionId, windowEnd, true)
