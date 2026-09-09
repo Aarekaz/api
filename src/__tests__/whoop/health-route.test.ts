@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../../index";
 import {
   getOpenApiDocument,
@@ -7,6 +7,8 @@ import {
 import { WhoopHealthReadRepository } from "../../services/whoop/read-repository";
 import type { Env } from "../../types/env";
 import { ENV, bearerGet } from "./fixtures";
+
+afterEach(() => vi.useRealTimers());
 
 const emptyDatabase = {
   prepare: () => ({
@@ -646,6 +648,8 @@ describe("WHOOP health read routes", () => {
     });
 
     it("builds current state, bounded trends, recent workouts, and sanitized sync health", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-08-20T12:00:00.000Z"));
       insertCompleteSourceSet(database);
       insertWorkout(database);
       database.prepare(`

@@ -393,7 +393,8 @@ const sourceDefinitions: Record<WhoopResource, SourceDefinition> = {
     values: (record, syncedAt) => {
       const workout = record as unknown as Record<string, unknown>;
       const score = scoreOf(workout);
-      const zones = objectAt(score, "zone_duration");
+      // WHOOP v2 uses the plural name; retain the older payload alias.
+      const zones = objectAt(score, "zone_durations" in score ? "zone_durations" : "zone_duration");
       return [
         workout.id, workout.user_id, workout.start ?? null, workout.end ?? null, workout.timezone_offset,
         nullableNumber(workout.sport_id), workout.sport_name, workout.score_state, nullableNumber(score.strain),
@@ -414,7 +415,14 @@ const sourceDefinitions: Record<WhoopResource, SourceDefinition> = {
 
 const reconciliationDefinitions = {
   cycle: { table: "whoop_cycles", keyColumn: "cycle_id", windowColumn: "start_at", syncedColumn: "synced_at" },
-  recovery: { table: "whoop_recoveries", keyColumn: "sleep_id", windowColumn: "upstream_created_at", syncedColumn: "synced_at" },
+  recovery: {
+    table: "whoop_recoveries", keyColumn: "sleep_id", syncedColumn: "synced_at",
+    // WHOOP windows recoveries by the related sleep, not when scoring completed.
+    // Without that sleep we cannot prove an omission is a deletion.
+    windowColumn: `(SELECT sleep.start_at FROM whoop_sleeps AS sleep
+      WHERE sleep.sleep_id = whoop_recoveries.sleep_id
+        AND sleep.whoop_user_id = whoop_recoveries.whoop_user_id)`,
+  },
   sleep: { table: "whoop_sleeps", keyColumn: "sleep_id", windowColumn: "start_at", syncedColumn: "synced_at" },
   workout: { table: "whoop_workouts", keyColumn: "workout_id", windowColumn: "start_at", syncedColumn: "synced_at" },
 } as const;
@@ -1231,7 +1239,8 @@ export class WhoopRepository {
       UPDATE ${definition.table}
       SET deleted_at = ?, synced_at = ?
       WHERE whoop_user_id = ? AND deleted_at IS NULL
-        AND ${definition.windowColumn} >= ? AND ${definition.windowColumn} <= ?
+        AND julianday(${definition.windowColumn}) >= julianday(?)
+        AND julianday(${definition.windowColumn}) < julianday(?)
         AND ${definition.syncedColumn} <= ?
         AND CAST(${definition.keyColumn} AS TEXT) NOT IN (
           SELECT provider_id
