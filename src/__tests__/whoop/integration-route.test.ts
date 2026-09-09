@@ -257,6 +257,26 @@ describe("WHOOP integration management routes", () => {
     expect(client.exchangeAuthorizationCode).not.toHaveBeenCalled();
   });
 
+  it("can explicitly repair all history without changing the default sync window", async () => {
+    const { dependencies } = createDependencies({ whoopUserId: PROFILE.user_id, status: "active", credentialVersion: 1 });
+    const response = await createApp(dependencies).request("/v1/integrations/whoop/sync", {
+      ...bearerPost(), body: JSON.stringify({ full_history: true }),
+    }, ENV);
+    expect(response.status).toBe(202);
+    const messages = (ENV.WHOOP_SYNC_QUEUE.sendBatch as unknown as ReturnType<typeof vi.fn>)
+      .mock.calls[0][0].map(({ body }: { body: WhoopQueueMessage }) => body);
+    expect(messages.filter((message: WhoopQueueMessage) => message.kind === "reconcile" && message.resource === "recovery"))
+      .toEqual([expect.objectContaining({ windowStart: "1970-01-01T00:00:00.000Z", windowEnd: "2026-08-19T12:00:00.000Z" })]);
+  });
+
+  it.each(['{"full_history":"yes"}', '{"unknown":true}', '{'])
+    ("rejects malformed sync options before publishing: %s", async (body) => {
+      const { dependencies, repository } = createDependencies({ whoopUserId: PROFILE.user_id, status: "active", credentialVersion: 1 });
+      const response = await createApp(dependencies).request("/v1/integrations/whoop/sync", { ...bearerPost(), body }, ENV);
+      expect(response.status).toBe(400);
+      expect(repository.beginReconciliation).not.toHaveBeenCalled();
+    });
+
   it("revokes before clearing token fields and keeps imported source history", async () => {
     const { dependencies, repository, client } = createDependencies({ whoopUserId: PROFILE.user_id, status: "active", credentialVersion: 1 });
     const app = createApp(dependencies);
