@@ -3,7 +3,7 @@ import {
   type MusicNowResponse,
   type MusicNowTrack,
 } from "../../schemas/openapi";
-import { spotifyTrackSchema, type SpotifyCurrentlyPlaying, type SpotifyRecentlyPlayed, type SpotifyTokenResponse } from "../../schemas/spotify";
+import { spotifyEpisodeSchema, spotifyTrackSchema, type SpotifyCurrentlyPlaying, type SpotifyRecentlyPlayed, type SpotifyTokenResponse } from "../../schemas/spotify";
 import type { Env } from "../../types/env";
 import {
   SpotifyClient,
@@ -84,6 +84,7 @@ export const toMusicTrack = (
   const track = parsed.data;
   if (track.id === null || !SPOTIFY_ID_PATTERN.test(track.id)) return null;
   return {
+    kind: "track",
     title: track.name,
     artists: track.artists.map((artist) => artist.name),
     album: track.album?.name ?? null,
@@ -95,10 +96,38 @@ export const toMusicTrack = (
   };
 };
 
+/**
+ * Projects a playing podcast episode: the show stands in for the artist, and the episode's
+ * own artwork wins over the show's. Recently played never includes episodes.
+ */
+export const toMusicEpisode = (raw: unknown, progressMs: number | null): MusicNowTrack | null => {
+  const parsed = spotifyEpisodeSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const episode = parsed.data;
+  if (episode.id === null || !SPOTIFY_ID_PATTERN.test(episode.id)) return null;
+  return {
+    kind: "episode",
+    title: episode.name,
+    artists: [episode.show.name],
+    album: null,
+    image_url: smallestImage(episode.images) ?? smallestImage(episode.show.images),
+    url: `https://open.spotify.com/episode/${episode.id}`,
+    duration_ms: nonNegativeInteger(episode.duration_ms),
+    progress_ms: nonNegativeInteger(progressMs),
+    played_at: null,
+  };
+};
+
 export const readMusicNow = async (client: MusicClient, fetchedAt: Date): Promise<MusicNowResponse> => {
   const current = await client.getCurrentlyPlaying();
-  if (current && current.is_playing && current.currently_playing_type === "track") {
-    const track = toMusicTrack(current.item, { progressMs: current.progress_ms ?? null });
+  if (current && current.is_playing) {
+    const progressMs = current.progress_ms ?? null;
+    const track =
+      current.currently_playing_type === "track"
+        ? toMusicTrack(current.item, { progressMs })
+        : current.currently_playing_type === "episode"
+          ? toMusicEpisode(current.item, progressMs)
+          : null;
     if (track) return { state: "playing", track, fetched_at: fetchedAt.toISOString() };
   }
   const recent = await client.getRecentlyPlayed();
