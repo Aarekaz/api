@@ -65,6 +65,28 @@ export const PODCAST_PLAYING = {
   item: null,
 };
 
+export const EPISODE_ID = "5Xt5DXGzch68nYYamXrNxZ";
+
+export const EPISODE_PLAYING = {
+  is_playing: true,
+  progress_ms: 1000,
+  currently_playing_type: "episode",
+  item: {
+    id: EPISODE_ID,
+    type: "episode",
+    name: "Episode 412: Transit Maps",
+    duration_ms: 3600000,
+    images: [
+      { url: "https://i.scdn.co/image/ep640", width: 640, height: 640 },
+      { url: "https://i.scdn.co/image/ep64", width: 64, height: 64 },
+    ],
+    show: {
+      name: "The Commute Show",
+      images: [{ url: "https://i.scdn.co/image/show64", width: 64, height: 64 }],
+    },
+  },
+};
+
 export const RECENTLY_PLAYED = {
   items: [{ track: RECENT_TRACK, played_at: "2026-09-30T11:40:00.123Z", context: null }],
   cursors: { after: "1", before: "0" },
