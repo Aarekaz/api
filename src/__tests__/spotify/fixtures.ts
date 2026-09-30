@@ -146,7 +146,7 @@ export async function createSpotifyDatabase(): Promise<{ db: D1Database; sqlite:
   // @ts-expect-error Node test-runtime types are intentionally excluded from the Worker build.
   const { readFile } = await import("node:fs/promises");
   const sqlite = new DatabaseSync(":memory:") as SqliteDatabase;
-  sqlite.exec(await readFile("migrations/0022_spotify.sql", "utf8"));
+  sqlite.exec(await readFile("migrations/0023_spotify.sql", "utf8"));
   const db = { prepare: (sql: string) => new SqliteD1Statement(sqlite, sql) } as unknown as D1Database;
   return { db, sqlite };
 }
