@@ -6,11 +6,10 @@ import { parseJson, mapJsonField } from "../utils/json";
 import { validateBody } from "../utils/validation";
 import { normalizeProject } from "../utils/normalizers";
 import { projectSchema } from "../schemas/content";
-import { projectsResponseSchema } from "../schemas/responses";
+import { projectResponseSchema, projectsResponseSchema } from "../schemas/responses";
 import { listQuerySchema } from "../schemas/common";
 import {
   openApiRegistry,
-  genericObjectSchema,
   okCreatedSchema,
   okUpdatedSchema,
   okDeletedSchema,
@@ -33,6 +32,10 @@ import {
 
 const app = new Hono<{ Bindings: Env }>();
 
+function highlightValue(value: string | null | undefined): string | null {
+  return value ? value : null;
+}
+
 const projectPatchSchema = projectSchema.partial().refine((data) => Object.keys(data).length > 0, {
   message: "At least one field must be provided",
 });
@@ -52,7 +55,7 @@ openApiRegistry.registerPath({
   path: "/v1/projects/{id}",
   summary: "Get project",
   security: authSecurity,
-  responses: okResponses(genericObjectSchema),
+  responses: okResponses(projectResponseSchema),
 });
 
 openApiRegistry.registerPath({
@@ -153,8 +156,8 @@ app.post("/", async (c) => {
 
   const createdAt = nowIso();
   await c.env.DB.prepare(
-    `INSERT INTO projects (title, description, links_json, tags_json, status, sort_order, published, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO projects (title, description, links_json, tags_json, status, sort_order, published, featured, highlight, listings_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       validation.data.title,
@@ -164,6 +167,9 @@ app.post("/", async (c) => {
       validation.data.status ?? null,
       validation.data.sort_order ?? 0,
       validation.data.published === false ? 0 : 1,
+      validation.data.featured === true ? 1 : 0,
+      highlightValue(validation.data.highlight),
+      mapJsonField(validation.data.listings),
       createdAt,
       createdAt
     )
@@ -191,7 +197,7 @@ app.put("/:id", async (c) => {
   const updatedAt = nowIso();
   const result = await c.env.DB.prepare(
     `UPDATE projects
-     SET title = ?, description = ?, links_json = ?, tags_json = ?, status = ?, sort_order = ?, published = ?, updated_at = ?
+     SET title = ?, description = ?, links_json = ?, tags_json = ?, status = ?, sort_order = ?, published = ?, featured = ?, highlight = ?, listings_json = ?, updated_at = ?
      WHERE id = ?`
   )
     .bind(
@@ -202,6 +208,9 @@ app.put("/:id", async (c) => {
       validation.data.status ?? null,
       validation.data.sort_order ?? 0,
       validation.data.published === false ? 0 : 1,
+      validation.data.featured === true ? 1 : 0,
+      highlightValue(validation.data.highlight),
+      mapJsonField(validation.data.listings),
       updatedAt,
       id
     )
@@ -260,6 +269,18 @@ app.patch("/:id", async (c) => {
   if (Object.prototype.hasOwnProperty.call(validation.data, "published")) {
     updates.push("published = ?");
     params.push(validation.data.published === false ? 0 : 1);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "featured")) {
+    updates.push("featured = ?");
+    params.push(validation.data.featured === true ? 1 : 0);
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "highlight")) {
+    updates.push("highlight = ?");
+    params.push(highlightValue(validation.data.highlight));
+  }
+  if (Object.prototype.hasOwnProperty.call(validation.data, "listings")) {
+    updates.push("listings_json = ?");
+    params.push(mapJsonField(validation.data.listings));
   }
 
   const updatedAt = nowIso();
