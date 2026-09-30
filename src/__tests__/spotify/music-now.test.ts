@@ -12,6 +12,8 @@ import {
   KEY,
   NOW,
   PODCAST_PLAYING,
+  EPISODE_PLAYING,
+  EPISODE_ID,
   RECENTLY_PLAYED,
   RECENT_TRACK_ID,
   TRACK,
@@ -29,6 +31,7 @@ const REFRESH_TOKEN = "stored-refresh-token";
 const PLAYING_BODY = {
   state: "playing",
   track: {
+    kind: "track",
     title: "Never Gonna Give You Up",
     artists: ["Rick Astley", "Guest"],
     album: "Whenever You Need Somebody",
@@ -43,6 +46,7 @@ const PLAYING_BODY = {
 const RECENT_BODY = {
   state: "recent",
   track: {
+    kind: "track",
     title: "Recent Song",
     artists: ["Recent Artist"],
     album: "Recent Album",
@@ -139,7 +143,48 @@ describe("GET /v1/music/now", () => {
     expect(callsTo("/v1/me/player/recently-played")).toHaveLength(0);
   });
 
-  it("falls through a playing podcast to the most recent track", async () => {
+  it("shows a playing podcast episode, with the show in place of the artist", async () => {
+    await connect();
+    const { callsTo } = stubSpotifyFetch({
+      currentlyPlaying: () => jsonResponse(EPISODE_PLAYING),
+      recentlyPlayed: () => jsonResponse(RECENTLY_PLAYED),
+    });
+
+    const { body } = await getNow();
+
+    expect(body).toEqual({
+      state: "playing",
+      track: {
+        kind: "episode",
+        title: "Episode 412: Transit Maps",
+        artists: ["The Commute Show"],
+        album: null,
+        image_url: "https://i.scdn.co/image/ep64",
+        url: `https://open.spotify.com/episode/${EPISODE_ID}`,
+        duration_ms: 3600000,
+        progress_ms: 1000,
+        played_at: null,
+      },
+      fetched_at: NOW,
+    });
+    // Spotify only includes episode details when asked for them.
+    const url = new URL(callsTo("/v1/me/player/currently-playing")[0].url);
+    expect(url.searchParams.get("additional_types")).toBe("track,episode");
+    expect(callsTo("/v1/me/player/recently-played")).toHaveLength(0);
+  });
+
+  it("falls back to the show's artwork when an episode has none", async () => {
+    await connect();
+    stubSpotifyFetch({
+      currentlyPlaying: () => jsonResponse({ ...EPISODE_PLAYING, item: { ...EPISODE_PLAYING.item, images: [] } }),
+      recentlyPlayed: () => jsonResponse(RECENTLY_PLAYED),
+    });
+
+    const { body } = await getNow();
+    expect((body.track as { image_url: string | null }).image_url).toBe("https://i.scdn.co/image/show64");
+  });
+
+  it("falls through a playing podcast without episode details to the most recent track", async () => {
     await connect();
     const { callsTo } = stubSpotifyFetch({
       currentlyPlaying: () => jsonResponse(PODCAST_PLAYING),
@@ -392,7 +437,7 @@ describe("GET /v1/music/now", () => {
 
     expect(Object.keys(body)).toEqual(["state", "track", "fetched_at"]);
     expect(Object.keys(body.track as object).sort()).toEqual([
-      "album", "artists", "duration_ms", "image_url", "played_at", "progress_ms", "title", "url",
+      "album", "artists", "duration_ms", "image_url", "kind", "played_at", "progress_ms", "title", "url",
     ]);
     for (const secret of [ACCESS_TOKEN, REFRESH_TOKEN, "secret-device-name", "available_markets", "external_urls"]) {
       expect(text).not.toContain(secret);

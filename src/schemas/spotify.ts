@@ -31,11 +31,23 @@ export const spotifyTrackSchema = z.object({
   }).passthrough().nullable().optional(),
 }).passthrough();
 
+export const spotifyEpisodeSchema = z.object({
+  id: z.string().nullable(),
+  name: z.string(),
+  type: z.literal("episode").optional(),
+  duration_ms: z.number().finite().nonnegative().nullable().optional(),
+  images: z.array(spotifyImageSchema).optional(),
+  show: z.object({
+    name: z.string(),
+    images: z.array(spotifyImageSchema).optional(),
+  }).passthrough(),
+}).passthrough();
+
 export const spotifyCurrentlyPlayingSchema = z.object({
   is_playing: z.boolean(),
   progress_ms: z.number().finite().nonnegative().nullable().optional(),
   currently_playing_type: z.string(),
-  // Episodes, ads, and unknown items are not validated as tracks; the mapper ignores them.
+  // Validated per type by the mapper: tracks and episodes are shown, ads and unknown items ignored.
   item: z.unknown().nullable().optional(),
 }).passthrough();
 
@@ -48,5 +60,6 @@ export const spotifyRecentlyPlayedSchema = z.object({
 
 export type SpotifyTokenResponse = z.infer<typeof spotifyTokenResponseSchema>;
 export type SpotifyTrack = z.infer<typeof spotifyTrackSchema>;
+export type SpotifyEpisode = z.infer<typeof spotifyEpisodeSchema>;
 export type SpotifyCurrentlyPlaying = z.infer<typeof spotifyCurrentlyPlayingSchema>;
 export type SpotifyRecentlyPlayed = z.infer<typeof spotifyRecentlyPlayedSchema>;

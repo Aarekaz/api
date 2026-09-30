@@ -42,7 +42,7 @@ describe("Spotify OpenAPI contract", () => {
     const track = schema.properties!.track;
     expect(track).toMatchObject({ type: "object", nullable: true, additionalProperties: false });
     expect(track.required?.sort()).toEqual([
-      "album", "artists", "duration_ms", "image_url", "played_at", "progress_ms", "title", "url",
+      "album", "artists", "duration_ms", "image_url", "kind", "played_at", "progress_ms", "title", "url",
     ]);
     const property = (name: string) => track.properties![name];
     expect(property("title")).toMatchObject({ type: "string" });

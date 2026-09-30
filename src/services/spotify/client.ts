@@ -101,9 +101,12 @@ export class SpotifyClient {
     ]));
   }
 
-  /** Returns null when Spotify answers 204 (nothing playing / no active device). */
+  /**
+   * Returns null when Spotify answers 204 (nothing playing / no active device). Episodes
+   * come back with an item only when asked for via additional_types.
+   */
   async getCurrentlyPlaying(): Promise<SpotifyCurrentlyPlaying | null> {
-    const response = await this.request("currently playing", `${SPOTIFY_API_BASE_URL}/me/player/currently-playing`, {
+    const response = await this.request("currently playing", `${SPOTIFY_API_BASE_URL}/me/player/currently-playing?additional_types=track,episode`, {
       headers: { authorization: `Bearer ${this.accessToken}` },
     });
     if (response.status === 204) return null;

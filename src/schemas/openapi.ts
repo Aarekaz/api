@@ -373,13 +373,16 @@ export const spotifyIntegrationStatusResponseSchema = z.object({
 }).strict();
 
 export const musicNowTrackSchema = z.object({
+  kind: z.enum(["track", "episode"]).openapi({
+    description: "A song, or a podcast episode (episodes only appear while playing)",
+  }),
   title: z.string(),
-  artists: z.array(z.string()),
+  artists: z.array(z.string()).openapi({ description: "Artists, or the show name for an episode" }),
   album: z.string().nullable(),
   image_url: z.string().url().nullable().openapi({
-    description: "Smallest https album image at least 64px wide, or null",
+    description: "Smallest https album (or episode) image at least 64px wide, or null",
   }),
-  url: z.string().url().openapi({ description: "https://open.spotify.com/track/<id>" }),
+  url: z.string().url().openapi({ description: "https://open.spotify.com/track/<id> or https://open.spotify.com/episode/<id>" }),
   duration_ms: z.number().int().nonnegative().nullable(),
   progress_ms: z.number().int().nonnegative().nullable().openapi({
     description: "Playback position; non-null only when state is playing",
