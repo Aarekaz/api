@@ -1,5 +1,9 @@
 import type { JsonRecord } from "../types/common";
 import { parseStoredJson } from "./json";
+import { projectListingSchema } from "../schemas/content";
+import type { z } from "zod";
+
+type ProjectListing = z.infer<typeof projectListingSchema>;
 
 export function normalizeProfile(row: JsonRecord): JsonRecord {
   const { handles_json, contact_json, summary_json, ...rest } = row;
@@ -41,12 +45,26 @@ export function normalizeFinancePlan(row: JsonRecord): JsonRecord {
   };
 }
 
+function parseProjectListings(value: unknown): ProjectListing[] {
+  const parsed = parseStoredJson(value);
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed.flatMap((item) => {
+    const result = projectListingSchema.safeParse(item);
+    return result.success ? [result.data] : [];
+  });
+}
+
 export function normalizeProject(row: JsonRecord): JsonRecord {
-  const { links_json, tags_json, ...rest } = row;
+  const { links_json, tags_json, listings_json, featured, highlight, ...rest } = row;
   return {
     ...rest,
     links: parseStoredJson(links_json),
     tags: parseStoredJson(tags_json),
+    featured: featured == null ? false : Boolean(featured),
+    highlight: typeof highlight === "string" && highlight.length > 0 ? highlight : null,
+    listings: parseProjectListings(listings_json),
   };
 }
 

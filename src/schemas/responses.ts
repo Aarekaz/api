@@ -2,6 +2,8 @@ import { z } from "zod";
 import {
   postSchema,
   photoSchema,
+  PROJECT_LISTING_PLATFORM_PATTERN,
+  PROJECT_LISTING_STATUSES,
   projectSchema,
   SHELF_STATUSES,
   shelfItemBaseSchema,
@@ -102,6 +104,15 @@ export const profileResponseSchema = openApiRegistry.register(
   })
 );
 
+export const projectListingResponseSchema = openApiRegistry.register(
+  "ProjectListing",
+  z.object({
+    platform: z.string().regex(PROJECT_LISTING_PLATFORM_PATTERN),
+    status: z.enum(PROJECT_LISTING_STATUSES),
+    url: nullableStringSchema,
+  })
+);
+
 export const projectResponseSchema = openApiRegistry.register(
   "ProjectResponse",
   projectSchema.extend({
@@ -112,6 +123,9 @@ export const projectResponseSchema = openApiRegistry.register(
     status: nullableStringSchema,
     sort_order: nullableIntegerSchema,
     published: d1BooleanSchema,
+    featured: z.boolean(),
+    highlight: nullableStringSchema,
+    listings: z.array(projectListingResponseSchema),
     created_at: nullableStringSchema,
     updated_at: nullableStringSchema,
   })
