@@ -250,6 +250,18 @@ WHOOP is the sole ongoing wearable source. See [WHOOP_HEALTH_SOURCE.md](docs/WHO
 - `GET /v1/health/whoop/workouts` - Get WHOOP workouts
 - `GET /v1/health/whoop/workouts/{workoutId}` - Get WHOOP workout detail
 
+### Spotify Now Playing
+
+Direct Spotify integration (Authorization Code flow) for the website's now-playing widget.
+
+- `GET /v1/music/now` - Currently playing track, else the most recent one. Returns `{ state, track, fetched_at }` where `state` is `playing`, `recent`, `idle`, or `disconnected` (HTTP 200 when not connected). Results are cached in D1 for ~25 seconds; on Spotify rate limits (honoring `Retry-After`) or failures the last cached result is served (or `idle` if none). Upstream bodies and tokens are never returned.
+- `GET /v1/integrations/spotify` - Get connection status (`not_connected`, `active`, `needs_reauth`, `disconnected`)
+- `POST /v1/integrations/spotify/connect` - Create a one-use OAuth state and return the Spotify authorization URL (scopes: `user-read-currently-playing user-read-recently-played`)
+- `GET /integrations/spotify/callback` - Public OAuth callback; consumes the hashed state before exchanging the code, then redirects to `${OS_BASE_URL}/music/source?result=connected|failed`
+- `DELETE /v1/integrations/spotify` - Disconnect and delete stored tokens (Spotify has no revocation API; remove the app at spotify.com/account/apps to revoke the grant)
+
+Configuration: secrets `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`; `SPOTIFY_REDIRECT_URI` in `wrangler.toml` `[vars]` (must exactly match a Redirect URI in the Spotify developer dashboard). Tokens are stored AES-256-GCM encrypted in `spotify_connections` with the existing `WHOOP_TOKEN_ENCRYPTION_KEY` (ciphertexts are bound to the provider and token kind). Rotated refresh tokens are persisted; a revoked refresh token moves the connection to `needs_reauth`.
+
 ### Apple Health Data (Legacy History)
 
 These endpoints remain unchanged for historical Apple Health data. WHOOP replaces Apple Health only as the ongoing wearable source; this release does not delete or rewrite Apple rows.
@@ -339,11 +351,14 @@ curl -H "Authorization: Bearer $API_TOKEN" https://api.anuragd.me/health
 8) Set GitHub username/token (optional, for wrapped stats). A second username can be configured as `GITHUB_WORK_USERNAME` in `[vars]`:
    - `npx wrangler secret put GITHUB_USERNAME`
    - `npx wrangler secret put GITHUB_TOKEN`
-9) Configure R2 (optional, for photo uploads):
+9) Set Spotify client credentials (optional, for `/v1/music/now`), register `SPOTIFY_REDIRECT_URI` in the Spotify developer dashboard, apply migrations, then authorize once via `POST /v1/integrations/spotify/connect`:
+   - `npx wrangler secret put SPOTIFY_CLIENT_ID`
+   - `npx wrangler secret put SPOTIFY_CLIENT_SECRET`
+10) Configure R2 (optional, for photo uploads):
    - Create an R2 bucket (example: `personal-api-photos`).
    - Set the bucket name in `wrangler.toml` under `[[r2_buckets]]` for `R2_BUCKET`.
    - Set `R2_PUBLIC_BASE_URL` in `wrangler.toml` (or as a secret) to your public bucket URL.
-10) Deploy:
+11) Deploy:
    - `npx wrangler deploy`
 
 ### Cron (optional)
