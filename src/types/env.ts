@@ -7,6 +7,9 @@ export interface Env {
   WHOOP_TOKEN_ENCRYPTION_KEY: string;
   WHOOP_REDIRECT_URI: string;
   OS_BASE_URL: string;
+  SPOTIFY_CLIENT_ID?: string;
+  SPOTIFY_CLIENT_SECRET?: string;
+  SPOTIFY_REDIRECT_URI?: string;
   WHOOP_SYNC_QUEUE: Queue<import("./whoop").WhoopQueueMessage>;
   LANYARD_USER_ID: string;
   WAKATIME_API_KEY: string;

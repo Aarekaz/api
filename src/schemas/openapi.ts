@@ -360,6 +360,46 @@ export const whoopOverviewReadSchema = z.object({
   synchronization: whoopSynchronizationSchema,
 }).strict();
 
+export const spotifyAuthorizationUrlResponseSchema = z.object({
+  authorization_url: z.string().url(),
+});
+
+export const spotifyIntegrationStatusResponseSchema = z.object({
+  status: z.enum(["not_connected", "active", "needs_reauth", "disconnected"]),
+  granted_scopes: z.array(z.string()).optional(),
+  connected_at: dateTimeSchema.nullable().optional(),
+  refreshed_at: dateTimeSchema.nullable().optional(),
+  disconnected_at: dateTimeSchema.nullable().optional(),
+}).strict();
+
+export const musicNowTrackSchema = z.object({
+  title: z.string(),
+  artists: z.array(z.string()),
+  album: z.string().nullable(),
+  image_url: z.string().url().nullable().openapi({
+    description: "Smallest https album image at least 64px wide, or null",
+  }),
+  url: z.string().url().openapi({ description: "https://open.spotify.com/track/<id>" }),
+  duration_ms: z.number().int().nonnegative().nullable(),
+  progress_ms: z.number().int().nonnegative().nullable().openapi({
+    description: "Playback position; non-null only when state is playing",
+  }),
+  played_at: dateTimeSchema.nullable().openapi({
+    description: "When the track was played; non-null only when state is recent",
+  }),
+}).strict();
+
+export const musicNowResponseSchema = z.object({
+  state: z.enum(["playing", "recent", "idle", "disconnected"]),
+  track: musicNowTrackSchema.nullable().openapi({
+    description: "Non-null only when state is playing or recent",
+  }),
+  fetched_at: dateTimeSchema.openapi({ description: "When this result was read from Spotify" }),
+}).strict().openapi("MusicNowResponse");
+
+export type MusicNowResponse = z.infer<typeof musicNowResponseSchema>;
+export type MusicNowTrack = z.infer<typeof musicNowTrackSchema>;
+
 // OpenAPI helper functions
 export const openApiJsonContent = (schema: z.ZodTypeAny) => ({
   "application/json": { schema },

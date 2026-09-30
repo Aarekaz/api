@@ -9,6 +9,9 @@ R2_PUBLIC_BASE_URL = "https://media.anuragd.me"
 API_BASE_URL = "https://api.anuragd.me"
 GITHUB_WORK_USERNAME = "anurag-wa"
 WHOOP_REDIRECT_URI = "https://api.anuragd.me/integrations/whoop/callback"
+# Must exactly match a Redirect URI registered in the Spotify developer dashboard.
+# Secrets (never commit values): wrangler secret put SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET
+SPOTIFY_REDIRECT_URI = "https://api.anuragd.me/integrations/spotify/callback"
 OS_BASE_URL = "https://os.anuragd.me"
 
 [triggers]
