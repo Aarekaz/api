@@ -127,6 +127,9 @@ describe("website-consumed OpenAPI response contracts", () => {
         "status",
         "sort_order",
         "published",
+        "featured",
+        "highlight",
+        "listings",
         "created_at",
         "updated_at",
       ],
@@ -558,5 +561,33 @@ describe("website-consumed OpenAPI response contracts", () => {
       type: "string",
       nullable: true,
     });
+  });
+
+  it("declares project featured, highlight and listings for list and single responses", () => {
+    for (const project of [
+      itemOrObjectSchema("/v1/projects"),
+      responseSchema("/v1/projects/{id}"),
+    ]) {
+      expect(project.required).toEqual(
+        expect.arrayContaining(["featured", "highlight", "listings"])
+      );
+      expect(property(project, "featured")).toEqual({ type: "boolean" });
+      expect(property(project, "highlight")).toEqual({
+        type: "string",
+        nullable: true,
+      });
+
+      const listings = property(project, "listings");
+      expect(listings.type).toBe("array");
+      expect(listings.nullable).toBeUndefined();
+      const listing = resolveSchema(listings.items!);
+      expect(listing.required).toEqual(["platform", "status", "url"]);
+      expect(property(listing, "platform")).toMatchObject({ type: "string" });
+      expect(property(listing, "status")).toEqual({
+        type: "string",
+        enum: ["available", "in_review"],
+      });
+      expect(property(listing, "url")).toEqual({ type: "string", nullable: true });
+    }
   });
 });

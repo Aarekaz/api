@@ -1,6 +1,51 @@
 import { z } from "zod";
 import { dateString } from "./common";
 
+export const PROJECT_LISTING_STATUSES = ["available", "in_review"] as const;
+export const PROJECT_LISTING_PLATFORM_PATTERN = /^[a-z0-9-]{1,32}$/;
+export const PROJECT_LISTINGS_MAX = 12;
+export const PROJECT_HIGHLIGHT_MAX_LENGTH = 80;
+export const PROJECT_LISTING_URL_MAX_LENGTH = 500;
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+export const projectListingSchema = z.object({
+  platform: z
+    .string()
+    .regex(PROJECT_LISTING_PLATFORM_PATTERN, "Platform must be a lowercase slug (a-z, 0-9, -), 1-32 chars"),
+  status: z.enum(PROJECT_LISTING_STATUSES),
+  url: z
+    .string()
+    .max(PROJECT_LISTING_URL_MAX_LENGTH)
+    .url()
+    .refine(isHttpsUrl, { message: "URL must use https" })
+    .nullable()
+    .default(null),
+});
+
+export const projectListingsSchema = z
+  .array(projectListingSchema)
+  .max(PROJECT_LISTINGS_MAX)
+  .superRefine((listings, ctx) => {
+    const seen = new Set<string>();
+    listings.forEach((listing, index) => {
+      if (seen.has(listing.platform)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index, "platform"],
+          message: `Duplicate listing platform: ${listing.platform}`,
+        });
+      }
+      seen.add(listing.platform);
+    });
+  });
+
 export const projectSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
@@ -9,6 +54,9 @@ export const projectSchema = z.object({
   status: z.string().optional(),
   sort_order: z.number().int().optional(),
   published: z.boolean().optional(),
+  featured: z.boolean().optional(),
+  highlight: z.string().trim().max(PROJECT_HIGHLIGHT_MAX_LENGTH).nullable().optional(),
+  listings: projectListingsSchema.optional(),
 });
 
 export const noteSchema = z.object({
