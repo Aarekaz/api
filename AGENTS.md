@@ -30,6 +30,6 @@
 - If opening a PR, include: summary, endpoints touched, and any new env vars or migrations.
 
 ## Security & Configuration Tips
-- Never commit secrets; set them via `wrangler secret put` (e.g., `API_TOKEN`, `WAKATIME_API_KEY`).
+- Never commit secrets; set them via `wrangler secret put` (e.g., `API_TOKEN`, `WAKATIME_API_KEY`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`).
 - Re-run migrations after adding new `migrations/*.sql` files.
 - `/health` requires auth and returns `API_VERSION` from `wrangler.toml`.
