@@ -346,8 +346,7 @@ curl -H "Authorization: Bearer $API_TOKEN" https://api.anuragd.me/health
    - `npx wrangler secret put LANYARD_USER_ID`
 6) Set WakaTime API key (optional, for activity snapshots):
    - `npx wrangler secret put WAKATIME_API_KEY`
-7) Set WakaTime timezone (optional, for hourly data):
-   - `npx wrangler secret put WAKATIME_TIMEZONE`
+7) WakaTime timezone for hourly buckets is the `WAKATIME_TIMEZONE` var in `wrangler.toml` (an IANA name such as `America/New_York`; it isn't secret). After changing it, rebuild recent hours with `POST /v1/wakatime/hourly/refresh`.
 8) Set GitHub username/token (optional, for wrapped stats). A second username can be configured as `GITHUB_WORK_USERNAME` in `[vars]`:
    - `npx wrangler secret put GITHUB_USERNAME`
    - `npx wrangler secret put GITHUB_TOKEN`

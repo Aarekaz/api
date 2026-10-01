@@ -13,6 +13,9 @@ WHOOP_REDIRECT_URI = "https://api.anuragd.me/integrations/whoop/callback"
 # Secrets (never commit values): wrangler secret put SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET
 SPOTIFY_REDIRECT_URI = "https://api.anuragd.me/integrations/spotify/callback"
 OS_BASE_URL = "https://os.anuragd.me"
+# Timezone for WakaTime's hourly buckets. Daily totals already come from WakaTime in the
+# account's timezone; without this the hours fell back to UTC and ran four hours ahead.
+WAKATIME_TIMEZONE = "America/New_York"
 
 [triggers]
 crons = ["*/5 * * * *"]
