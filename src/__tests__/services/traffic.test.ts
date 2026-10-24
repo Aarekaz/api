@@ -1,49 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Env } from "../../types/env";
-import { buildYearTraffic, fetchSiteTraffic, fetchTransitUsage, posthogApiHost } from "../../services/traffic";
+import { buildYearTraffic, fetchSiteViews, fetchTransitUsage } from "../../services/traffic";
 
 const env = (extra: Partial<Env> = {}) => extra as Env;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
-describe("posthogApiHost", () => {
-  it("maps the ingestion host to the API host", () => {
-    expect(posthogApiHost("https://us.i.posthog.com")).toBe("https://us.posthog.com");
-    expect(posthogApiHost("https://eu.i.posthog.com")).toBe("https://eu.posthog.com");
-    expect(posthogApiHost(undefined)).toBe("https://us.posthog.com");
-  });
-});
-
-describe("fetchSiteTraffic", () => {
-  it("is skipped without keys", async () => {
-    const fetchImpl = vi.fn();
-    expect(await fetchSiteTraffic(env(), 2026, fetchImpl)).toBeNull();
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("shapes PostHog results and only counts production pageviews", async () => {
-    const queries: string[] = [];
-    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
-      const { query } = JSON.parse(String(init.body)).query;
-      queries.push(query);
-      if (query.includes("min(timestamp)")) return json({ results: [[1200, 340, 21, "2026-08-16T14:00:00Z"]] });
-      if (query.includes("toDate(timestamp)")) return json({ results: [["2026-08-16", 40, 12]] });
-      if (query.includes("$pathname")) return json({ results: [["/", 500], ["/blog/agent-harnesses-explained", 210]] });
-      if (query.includes("$referring_domain")) return json({ results: [["news.ycombinator.com", 90]] });
-      return json({ results: [[7]] });
+describe("fetchSiteViews", () => {
+  it("looks up the zone and sums daily page views", async () => {
+    let body: { variables: Record<string, string> } | null = null;
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/zones?name=anuragd.me")) return json({ result: [{ id: "zone-1" }] });
+      body = JSON.parse(String(init?.body));
+      return json({ data: { viewer: { zones: [{ httpRequests1dGroups: [
+        { dimensions: { date: "2026-06-01" }, sum: { pageViews: 120 } },
+        { dimensions: { date: "2026-06-02" }, sum: { pageViews: 80 } },
+      ] }] } } });
     });
-    const site = await fetchSiteTraffic(env({ POSTHOG_PERSONAL_API_KEY: "k", POSTHOG_PROJECT_ID: "42", POSTHOG_HOST: "https://us.i.posthog.com" }), 2026, fetchImpl as unknown as typeof fetch);
-    expect(fetchImpl.mock.calls[0][0]).toBe("https://us.posthog.com/api/projects/42/query/");
-    expect(site).toEqual({
-      since: "2026-08-16",
-      pageviews: 1200,
-      visitors: 340,
-      countries: 21,
-      daily: [{ date: "2026-08-16", pageviews: 40, visitors: 12 }],
-      top_pages: [{ path: "/", pageviews: 500 }, { path: "/blog/agent-harnesses-explained", pageviews: 210 }],
-      referrers: [{ domain: "news.ycombinator.com", visitors: 90 }],
-      resume_downloads: 7,
-    });
-    for (const q of queries) expect(q).toContain("properties.$host IN ('www.anuragd.me', 'anuragd.me')");
+    const site = await fetchSiteViews(env({ CF_ANALYTICS_API_TOKEN: "t" }), 2026, fetchImpl as unknown as typeof fetch);
+    expect(body!.variables).toEqual({ zone: "zone-1", start: "2026-01-01", end: "2026-12-31" });
+    expect(site).toEqual({ zone: "anuragd.me", page_views: 200, daily: [{ date: "2026-06-01", page_views: 120 }, { date: "2026-06-02", page_views: 80 }] });
   });
 });
 
@@ -75,12 +50,18 @@ describe("fetchTransitUsage", () => {
 });
 
 describe("buildYearTraffic", () => {
-  it("keeps one source when the other fails", async () => {
+  it("returns null usage when the query fails", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const fetchImpl = vi.fn(async (url: string) => (String(url).includes("posthog") ? json({}, 500) : json({ data: [] })));
-    const result = await buildYearTraffic(env({ POSTHOG_PERSONAL_API_KEY: "k", POSTHOG_PROJECT_ID: "1", CF_ANALYTICS_ACCOUNT_ID: "a", CF_ANALYTICS_API_TOKEN: "t" }), 2026, fetchImpl as unknown as typeof fetch);
+    const fetchImpl = vi.fn(async () => json({}, 500));
+    const result = await buildYearTraffic(env({ CF_ANALYTICS_ACCOUNT_ID: "a", CF_ANALYTICS_API_TOKEN: "t" }), 2026, fetchImpl as unknown as typeof fetch);
+    expect(result.transit).toBeNull();
     expect(result.site).toBeNull();
-    expect(result.transit).toEqual({ since: null, tool_calls: 0, daily: [], clients: [], tools: [] });
     warn.mockRestore();
+  });
+
+  it("is skipped without keys", async () => {
+    const fetchImpl = vi.fn();
+    expect((await buildYearTraffic(env(), 2026, fetchImpl as unknown as typeof fetch)).transit).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

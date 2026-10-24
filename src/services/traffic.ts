@@ -1,20 +1,9 @@
 import type { Env } from "../types/env";
 
-// Year-level traffic for the public site's year in review: anuragd.me
-// pageviews from PostHog, and Transit MCP tool calls from Cloudflare
-// Analytics Engine. Each source is optional; a missing key or a failed query
-// leaves that source null rather than failing the whole response.
-
-export interface SiteTraffic {
-  since: string | null;
-  pageviews: number;
-  visitors: number;
-  countries: number;
-  daily: Array<{ date: string; pageviews: number; visitors: number }>;
-  top_pages: Array<{ path: string; pageviews: number }>;
-  referrers: Array<{ domain: string; visitors: number }>;
-  resume_downloads: number;
-}
+// Year-level numbers for the public site's year in review, all from
+// Cloudflare with one read-only analytics token: page views for the site's
+// zone, and Transit MCP tool calls from Analytics Engine. Without the token,
+// or if a query fails, that part is null rather than an error.
 
 export interface TransitUsage {
   since: string | null;
@@ -24,14 +13,18 @@ export interface TransitUsage {
   tools: Array<{ tool: string; tool_calls: number }>;
 }
 
+export interface SiteViews {
+  zone: string;
+  page_views: number;
+  daily: Array<{ date: string; page_views: number }>;
+}
+
 export interface YearTraffic {
   year: number;
-  site: SiteTraffic | null;
+  site: SiteViews | null;
   transit: TransitUsage | null;
   generated_at: string;
 }
-
-const SITE_HOSTS = ["www.anuragd.me", "anuragd.me"];
 
 // Transit MCP's own allowlists (src/telemetry.ts in that repo). Anything else
 // stays out of the response, so no raw client string can leak through.
@@ -54,56 +47,36 @@ function yearBounds(year: number) {
   return { start: `${year}-01-01 00:00:00`, end: `${year + 1}-01-01 00:00:00` };
 }
 
-// PostHog's ingestion host (us.i.posthog.com) differs from its API host.
-export function posthogApiHost(host?: string) {
-  const url = new URL(host || "https://us.posthog.com");
-  url.hostname = url.hostname.replace(/^([a-z]+)\.i\.posthog\.com$/, "$1.posthog.com");
-  return url.origin;
-}
-
-async function hogql(env: Env, query: string, fetchImpl: Fetch): Promise<unknown[][]> {
-  const res = await fetchImpl(`${posthogApiHost(env.POSTHOG_HOST)}/api/projects/${env.POSTHOG_PROJECT_ID}/query/`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${env.POSTHOG_PERSONAL_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ query: { kind: "HogQLQuery", query } }),
-  });
-  if (!res.ok) throw new Error(`PostHog query failed: ${res.status}`);
-  const body = (await res.json()) as { results?: unknown[][] };
-  return body.results ?? [];
-}
-
 const num = (value: unknown) => (typeof value === "number" ? value : Number(value) || 0);
-const day = (value: unknown) => String(value ?? "").slice(0, 10);
 
-export async function fetchSiteTraffic(env: Env, year: number, fetchImpl: Fetch = fetch): Promise<SiteTraffic | null> {
-  if (!env.POSTHOG_PERSONAL_API_KEY || !env.POSTHOG_PROJECT_ID) return null;
-  const { start, end } = yearBounds(year);
-  const where = `timestamp >= toDateTime('${start}') AND timestamp < toDateTime('${end}') AND properties.$host IN (${SITE_HOSTS.map((h) => `'${h}'`).join(", ")})`;
-  const pageviews = `event = '$pageview' AND ${where}`;
+const CF_API = "https://api.cloudflare.com/client/v4";
 
-  const [summary, daily, pages, referrers, resume] = await Promise.all([
-    hogql(env, `SELECT count(), count(DISTINCT person_id), count(DISTINCT properties.$geoip_country_code), min(timestamp) FROM events WHERE ${pageviews}`, fetchImpl),
-    hogql(env, `SELECT toDate(timestamp) AS d, count(), count(DISTINCT person_id) FROM events WHERE ${pageviews} GROUP BY d ORDER BY d`, fetchImpl),
-    hogql(env, `SELECT properties.$pathname AS p, count() AS c FROM events WHERE ${pageviews} AND p IS NOT NULL GROUP BY p ORDER BY c DESC LIMIT 25`, fetchImpl),
-    hogql(env, `SELECT properties.$referring_domain AS r, count(DISTINCT person_id) AS v FROM events WHERE ${pageviews} AND r IS NOT NULL AND r NOT IN ('$direct', ${SITE_HOSTS.map((h) => `'${h}'`).join(", ")}) GROUP BY r ORDER BY v DESC LIMIT 8`, fetchImpl),
-    hogql(env, `SELECT count() FROM events WHERE event = 'resume_downloaded' AND ${where}`, fetchImpl),
-  ]);
+export async function fetchSiteViews(env: Env, year: number, fetchImpl: Fetch = fetch): Promise<SiteViews | null> {
+  if (!env.CF_ANALYTICS_API_TOKEN) return null;
+  const zone = env.CF_SITE_ZONE || "anuragd.me";
+  const headers = { Authorization: `Bearer ${env.CF_ANALYTICS_API_TOKEN}`, "Content-Type": "application/json" };
+  const lookup = await fetchImpl(`${CF_API}/zones?name=${encodeURIComponent(zone)}`, { headers });
+  if (!lookup.ok) throw new Error(`Zone lookup failed: ${lookup.status}`);
+  const zoneId = ((await lookup.json()) as { result?: Array<{ id: string }> }).result?.[0]?.id;
+  if (!zoneId) return null;
 
-  const [total = 0, visitors = 0, countries = 0, first = null] = summary[0] ?? [];
-  return {
-    since: first ? day(first) : null,
-    pageviews: num(total),
-    visitors: num(visitors),
-    countries: num(countries),
-    daily: daily.map(([d, views, people]) => ({ date: day(d), pageviews: num(views), visitors: num(people) })),
-    top_pages: pages.map(([path, views]) => ({ path: String(path), pageviews: num(views) })),
-    referrers: referrers.map(([domain, people]) => ({ domain: String(domain), visitors: num(people) })),
-    resume_downloads: num(resume[0]?.[0]),
-  };
+  // daily groups cover the whole zone and keep a year of history
+  const query = `query ($zone: String!, $start: Date!, $end: Date!) { viewer { zones(filter: {zoneTag: $zone}) {
+    httpRequests1dGroups(limit: 366, filter: {date_geq: $start, date_leq: $end}, orderBy: [date_ASC]) { dimensions { date } sum { pageViews } } } } }`;
+  const res = await fetchImpl(`${CF_API}/graphql`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ query, variables: { zone: zoneId, start: `${year}-01-01`, end: `${year}-12-31` } }),
+  });
+  if (!res.ok) throw new Error(`Zone analytics failed: ${res.status}`);
+  const body = (await res.json()) as { errors?: unknown[]; data?: { viewer?: { zones?: Array<{ httpRequests1dGroups?: Array<{ dimensions: { date: string }; sum: { pageViews: number } }> }> } } };
+  if (body.errors?.length) throw new Error("Zone analytics returned errors");
+  const daily = (body.data?.viewer?.zones?.[0]?.httpRequests1dGroups ?? []).map((g) => ({ date: g.dimensions.date, page_views: num(g.sum.pageViews) }));
+  return { zone, page_views: daily.reduce((s, d) => s + d.page_views, 0), daily };
 }
 
 async function analyticsSql(env: Env, sql: string, fetchImpl: Fetch): Promise<Array<Record<string, unknown>>> {
-  const res = await fetchImpl(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ANALYTICS_ACCOUNT_ID}/analytics_engine/sql`, {
+  const res = await fetchImpl(`${CF_API}/accounts/${env.CF_ANALYTICS_ACCOUNT_ID}/analytics_engine/sql`, {
     method: "POST",
     headers: { Authorization: `Bearer ${env.CF_ANALYTICS_API_TOKEN}` },
     body: sql,
@@ -153,7 +126,7 @@ export async function buildYearTraffic(env: Env, year: number, fetchImpl: Fetch 
       return null;
     });
   const [site, transit] = await Promise.all([
-    settle("site", fetchSiteTraffic(env, year, fetchImpl)),
+    settle("site", fetchSiteViews(env, year, fetchImpl)),
     settle("transit", fetchTransitUsage(env, year, fetchImpl)),
   ]);
   return { year, site, transit, generated_at: new Date().toISOString() };

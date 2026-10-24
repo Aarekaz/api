@@ -9,14 +9,9 @@ const app = new Hono<{ Bindings: Env }>();
 const yearTrafficSchema = z.object({
   year: z.number(),
   site: z.object({
-    since: dateSchema.nullable(),
-    pageviews: z.number(),
-    visitors: z.number(),
-    countries: z.number(),
-    daily: z.array(z.object({ date: dateSchema, pageviews: z.number(), visitors: z.number() })),
-    top_pages: z.array(z.object({ path: z.string(), pageviews: z.number() })),
-    referrers: z.array(z.object({ domain: z.string(), visitors: z.number() })),
-    resume_downloads: z.number(),
+    zone: z.string(),
+    page_views: z.number(),
+    daily: z.array(z.object({ date: dateSchema, page_views: z.number() })),
   }).nullable(),
   transit: z.object({
     since: dateSchema.nullable(),
@@ -31,13 +26,13 @@ const yearTrafficSchema = z.object({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/traffic/{year}",
-  summary: "Get a year of site traffic (PostHog) and Transit MCP usage (Analytics Engine)",
+  summary: "Get a year of site page views and Transit MCP usage from Cloudflare",
   security: authSecurity,
   request: { params: z.object({ year: z.string() }) },
   responses: okResponses(yearTrafficSchema),
 });
 
-// Both upstreams are slow and rate limited; an hour-old answer is plenty.
+// Analytics Engine is slow and rate limited; an hour-old answer is plenty.
 const CACHE_SECONDS = 3600;
 
 app.get("/:year", async (c) => {
