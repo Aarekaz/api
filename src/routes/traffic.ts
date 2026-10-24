@@ -47,7 +47,8 @@ app.get("/:year", async (c) => {
 
   const traffic = await buildYearTraffic(c.env, year);
   if (cache && (traffic.site || traffic.transit)) {
-    c.executionCtx.waitUntil(cache.put(cacheKey, new Response(JSON.stringify(traffic), { headers: { "Cache-Control": `max-age=${CACHE_SECONDS}` } })));
+    // the Worker entry doesn't hand routes an execution context, so no waitUntil
+    await cache.put(cacheKey, new Response(JSON.stringify(traffic), { headers: { "Cache-Control": `max-age=${CACHE_SECONDS}` } })).catch(() => {});
   }
   return c.json(traffic);
 });
