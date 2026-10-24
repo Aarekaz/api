@@ -22,4 +22,10 @@ export interface Env {
   API_VERSION: string;
   R2_PUBLIC_BASE_URL: string;
   API_BASE_URL?: string;
+  // year-in-review traffic (optional; each source is skipped without its keys)
+  POSTHOG_HOST?: string;
+  POSTHOG_PROJECT_ID?: string;
+  POSTHOG_PERSONAL_API_KEY?: string;
+  CF_ANALYTICS_ACCOUNT_ID?: string;
+  CF_ANALYTICS_API_TOKEN?: string;
 }
