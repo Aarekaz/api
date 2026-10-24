@@ -22,4 +22,8 @@ export interface Env {
   API_VERSION: string;
   R2_PUBLIC_BASE_URL: string;
   API_BASE_URL?: string;
+  // year-in-review traffic (optional; skipped without the token)
+  CF_SITE_ZONE?: string;
+  CF_ANALYTICS_ACCOUNT_ID?: string;
+  CF_ANALYTICS_API_TOKEN?: string;
 }
