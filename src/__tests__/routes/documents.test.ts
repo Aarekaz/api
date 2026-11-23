@@ -220,9 +220,11 @@ const PAGE = `<html><head><title>Ignored | Site</title>
 <meta property="og:title" content="Why Agents Need Schemas">
 <meta property="og:site_name" content="Field Notes">
 <meta name="description" content="Tools are product work &amp; deserve care.">
+<meta property="og:image" content="/img/lead.jpg">
+<link rel="icon" href="https://example.com/favicon.png">
 </head><body><nav><a>Home</a></nav><script>var x = "<p>no</p>";</script>
 <article><h1>Why Agents Need Schemas</h1><p>First <em>real</em> paragraph that is long enough to count as text.</p>
-<ul><li>One</li><li>Two</li></ul><blockquote><p>Quoted line</p></blockquote><pre><code>let a = 1 &lt; 2</code></pre></article>
+<figure><img src="/img/chart.png" alt="A chart"><figcaption>Fig 1</figcaption></figure><img src="/pixel.gif" width="1"><ul><li>One</li><li>Two</li></ul><blockquote><p>Quoted line</p></blockquote><pre><code>let a = 1 &lt; 2</code></pre></article>
 <footer><p>Copyright</p></footer></body></html>`;
 
 describe("read later", () => {
@@ -233,7 +235,9 @@ describe("read later", () => {
     expect(a.title).toBe("Why Agents Need Schemas");
     expect(a.site).toBe("Field Notes");
     expect(a.excerpt).toBe("Tools are product work & deserve care.");
-    expect(a.markdown).toBe("First real paragraph that is long enough to count as text.\n\n- One\n\n- Two\n\n> Quoted line\n\n```\nlet a = 1 < 2\n```");
+    expect(a.markdown).toBe("First real paragraph that is long enough to count as text.\n\n![A chart](https://www.example.com/img/chart.png)\n\n- One\n\n- Two\n\n> Quoted line\n\n```\nlet a = 1 < 2\n```");
+    expect(a.image).toBe("https://www.example.com/img/lead.jpg");
+    expect(a.icon).toBe("https://example.com/favicon.png");
     expect(a.markdown).not.toContain("Copyright");
   });
 

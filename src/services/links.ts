@@ -12,6 +12,35 @@ export interface Article {
   excerpt: string | null;
   markdown: string;
   words: number;
+  /** Lead image (og:image), absolute. */
+  image: string | null;
+  /** The site's icon, absolute. */
+  icon: string | null;
+}
+
+function absolute(src: string | undefined, base: string): string | null {
+  if (!src || src.startsWith("data:")) return null;
+  try {
+    const url = new URL(decodeEntities(src.trim()), base);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function attr(tag: string, name: string): string | undefined {
+  const m = tag.match(new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, "i"));
+  return m ? (m[2] ?? m[3]) : undefined;
+}
+
+/** An image as Markdown, or "" for tracking pixels and inline data. */
+function imageMarkdown(tag: string, base: string): string {
+  const src = absolute(attr(tag, "src") ?? attr(tag, "data-src") ?? attr(tag, "srcset")?.split(/[\s,]/)[0], base);
+  if (!src) return "";
+  const width = Number(attr(tag, "width") ?? "0");
+  if (width > 0 && width < 40) return "";
+  const alt = decodeEntities(attr(tag, "alt") ?? "").replace(/[\[\]]/g, "").trim();
+  return `![${alt}](${src})`;
 }
 
 const ENTITIES: Record<string, string> = {
@@ -54,7 +83,7 @@ export function extractArticle(html: string, url: string): Article {
   const site = meta.get("og:site_name") || host;
 
   let content = html.replace(/<!--[\s\S]*?-->/g, "");
-  for (const tag of ["script", "style", "noscript", "svg", "nav", "header", "footer", "aside", "form", "iframe", "button", "figure"]) {
+  for (const tag of ["script", "style", "noscript", "svg", "nav", "header", "footer", "aside", "form", "iframe", "button", "figcaption"]) {
     content = content.replace(new RegExp(`<${tag}\\b[\\s\\S]*?<\\/${tag}>`, "gi"), "");
   }
   const articles = [...content.matchAll(/<article\b[^>]*>([\s\S]*?)<\/article>/gi)].map((m) => m[1]);
@@ -63,12 +92,29 @@ export function extractArticle(html: string, url: string): Article {
     ?? content.match(/<body\b[^>]*>([\s\S]*)<\/body>/i)?.[1]
     ?? content;
 
+  // Images become their own paragraphs, so the reader can show them in place.
+  const withImages = scope.replace(/<img\b[^>]*>/gi, (tag) => {
+    const md = imageMarkdown(tag, url);
+    return md ? `<p>${md}</p>` : "";
+  });
+
   const lines: string[] = [];
-  for (const m of scope.matchAll(/<(h[1-6]|p|li|blockquote|pre)\b[^>]*>([\s\S]*?)<\/\1>/gi)) {
+  for (const m of withImages.matchAll(/<(h[1-6]|p|li|blockquote|pre)\b[^>]*>([\s\S]*?)<\/\1>/gi)) {
     const tag = m[1].toLowerCase();
     if (tag === "pre") {
       const code = decodeEntities(m[2].replace(/<[^>]+>/g, "")).trimEnd();
       if (code.trim()) lines.push("```\n" + code + "\n```");
+      continue;
+    }
+    // An image wrapped in a paragraph that already holds text splits into both.
+    const inner = m[2].replace(/<p>(!\[[^\]]*\]\([^)]+\))<\/p>/g, "\n$1\n");
+    if (inner.includes("![")) {
+      for (const part of inner.split("\n")) {
+        const image = part.match(/^!\[[^\]]*\]\([^)]+\)$/);
+        if (image) { lines.push(image[0]); continue; }
+        const piece = plain(part);
+        if (piece.length >= 2) lines.push(tag[0] === "h" ? `## ${piece}` : tag === "li" ? `- ${piece}` : tag === "blockquote" ? `> ${piece}` : piece);
+      }
       continue;
     }
     const text = plain(m[2]);
@@ -81,9 +127,14 @@ export function extractArticle(html: string, url: string): Article {
   // Drop a leading heading that only repeats the title.
   if (title && lines[0]?.replace(/^## /, "") === title) lines.shift();
   const markdown = lines.join("\n\n").slice(0, 200_000);
-  const words = markdown.split(/\s+/).filter(Boolean).length;
+  const words = markdown.replace(/!\[[^\]]*\]\([^)]+\)/g, "").split(/\s+/).filter(Boolean).length;
+  const image = absolute(meta.get("og:image") || meta.get("twitter:image"), url);
+  const iconTag = (html.match(/<link\b[^>]*rel\s*=\s*["'][^"']*(apple-touch-icon|icon)[^"']*["'][^>]*>/gi) ?? [])
+    .sort((a, b) => Number(/apple-touch-icon/i.test(b)) - Number(/apple-touch-icon/i.test(a)))[0];
+  let icon = iconTag ? absolute(attr(iconTag, "href"), url) : null;
+  if (!icon) { try { icon = new URL("/favicon.ico", url).toString(); } catch { icon = null; } }
   const excerpt = meta.get("og:description") || meta.get("description") || lines.find((l) => !l.startsWith("#") && l.length > 60)?.slice(0, 280) || null;
-  return { title, site, excerpt, markdown, words };
+  return { title, site, excerpt, markdown, words, image, icon };
 }
 
 /** http(s) only, without tracking parameters or a fragment. */
@@ -107,10 +158,15 @@ interface LinkRow extends DocumentRow {
   read_at: string | null; fetched_at: string | null; fetch_error: string | null;
 }
 
+function meta(row: { frontmatter_json: string | null }): { image?: string; icon?: string } {
+  try { return row.frontmatter_json ? JSON.parse(row.frontmatter_json) : {}; } catch { return {}; }
+}
+
 export function presentLink(row: LinkRow, includeBody = false) {
   return {
     id: row.id, title: row.title, url: row.url, site: row.site, excerpt: row.excerpt,
     reading_minutes: row.reading_minutes, read_at: row.read_at, fetched_at: row.fetched_at,
+    image_url: meta(row).image ?? null, icon_url: meta(row).icon ?? null,
     fetch_error: row.fetch_error, visibility: row.visibility, created_at: row.created_at,
     updated_at: row.updated_at, version: row.version,
     ...(includeBody ? { body: row.body } : {}),
@@ -151,8 +207,11 @@ export async function fetchArticle(env: Env, id: string, now = new Date()): Prom
     const article = extractArticle(html, response.url || link.url);
     const title = (article.title ?? link.title).slice(0, 300);
     await env.DB.batch([
-      env.DB.prepare("UPDATE documents SET title = ?, body = ?, updated_at = ?, version = version + 1 WHERE id = ?")
-        .bind(title, article.markdown, stamp, id),
+      env.DB.prepare("UPDATE documents SET title = ?, body = ?, frontmatter_json = ?, updated_at = ?, version = version + 1 WHERE id = ?")
+        .bind(title, article.markdown,
+          JSON.stringify({ ...(link.frontmatter_json ? JSON.parse(link.frontmatter_json) : {}), url: link.url,
+            ...(article.image ? { image: article.image } : {}), ...(article.icon ? { icon: article.icon } : {}) }),
+          stamp, id),
       env.DB.prepare("UPDATE links SET site = ?, excerpt = ?, reading_minutes = ?, fetched_at = ?, fetch_error = NULL WHERE document_id = ?")
         .bind(article.site, article.excerpt, Math.max(1, Math.round(article.words / 230)), stamp, id),
     ]);
