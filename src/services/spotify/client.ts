@@ -113,8 +113,8 @@ export class SpotifyClient {
     return this.parse("currently playing", spotifyCurrentlyPlayingSchema, await this.json("currently playing", response));
   }
 
-  async getRecentlyPlayed(): Promise<SpotifyRecentlyPlayed> {
-    const response = await this.request("recently played", `${SPOTIFY_API_BASE_URL}/me/player/recently-played?limit=1`, {
+  async getRecentlyPlayed(limit = 1): Promise<SpotifyRecentlyPlayed> {
+    const response = await this.request("recently played", `${SPOTIFY_API_BASE_URL}/me/player/recently-played?limit=${Math.min(Math.max(limit, 1), 50)}`, {
       headers: { authorization: `Bearer ${this.accessToken}` },
     });
     if (response.status === 204) return { items: [] };

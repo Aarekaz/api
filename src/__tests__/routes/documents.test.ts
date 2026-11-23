@@ -10,6 +10,8 @@ import syncStatusRoute from "../../routes/sync-status";
 import linksRoute from "../../routes/links";
 import highlightsRoute from "../../routes/highlights";
 import visitsRoute, { findTrips } from "../../routes/visits";
+import { createMusicRoute } from "../../routes/music";
+import { playsFrom, savePlays } from "../../services/spotify/history";
 import { extractArticle, normalizeUrl } from "../../services/links";
 import { pendingDocuments } from "../../services/backup";
 import { classify, matchPost, splitFrontmatter, stripDatePrefix, toMarkdown, ulid } from "../../services/documents-core";
@@ -24,6 +26,7 @@ function d1(): D1Database {
   db.exec(readFileSync("migrations/0027_visits.sql", "utf8"));
   db.exec(readFileSync("migrations/0028_place_names.sql", "utf8"));
   db.exec(readFileSync("migrations/0029_journeys.sql", "utf8"));
+  db.exec(readFileSync("migrations/0030_music_plays.sql", "utf8"));
   db.exec(`CREATE TABLE location_history (id INTEGER PRIMARY KEY AUTOINCREMENT, latitude REAL NOT NULL, longitude REAL NOT NULL,
     altitude REAL, accuracy REAL, speed REAL, heading REAL, recorded_at TEXT NOT NULL, address TEXT, city TEXT, state TEXT,
     country TEXT, postal_code TEXT, label TEXT, notes TEXT, source TEXT, created_at TEXT NOT NULL, updated_at TEXT);`);
@@ -442,5 +445,36 @@ describe("places map", () => {
       keys, cities: "Paris|Paris|Lyon", countries: "France" });
     const trips = findTrips([d("2024-01-01", "a|b"), d("2024-01-03", "b|c"), d("2024-02-01", "x")]);
     expect(trips.map((t) => [t.start, t.days, t.places, t.city])).toEqual([["2024-02-01", 1, 1, "Paris"], ["2024-01-01", 3, 3, "Paris"]]);
+  });
+});
+
+describe("music history", () => {
+  const recent = {
+    items: [
+      { played_at: "2026-11-23T10:00:00Z", track: { id: "t1", name: "Song A", duration_ms: 180000, artists: [{ name: "Artist" }],
+        album: { name: "LP", images: [{ url: "https://i/1.jpg" }] }, external_urls: { spotify: "https://open.spotify.com/track/t1" } } },
+      { played_at: "2026-11-23T09:00:00Z", track: { id: "t1", name: "Song A", duration_ms: 180000, artists: [{ name: "Artist" }] } },
+      { played_at: "2026-11-23T08:00:00Z", track: { id: "e1" } },
+    ],
+  };
+
+  it("keeps each play once and reports history and favourites", async () => {
+    const env = { DB: d1() } as Env;
+    const plays = playsFrom(recent);
+    expect(plays).toHaveLength(2);
+    expect(plays[0]).toMatchObject({ track: "Song A", artists: "Artist", album: "LP", image_url: "https://i/1.jpg" });
+    expect(await savePlays(env.DB, plays)).toBe(2);
+    expect(await savePlays(env.DB, plays)).toBe(0);
+    const root = new Hono<{ Bindings: Env }>();
+    root.route("/v1/music", createMusicRoute());
+    const history = await (await root.request("/v1/music/history?limit=1", {}, env)).json() as { plays: unknown[]; total: { n: number } };
+    expect(history.plays).toHaveLength(1);
+    expect(history.total.n).toBe(2);
+    vi.setSystemTime(new Date("2026-11-24T00:00:00Z"));
+    const top = await (await root.request("/v1/music/top?days=7", {}, env)).json() as { plays: number; minutes: number; tracks: Array<{ plays: number }> };
+    vi.useRealTimers();
+    expect(top.plays).toBe(2);
+    expect(top.minutes).toBe(6);
+    expect(top.tracks[0].plays).toBe(2);
   });
 });

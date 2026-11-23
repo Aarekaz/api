@@ -7,6 +7,7 @@ import { requestLogger } from "./middleware/request-logger";
 import { getOpenApiDocument } from "./schemas/openapi";
 import { getSwaggerUiHtml } from "./utils/swagger";
 import { handleScheduled } from "./scheduled";
+import { syncMusicPlays } from "./services/spotify/history";
 import { handleWhoopQueue } from "./services/whoop/sync";
 import type { WhoopQueueMessage } from "./types/whoop";
 
@@ -200,6 +201,10 @@ export default {
   async scheduled(event: ScheduledEvent, env: Env): Promise<void> {
     await handleScheduled(event, env);
     await maybeRunVaultBackup(env, new Date(event.scheduledTime));
+    // Spotify forgets after 50 plays; keep them every half hour.
+    if (new Date(event.scheduledTime).getUTCMinutes() % 30 < 5) {
+      try { await syncMusicPlays(env); } catch (error) { console.error("music history sync failed", error); }
+    }
   },
   async queue(batch: MessageBatch<WhoopQueueMessage>, env: Env): Promise<void> {
     return handleWhoopQueue(batch, env);
