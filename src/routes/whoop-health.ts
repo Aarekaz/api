@@ -193,9 +193,13 @@ export function createWhoopHealthRoute(dependencies: WhoopHealthDependencies = {
     const context = await readRepository.getReadContext();
     if (!context) return c.json({ error: "WHOOP profile not found" }, 404);
     const profile = await readRepository.getProfile(context.whoopUserId);
-    return profile
-      ? c.json(profile)
-      : c.json({ error: "WHOOP profile not found" }, 404);
+    if (!profile) return c.json({ error: "WHOOP profile not found" }, 404);
+    // Body measurements are synced with the profile; serve them alongside it.
+    const body = await c.env.DB.prepare(
+      `SELECT height_meter, weight_kilogram, max_heart_rate, synced_at
+       FROM whoop_body_measurements WHERE whoop_user_id = ? AND deleted_at IS NULL`,
+    ).bind(context.whoopUserId).first().catch(() => null);
+    return c.json({ ...profile, body_measurements: body ?? null });
   });
 
   return app;

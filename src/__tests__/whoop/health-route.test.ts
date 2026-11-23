@@ -604,6 +604,7 @@ describe("WHOOP health read routes", () => {
         created_at: "2026-08-01T00:00:00.000Z",
         updated_at: "2026-08-20T11:55:00.000Z",
         synced_at: "2026-08-20T11:56:00.000Z",
+        body_measurements: null,
       });
     });
 
