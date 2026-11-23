@@ -45,6 +45,7 @@ import whoopHealthRoute from "./routes/whoop-health";
 import spotifyIntegrationRoute from "./routes/spotify-integration";
 import musicRoute from "./routes/music";
 import vaultRoute from "./routes/vault";
+import appAuthRoute, { signOutRoute } from "./routes/app-auth";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -134,6 +135,9 @@ app.get("/docs", (c) => {
   return c.html(getSwaggerUiHtml(openapiUrl));
 });
 
+// Sign in with GitHub for the native apps (public; issues device sessions)
+app.route("/auth/app", appAuthRoute);
+
 // Health check (requires auth)
 app.use("/health", requireAuth);
 app.route("/health", healthRoute);
@@ -172,6 +176,7 @@ app.route("/v1/logs", logsRoute);
 app.route("/v1/finance", financeRoute);
 app.route("/v1/music", musicRoute);
 app.route("/v1/vault", vaultRoute);
+app.route("/v1/app/signout", signOutRoute);
 app.route("/v1/crowd", crowdRoute); // public — un-gated via AUTH_SKIP_PATHS
 
 // Export Cloudflare Worker handlers

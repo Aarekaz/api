@@ -1,5 +1,6 @@
 import { Context, Next } from "hono";
 import type { Env } from "../types/env";
+import { isValidSession } from "../services/app-auth";
 
 // Paths that use their own token validation (e.g. presigned upload), plus the
 // public crowd endpoint, which the living-world site calls anonymously.
@@ -27,7 +28,11 @@ export async function requireAuth(c: Context<{ Bindings: Env }>, next: Next) {
   }
 
   const [scheme, token] = authHeader.split(" ");
-  if (scheme !== "Bearer" || token !== env.API_TOKEN) {
+  if (scheme !== "Bearer" || !token) {
+    return c.json({ error: "Invalid token" }, 403);
+  }
+  // The owner's API token, or a device session from Sign in with GitHub in the apps.
+  if (token !== env.API_TOKEN && !(await isValidSession(env, token))) {
     return c.json({ error: "Invalid token" }, 403);
   }
 

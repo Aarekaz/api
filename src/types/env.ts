@@ -19,6 +19,11 @@ export interface Env {
   GITHUB_TOKEN: string;
   TMDB_API_KEY?: string;
   TMDB_ACCESS_TOKEN?: string;
+  // Sign in with GitHub for the native apps (a GitHub OAuth app whose callback is
+  // <API_BASE_URL>/auth/app/github/callback). Only AUTHORIZED_GITHUB_ID may sign in.
+  APP_GITHUB_CLIENT_ID?: string;
+  APP_GITHUB_CLIENT_SECRET?: string;
+  AUTHORIZED_GITHUB_ID?: string;
   // Obsidian vault repo for /v1/vault (fine-grained token: Contents read/write on that repo only)
   VAULT_GITHUB_TOKEN?: string;
   VAULT_REPO?: string;
