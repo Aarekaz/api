@@ -78,6 +78,12 @@ export function createWhoopHealthRoute(dependencies: WhoopHealthDependencies = {
     ?? new WhoopHealthReadRepository(env.DB);
 
   app.get("/overview", async (c) => {
+    // WHOOP data changes only when a sync runs, so the overview is kept at the
+    // edge for a minute. Tests (and anything without the Cache API) skip this.
+    const edge = typeof caches !== "undefined" && !dependencies.readRepository ? caches.default : null;
+    const cacheKey = new Request("https://cache.api.anuragd.me/whoop/overview");
+    const hit = await edge?.match(cacheKey).catch(() => undefined);
+    if (hit) return new Response(hit.body, hit);
     const readRepository = readRepositoryFor(c.env);
     const context = await readRepository.getReadContext();
 
@@ -92,7 +98,7 @@ export function createWhoopHealthRoute(dependencies: WhoopHealthDependencies = {
         trends_30_days: [],
       };
 
-    return c.json({
+    const body = {
       ...overview,
       synchronization: context
         ? {
@@ -105,7 +111,15 @@ export function createWhoopHealthRoute(dependencies: WhoopHealthDependencies = {
           runs: context.runs,
         }
         : { status: "not_connected" as const, progress: [], runs: [] },
-    });
+    };
+    const response = c.json(body);
+    if (edge && context) {
+      const copy = new Response(JSON.stringify(body), {
+        headers: { "Content-Type": "application/json", "Cache-Control": "max-age=60" },
+      });
+      await edge.put(cacheKey, copy).catch(() => undefined);
+    }
+    return response;
   });
 
   app.get("/workouts", async (c) => {

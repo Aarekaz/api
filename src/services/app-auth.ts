@@ -82,8 +82,26 @@ export async function createSession(env: Env, identity: { id: string; login: str
   return token;
 }
 
-export async function isValidSession(env: Env, token: string): Promise<boolean> {
+// Valid sessions are remembered for a few minutes in this isolate, so a busy
+// app doesn't pay a database lookup on every request. Signing out clears it.
+const SESSION_CACHE_MS = 5 * 60 * 1000;
+const sessionCache = new Map<string, number>();
+
+export async function isValidSession(env: Env, token: string, now = Date.now()): Promise<boolean> {
   if (!env.DB || token.length < 32) return false;
+  const cachedUntil = sessionCache.get(token);
+  if (cachedUntil && cachedUntil > now) return true;
+  const valid = await lookupSession(env, token);
+  if (valid) {
+    if (sessionCache.size > 50) sessionCache.clear();
+    sessionCache.set(token, now + SESSION_CACHE_MS);
+  } else {
+    sessionCache.delete(token);
+  }
+  return valid;
+}
+
+async function lookupSession(env: Env, token: string): Promise<boolean> {
   const row = await env.DB.prepare(
     "SELECT github_id FROM app_sessions WHERE token_hash = ? AND revoked_at IS NULL",
   ).bind(await hashOAuthState(token)).first<{ github_id: string }>();
@@ -92,6 +110,7 @@ export async function isValidSession(env: Env, token: string): Promise<boolean> 
 }
 
 export async function revokeSession(env: Env, token: string, now = new Date()): Promise<void> {
+  sessionCache.delete(token);
   await env.DB.prepare("UPDATE app_sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL")
     .bind(now.toISOString(), await hashOAuthState(token)).run();
 }
