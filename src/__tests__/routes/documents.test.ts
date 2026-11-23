@@ -9,7 +9,7 @@ import documentsRoute, { captureRoute, searchRoute } from "../../routes/document
 import syncStatusRoute from "../../routes/sync-status";
 import linksRoute from "../../routes/links";
 import highlightsRoute from "../../routes/highlights";
-import visitsRoute from "../../routes/visits";
+import visitsRoute, { findTrips } from "../../routes/visits";
 import { extractArticle, normalizeUrl } from "../../services/links";
 import { pendingDocuments } from "../../services/backup";
 import { classify, matchPost, splitFrontmatter, stripDatePrefix, toMarkdown, ulid } from "../../services/documents-core";
@@ -22,6 +22,8 @@ function d1(): D1Database {
   db.exec(readFileSync("migrations/0025_documents.sql", "utf8"));
   db.exec(readFileSync("migrations/0026_highlights.sql", "utf8"));
   db.exec(readFileSync("migrations/0027_visits.sql", "utf8"));
+  db.exec(readFileSync("migrations/0028_place_names.sql", "utf8"));
+  db.exec(readFileSync("migrations/0029_journeys.sql", "utf8"));
   db.exec(`CREATE TABLE location_history (id INTEGER PRIMARY KEY AUTOINCREMENT, latitude REAL NOT NULL, longitude REAL NOT NULL,
     altitude REAL, accuracy REAL, speed REAL, heading REAL, recorded_at TEXT NOT NULL, address TEXT, city TEXT, state TEXT,
     country TEXT, postal_code TEXT, label TEXT, notes TEXT, source TEXT, created_at TEXT NOT NULL, updated_at TEXT);`);
@@ -376,5 +378,69 @@ describe("visits", () => {
     const latest = await env.DB.prepare("SELECT label, source FROM location_history").all<{ label: string; source: string }>();
     expect(latest.results).toEqual([{ label: "Home", source: "visit" }]);
     expect((await root.request("/v1/visits", json({ visits: [] }), env)).status).toBe(400);
+  });
+});
+
+describe("places map", () => {
+  const seed = async () => {
+    const env = { DB: d1() } as Env;
+    const root = app();
+    const v = (lat: number, lng: number, at: string, mins: number, place?: string) => ({
+      latitude: lat, longitude: lng, arrived_at: at, departed_at: new Date(Date.parse(at) + mins * 60_000).toISOString(),
+      place, source: "google-timeline",
+    });
+    const visits = [
+      v(38.8977, -77.0365, "2024-05-01T12:00:00Z", 60, "Home"),
+      v(38.8978, -77.0366, "2024-05-02T12:00:00Z", 120, "Home"),
+      v(38.9100, -77.0400, "2024-05-01T15:00:00Z", 30),
+      v(37.7749, -122.4194, "2024-06-10T18:00:00Z", 90),
+      v(37.7800, -122.4100, "2024-06-11T18:00:00Z", 45),
+      v(38.8977, -77.0365, "2023-11-23T15:00:00Z", 10, "Home"),
+    ];
+    const res = await root.request("/v1/visits", json({ visits }), env);
+    expect((await res.json() as { added: number }).added).toBe(6);
+    return { env, root };
+  };
+
+  it("groups visits into places with time spent and names", async () => {
+    const { env, root } = await seed();
+    let body = await (await root.request("/v1/visits/places", {}, env)).json() as { places: Array<Record<string, unknown>> };
+    expect(body.places[0]).toMatchObject({ key: "38.898,-77.037", visits: 3, minutes: 190, name: "Home", label: "Home" });
+    await root.request("/v1/visits/names", json({ names: [{ key: "38.910,-77.040", name: "Blue Bottle", city: "Washington" }, { key: "bad" }] }), env);
+    body = await (await root.request("/v1/visits/places?year=2024", {}, env)).json() as typeof body;
+    expect(body.places.find((p) => p.key === "38.910,-77.040")).toMatchObject({ name: "Blue Bottle", city: "Washington" });
+    expect(body.places.find((p) => p.key === "38.898,-77.037")).toMatchObject({ visits: 2 });
+    const years = await (await root.request("/v1/visits/years", {}, env)).json() as { years: unknown[] };
+    expect(years.years).toEqual([{ year: "2023", visits: 1, places: 1 }, { year: "2024", visits: 5, places: 4 }]);
+    const at = await (await root.request("/v1/visits/at?key=38.898,-77.037", {}, env)).json() as { visits: unknown[] };
+    expect(at.visits).toHaveLength(3);
+  });
+
+  it("finds a day, past years on this date, and trips away from home", async () => {
+    const { env, root } = await seed();
+    await root.request("/v1/visits/journeys", json({ journeys: [
+      { started_at: "2024-05-01T13:00:00Z", ended_at: "2024-05-01T13:20:00Z", start_lat: 38.8977, start_lng: -77.0365,
+        end_lat: 38.91, end_lng: -77.04, distance_m: 1500, mode: "WALKING", source: "google-timeline", source_key: "j1" },
+      { started_at: "2024-05-01T13:00:00Z", source: "google-timeline", source_key: "j1" },
+      { started_at: "2024-05-01T14:00:00Z", mode: "path", points: [[38.9, -77.0, 0], [38.91, -77.04, 5]], source: "google-timeline", source_key: "p1" },
+    ] }), env);
+    const day = await (await root.request("/v1/visits/day?date=2024-05-01&offset=-240", {}, env)).json() as { visits: Array<{ key: string }>; journeys: Array<{ mode: string; points_json: string | null }> };
+    expect(day.visits.map((v) => v.key)).toEqual(["38.898,-77.037", "38.910,-77.040"]);
+    expect(day.journeys.map((j) => j.mode)).toEqual(["walking", "path"]);
+    expect(JSON.parse(day.journeys[1].points_json!)).toEqual([[38.9, -77, 0], [38.91, -77.04, 5]]);
+    const otd = await (await root.request("/v1/visits/on-this-day?md=11-23&offset=-300", {}, env)).json() as { visits: unknown[] };
+    expect(otd.visits).toHaveLength(1);
+    const days = await (await root.request("/v1/visits/days?year=2024&offset=-240", {}, env)).json() as { days: Array<{ day: string }> };
+    expect(days.days.map((d) => d.day)).toEqual(["2024-05-01", "2024-05-02", "2024-06-10", "2024-06-11"]);
+    const trips = await (await root.request("/v1/visits/trips?offset=-240", {}, env)).json() as { trips: Array<Record<string, unknown>> };
+    expect(trips.trips).toHaveLength(1);
+    expect(trips.trips[0]).toMatchObject({ start: "2024-06-10", end: "2024-06-11", days: 2, places: 2 });
+  });
+
+  it("splits trips by a gap of more than a day", () => {
+    const r = (lat: number, at: string) => ({ latitude: lat, longitude: 0, arrived_at: at, key: `${lat}`, city: null, country: null });
+    const rows = [r(0, "2024-01-01T00:00:00Z"), r(0, "2024-01-02T00:00:00Z"), r(0, "2024-01-03T00:00:00Z"),
+      r(5, "2024-02-01T00:00:00Z"), r(5, "2024-02-02T00:00:00Z"), r(5, "2024-03-01T00:00:00Z")];
+    expect(findTrips(rows).map((t) => t.start)).toEqual(["2024-03-01", "2024-02-01"]);
   });
 });
