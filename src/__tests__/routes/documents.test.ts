@@ -8,6 +8,7 @@ import type { Env } from "../../types/env";
 import documentsRoute, { captureRoute, searchRoute } from "../../routes/documents";
 import syncStatusRoute from "../../routes/sync-status";
 import linksRoute from "../../routes/links";
+import highlightsRoute from "../../routes/highlights";
 import { extractArticle, normalizeUrl } from "../../services/links";
 import { pendingDocuments } from "../../services/backup";
 import { classify, matchPost, splitFrontmatter, stripDatePrefix, toMarkdown, ulid } from "../../services/documents-core";
@@ -18,6 +19,7 @@ function d1(): D1Database {
   db.exec(`CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL,
     summary TEXT, content TEXT, tags_json TEXT, published_at TEXT, pinned INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT);`);
   db.exec(readFileSync("migrations/0025_documents.sql", "utf8"));
+  db.exec(readFileSync("migrations/0026_highlights.sql", "utf8"));
   const statement = (sql: string, args: unknown[] = []) => ({
     bind: (...next: unknown[]) => statement(sql, next),
     async run() {
@@ -51,6 +53,7 @@ function app() {
   root.route("/v1/capture", captureRoute);
   root.route("/v1/sync/status", syncStatusRoute);
   root.route("/v1/links", linksRoute);
+  root.route("/v1/highlights", highlightsRoute);
   return root;
 }
 
@@ -235,10 +238,16 @@ describe("read later", () => {
     expect(a.title).toBe("Why Agents Need Schemas");
     expect(a.site).toBe("Field Notes");
     expect(a.excerpt).toBe("Tools are product work & deserve care.");
-    expect(a.markdown).toBe("First real paragraph that is long enough to count as text.\n\n![A chart](https://www.example.com/img/chart.png)\n\n- One\n\n- Two\n\n> Quoted line\n\n```\nlet a = 1 < 2\n```");
+    expect(a.markdown).toBe("First *real* paragraph that is long enough to count as text.\n\n![A chart](https://www.example.com/img/chart.png)\n\n- One\n\n- Two\n\n> Quoted line\n\n```\nlet a = 1 < 2\n```");
     expect(a.image).toBe("https://www.example.com/img/lead.jpg");
     expect(a.icon).toBe("https://example.com/favicon.png");
     expect(a.markdown).not.toContain("Copyright");
+  });
+
+  it("keeps bold, italics and links in the text", () => {
+    const html = `<article><p>In his mind, <strong>there isn't much competition</strong>, as <a href="/people/aaron">Aaron Francis</a> said on <em>Mostly Technical</em>.</p></article>`;
+    expect(extractArticle(html, "https://justinjackson.ca/post").markdown)
+      .toBe("In his mind, **there isn't much competition**, as [Aaron Francis](https://justinjackson.ca/people/aaron) said on *Mostly Technical*.");
   });
 
   it("cleans URLs and refuses other schemes", () => {
@@ -254,7 +263,7 @@ describe("read later", () => {
     expect(saved.status).toBe(201);
     const link = await saved.json() as { id: string; title: string; body: string; reading_minutes: number; url: string; fetch_error: string | null };
     expect(link).toMatchObject({ title: "Why Agents Need Schemas", url: "https://example.com/post", fetch_error: null, reading_minutes: 1 });
-    expect(link.body).toContain("First real paragraph");
+    expect(link.body).toContain("First *real* paragraph");
 
     const again = await (await root.request("/v1/links", json({ url: "https://example.com/post" }), env)).json() as { id: string };
     expect(again.id).toBe(link.id);
@@ -283,5 +292,55 @@ describe("read later", () => {
     const res = await (await app().request("/v1/capture", json({ text: "https://example.com/post" }), env)).json() as { link: { title: string } };
     expect(res.link.title).toBe("Why Agents Need Schemas");
     expect(await env.DB.prepare("SELECT 1 FROM documents WHERE source = 'vault:Dump.md'").first()).toBeNull();
+  });
+});
+
+describe("highlights and link state", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("highlights a passage with a note, lists, edits and removes it", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(PAGE, { headers: { "content-type": "text/html" } })));
+    const env = { DB: d1() } as Env;
+    const root = app();
+    const link = await (await root.request("/v1/links", json({ url: "https://example.com/post" }), env)).json() as { id: string };
+
+    const created = await root.request("/v1/highlights", json({ document_id: link.id, text: "real paragraph", prefix: "First ", suffix: " that", note: "keep" }), env);
+    expect(created.status).toBe(201);
+    const h = await created.json() as { id: string; title: string; url: string; note: string };
+    expect(h).toMatchObject({ title: "Why Agents Need Schemas", url: "https://example.com/post", note: "keep" });
+
+    const edited = await (await root.request(`/v1/highlights/${h.id}`, { ...json({ note: "changed" }), method: "PATCH" }, env)).json() as { note: string };
+    expect(edited.note).toBe("changed");
+
+    const forDoc = await (await root.request(`/v1/highlights?document_id=${link.id}`, {}, env)).json() as { highlights: unknown[] };
+    expect(forDoc.highlights).toHaveLength(1);
+
+    await root.request(`/v1/highlights/${h.id}`, { method: "DELETE" }, env);
+    const after = await (await root.request("/v1/highlights", {}, env)).json() as { highlights: unknown[] };
+    expect(after.highlights).toHaveLength(0);
+
+    const missing = await root.request("/v1/highlights", json({ document_id: "nope", text: "x" }), env);
+    expect(missing.status).toBe(404);
+  });
+
+  it("stars, tags and retitles a link", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(PAGE, { headers: { "content-type": "text/html" } })));
+    const env = { DB: d1() } as Env;
+    const root = app();
+    const link = await (await root.request("/v1/links", json({ url: "https://example.com/post" }), env)).json() as { id: string };
+    const patch = (body: unknown) => root.request(`/v1/links/${link.id}`, { ...json(body), method: "PATCH" }, env);
+
+    const starred = await (await patch({ starred: true, tags: ["AI", "agents", "ai"], title: "Schemas" })).json() as { starred_at: string; tags: string[]; title: string; image_url: string };
+    expect(starred.starred_at).toBeTruthy();
+    expect(starred.tags).toEqual(["ai", "agents"]);
+    expect(starred.title).toBe("Schemas");
+    expect(starred.image_url).toBe("https://example.com/img/lead.jpg");   // frontmatter kept
+
+    const list = await (await root.request("/v1/links?state=starred", {}, env)).json() as { links: unknown[] };
+    expect(list.links).toHaveLength(1);
+
+    const unstarred = await (await patch({ starred: false })).json() as { starred_at: string | null; tags: string[] };
+    expect(unstarred).toMatchObject({ starred_at: null, tags: ["ai", "agents"] });
+    expect((await patch({ tags: "nope" })).status).toBe(400);
   });
 });

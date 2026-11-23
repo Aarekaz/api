@@ -62,6 +62,29 @@ function plain(html: string): string {
   return decodeEntities(html.replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
 }
 
+/** Text with its emphasis and links kept as Markdown: **bold**, *italic*, [text](url). */
+function inline(html: string, base: string): string {
+  const marked = html
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, __, inner) => {
+      const text = plain(inner);
+      return text ? ` **${text}** ` : "";
+    })
+    .replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, __, inner) => {
+      const text = plain(inner);
+      return text ? ` *${text}* ` : "";
+    })
+    .replace(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi, (_, attrs, inner) => {
+      const text = plain(inner);
+      const href = absolute(attr(`<a ${attrs}>`, "href"), base);
+      return text && href ? ` [${text.replace(/[\[\]]/g, "")}](${href}) ` : text;
+    });
+  return plain(marked)
+    .replace(/\s+([.,;:!?)])/g, "$1")      // no space before punctuation left by the markers
+    .replace(/([(“"])\s+/g, "$1")
+    .replace(/\*\*\s*\*\*/g, "");
+}
+
 function metaTags(html: string): Map<string, string> {
   const meta = new Map<string, string>();
   for (const tag of html.match(/<meta\s[^>]*>/gi) ?? []) {
@@ -112,12 +135,13 @@ export function extractArticle(html: string, url: string): Article {
       for (const part of inner.split("\n")) {
         const image = part.match(/^!\[[^\]]*\]\([^)]+\)$/);
         if (image) { lines.push(image[0]); continue; }
-        const piece = plain(part);
+        const piece = inline(part, url);
         if (piece.length >= 2) lines.push(tag[0] === "h" ? `## ${piece}` : tag === "li" ? `- ${piece}` : tag === "blockquote" ? `> ${piece}` : piece);
       }
       continue;
     }
-    const text = plain(m[2]);
+    // Code keeps its words as they are; everything else keeps bold, italics and links.
+    const text = inline(m[2], url);
     if (text.length < 2) continue;
     if (tag[0] === "h") lines.push(`## ${text}`);
     else if (tag === "li") lines.push(`- ${text}`);
@@ -125,7 +149,7 @@ export function extractArticle(html: string, url: string): Article {
     else lines.push(text);
   }
   // Drop a leading heading that only repeats the title.
-  if (title && lines[0]?.replace(/^## /, "") === title) lines.shift();
+  if (title && lines[0]?.replace(/^## /, "").replace(/\*/g, "") === title) lines.shift();
   const markdown = lines.join("\n\n").slice(0, 200_000);
   const words = markdown.replace(/!\[[^\]]*\]\([^)]+\)/g, "").split(/\s+/).filter(Boolean).length;
   const image = absolute(meta.get("og:image") || meta.get("twitter:image"), url);
@@ -133,7 +157,7 @@ export function extractArticle(html: string, url: string): Article {
     .sort((a, b) => Number(/apple-touch-icon/i.test(b)) - Number(/apple-touch-icon/i.test(a)))[0];
   let icon = iconTag ? absolute(attr(iconTag, "href"), url) : null;
   if (!icon) { try { icon = new URL("/favicon.ico", url).toString(); } catch { icon = null; } }
-  const excerpt = meta.get("og:description") || meta.get("description") || lines.find((l) => !l.startsWith("#") && l.length > 60)?.slice(0, 280) || null;
+  const excerpt = meta.get("og:description") || meta.get("description") || lines.find((l) => !l.startsWith("#") && !l.startsWith("![") && l.length > 60)?.replace(/\*\*?|\[|\]\([^)]*\)/g, "").slice(0, 280) || null;
   return { title, site, excerpt, markdown, words, image, icon };
 }
 
@@ -158,7 +182,7 @@ interface LinkRow extends DocumentRow {
   read_at: string | null; fetched_at: string | null; fetch_error: string | null;
 }
 
-function meta(row: { frontmatter_json: string | null }): { image?: string; icon?: string } {
+function meta(row: { frontmatter_json: string | null }): { image?: string; icon?: string; starred_at?: string; tags?: string[] } {
   try { return row.frontmatter_json ? JSON.parse(row.frontmatter_json) : {}; } catch { return {}; }
 }
 
@@ -167,6 +191,7 @@ export function presentLink(row: LinkRow, includeBody = false) {
     id: row.id, title: row.title, url: row.url, site: row.site, excerpt: row.excerpt,
     reading_minutes: row.reading_minutes, read_at: row.read_at, fetched_at: row.fetched_at,
     image_url: meta(row).image ?? null, icon_url: meta(row).icon ?? null,
+    starred_at: meta(row).starred_at ?? null, tags: meta(row).tags ?? [],
     fetch_error: row.fetch_error, visibility: row.visibility, created_at: row.created_at,
     updated_at: row.updated_at, version: row.version,
     ...(includeBody ? { body: row.body } : {}),
@@ -182,8 +207,9 @@ export async function getLink(env: Env, id: string): Promise<LinkRow> {
   return row;
 }
 
-export async function listLinks(env: Env, state: "unread" | "read" | "all" = "all", limit = 500): Promise<LinkRow[]> {
-  const filter = state === "unread" ? " AND l.read_at IS NULL" : state === "read" ? " AND l.read_at IS NOT NULL" : "";
+export async function listLinks(env: Env, state: "unread" | "read" | "starred" | "all" = "all", limit = 500): Promise<LinkRow[]> {
+  const filter = state === "unread" ? " AND l.read_at IS NULL" : state === "read" ? " AND l.read_at IS NOT NULL"
+    : state === "starred" ? " AND json_extract(d.frontmatter_json, '$.starred_at') IS NOT NULL" : "";
   const { results } = await env.DB.prepare(
     `${SELECT} WHERE d.deleted_at IS NULL${filter} ORDER BY d.created_at DESC LIMIT ?`,
   ).bind(Math.min(Math.max(limit, 1), 2000)).all<LinkRow>();
@@ -245,5 +271,32 @@ export async function markRead(env: Env, id: string, read: boolean, now = new Da
     // Bump updated_at so the apps' incremental sync sees the change.
     env.DB.prepare("UPDATE documents SET updated_at = ? WHERE id = ?").bind(stamp, id),
   ]);
+  return getLink(env, id);
+}
+
+/**
+ * Star, tag or retitle a saved link. Stars and tags live in the link's
+ * document frontmatter, so no schema change is needed.
+ */
+export async function updateLink(env: Env, id: string, input: { starred?: unknown; tags?: unknown; title?: unknown }, now = new Date()): Promise<LinkRow> {
+  const link = await getLink(env, id);
+  const fm: Record<string, unknown> = link.frontmatter_json ? JSON.parse(link.frontmatter_json) : {};
+  if (typeof input.starred === "boolean") {
+    if (input.starred) fm.starred_at = fm.starred_at ?? now.toISOString();
+    else delete fm.starred_at;
+  }
+  if (input.tags !== undefined) {
+    if (!Array.isArray(input.tags) || input.tags.some((t) => typeof t !== "string") || input.tags.length > 30) {
+      throw new DocumentError("tags must be a list of up to 30 words", 400);
+    }
+    fm.tags = [...new Set((input.tags as string[]).map((t) => t.trim().toLowerCase()).filter(Boolean))].slice(0, 30);
+  }
+  let title = link.title;
+  if (input.title !== undefined) {
+    if (typeof input.title !== "string" || !input.title.trim() || input.title.length > 300) throw new DocumentError("title must be 1 to 300 characters", 400);
+    title = input.title.trim();
+  }
+  await env.DB.prepare("UPDATE documents SET title = ?, frontmatter_json = ?, updated_at = ?, version = version + 1 WHERE id = ?")
+    .bind(title, JSON.stringify(fm), now.toISOString(), id).run();
   return getLink(env, id);
 }
