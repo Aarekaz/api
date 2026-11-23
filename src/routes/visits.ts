@@ -125,7 +125,7 @@ app.get("/at", async (c) => {
   const key = c.req.query("key") ?? "";
   if (!/^-?\d+\.\d{3},-?\d+\.\d{3}$/.test(key)) return c.json({ error: "key must look like 38.898,-77.037" }, 400);
   const { results } = await c.env.DB.prepare(
-    `SELECT * FROM visits WHERE ${KEY} = ? ORDER BY arrived_at DESC LIMIT 1000`,
+    `SELECT * FROM visits WHERE ${KEY} = ? ORDER BY arrived_at DESC LIMIT 5000`,
   ).bind(key).all();
   const name = await c.env.DB.prepare("SELECT * FROM place_names WHERE key = ?").bind(key).first();
   return c.json({ key, name, visits: results });
