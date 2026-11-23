@@ -44,6 +44,7 @@ import whoopIntegrationRoute from "./routes/whoop-integration";
 import whoopHealthRoute from "./routes/whoop-health";
 import spotifyIntegrationRoute from "./routes/spotify-integration";
 import musicRoute from "./routes/music";
+import vaultRoute from "./routes/vault";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -170,6 +171,7 @@ app.route("/v1/custom", customRoute);
 app.route("/v1/logs", logsRoute);
 app.route("/v1/finance", financeRoute);
 app.route("/v1/music", musicRoute);
+app.route("/v1/vault", vaultRoute);
 app.route("/v1/crowd", crowdRoute); // public — un-gated via AUTH_SKIP_PATHS
 
 // Export Cloudflare Worker handlers

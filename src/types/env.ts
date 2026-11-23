@@ -19,6 +19,10 @@ export interface Env {
   GITHUB_TOKEN: string;
   TMDB_API_KEY?: string;
   TMDB_ACCESS_TOKEN?: string;
+  // Obsidian vault repo for /v1/vault (fine-grained token: Contents read/write on that repo only)
+  VAULT_GITHUB_TOKEN?: string;
+  VAULT_REPO?: string;
+  VAULT_BRANCH?: string;
   API_VERSION: string;
   R2_PUBLIC_BASE_URL: string;
   API_BASE_URL?: string;

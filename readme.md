@@ -306,6 +306,21 @@ See [APPLE_HEALTH_EXPORT.md](docs/APPLE_HEALTH_EXPORT.md) for legacy Apple Healt
 - `GET /v1/wrapped/month` - Monthly wrapped stats
 - `GET /v1/wrapped/2026` - 2026 wrapped stats
 
+### Vault (`/v1/vault`)
+
+The Obsidian vault (private GitHub repo) for the native apps. Clients sync by
+comparing blob shas from `/tree` with their cache and fetching only what changed.
+
+- `GET /v1/vault/tree` → `{ tree_sha, files: [{ path, sha, size }] }` (Markdown only)
+- `POST /v1/vault/blobs` `{ shas: [...] }` (up to 100) → `{ blobs: { sha: text } }`, edge-cached per sha
+- `GET /v1/vault/file?path=Core/North%20Star.md` → `{ path, sha, content }`
+- `PUT /v1/vault/file` `{ path, content, sha | null, message? }` → `{ path, sha, commit }`; 409 if the file changed since `sha`
+- `POST /v1/vault/capture` `{ text }` → appends a bullet to the Inbox in `Dump.md`
+
+Commits are made as `anurag.os: …`. Needs the `VAULT_GITHUB_TOKEN` secret: a
+fine-grained token with **Contents: read and write** on the vault repo only.
+`VAULT_REPO` (default `Aarekaz/vault`) and `VAULT_BRANCH` (default `main`) are optional.
+
 ## Data model
 
 The API stores JSON fields as `*_json` text columns in D1.
