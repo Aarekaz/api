@@ -1,0 +1,190 @@
+import type { Env } from "../types/env";
+import { createDocument, DocumentError, type DocumentRow } from "./documents";
+
+// Read later. A saved link is a `link` document (so it syncs, searches and
+// backs up like everything else) plus a `links` row with the URL and reading
+// state. The article's readable text is fetched once and stored as the
+// document's Markdown body, so it reads offline and full-text search covers it.
+
+export interface Article {
+  title: string | null;
+  site: string | null;
+  excerpt: string | null;
+  markdown: string;
+  words: number;
+}
+
+const ENTITIES: Record<string, string> = {
+  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", rsquo: "’", lsquo: "‘",
+  rdquo: "”", ldquo: "“", mdash: "—", ndash: "–", hellip: "…", middot: "·", copy: "©",
+};
+
+export function decodeEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, code: string) => {
+    if (code[0] === "#") {
+      const n = code[1] === "x" || code[1] === "X" ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+      return Number.isFinite(n) && n > 0 && n < 0x110000 ? String.fromCodePoint(n) : match;
+    }
+    return ENTITIES[code.toLowerCase()] ?? match;
+  });
+}
+
+function plain(html: string): string {
+  return decodeEntities(html.replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+}
+
+function metaTags(html: string): Map<string, string> {
+  const meta = new Map<string, string>();
+  for (const tag of html.match(/<meta\s[^>]*>/gi) ?? []) {
+    const attrs: Record<string, string> = {};
+    for (const m of tag.matchAll(/([a-zA-Z:-]+)\s*=\s*("([^"]*)"|'([^']*)')/g)) attrs[m[1].toLowerCase()] = m[3] ?? m[4] ?? "";
+    const key = (attrs.property ?? attrs.name ?? "").toLowerCase();
+    if (key && attrs.content && !meta.has(key)) meta.set(key, decodeEntities(attrs.content).trim());
+  }
+  return meta;
+}
+
+/** The readable part of a page as Markdown: headings, paragraphs, lists, quotes, code. */
+export function extractArticle(html: string, url: string): Article {
+  const meta = metaTags(html);
+  const titleTag = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+  const title = meta.get("og:title") || meta.get("twitter:title") || (titleTag ? plain(titleTag) : "") || null;
+  let host: string | null = null;
+  try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { /* keep null */ }
+  const site = meta.get("og:site_name") || host;
+
+  let content = html.replace(/<!--[\s\S]*?-->/g, "");
+  for (const tag of ["script", "style", "noscript", "svg", "nav", "header", "footer", "aside", "form", "iframe", "button", "figure"]) {
+    content = content.replace(new RegExp(`<${tag}\\b[\\s\\S]*?<\\/${tag}>`, "gi"), "");
+  }
+  const articles = [...content.matchAll(/<article\b[^>]*>([\s\S]*?)<\/article>/gi)].map((m) => m[1]);
+  const scope = articles.sort((a, b) => b.length - a.length)[0]
+    ?? content.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)?.[1]
+    ?? content.match(/<body\b[^>]*>([\s\S]*)<\/body>/i)?.[1]
+    ?? content;
+
+  const lines: string[] = [];
+  for (const m of scope.matchAll(/<(h[1-6]|p|li|blockquote|pre)\b[^>]*>([\s\S]*?)<\/\1>/gi)) {
+    const tag = m[1].toLowerCase();
+    if (tag === "pre") {
+      const code = decodeEntities(m[2].replace(/<[^>]+>/g, "")).trimEnd();
+      if (code.trim()) lines.push("```\n" + code + "\n```");
+      continue;
+    }
+    const text = plain(m[2]);
+    if (text.length < 2) continue;
+    if (tag[0] === "h") lines.push(`## ${text}`);
+    else if (tag === "li") lines.push(`- ${text}`);
+    else if (tag === "blockquote") lines.push(`> ${text}`);
+    else lines.push(text);
+  }
+  // Drop a leading heading that only repeats the title.
+  if (title && lines[0]?.replace(/^## /, "") === title) lines.shift();
+  const markdown = lines.join("\n\n").slice(0, 200_000);
+  const words = markdown.split(/\s+/).filter(Boolean).length;
+  const excerpt = meta.get("og:description") || meta.get("description") || lines.find((l) => !l.startsWith("#") && l.length > 60)?.slice(0, 280) || null;
+  return { title, site, excerpt, markdown, words };
+}
+
+/** http(s) only, without tracking parameters or a fragment. */
+export function normalizeUrl(input: string): string {
+  let url: URL;
+  try { url = new URL(input.trim()); } catch { throw new DocumentError("That isn't a valid URL", 400); }
+  if (url.protocol !== "http:" && url.protocol !== "https:") throw new DocumentError("Only http and https links can be saved", 400);
+  url.hash = "";
+  for (const key of [...url.searchParams.keys()]) {
+    if (/^(utm_|fbclid$|gclid$|mc_|ref_src$|igshid$|si$)/i.test(key)) url.searchParams.delete(key);
+  }
+  return url.toString();
+}
+
+export function isSingleUrl(text: string): boolean {
+  return /^https?:\/\/\S+$/i.test(text.trim());
+}
+
+interface LinkRow extends DocumentRow {
+  url: string; site: string | null; excerpt: string | null; reading_minutes: number | null;
+  read_at: string | null; fetched_at: string | null; fetch_error: string | null;
+}
+
+export function presentLink(row: LinkRow, includeBody = false) {
+  return {
+    id: row.id, title: row.title, url: row.url, site: row.site, excerpt: row.excerpt,
+    reading_minutes: row.reading_minutes, read_at: row.read_at, fetched_at: row.fetched_at,
+    fetch_error: row.fetch_error, visibility: row.visibility, created_at: row.created_at,
+    updated_at: row.updated_at, version: row.version,
+    ...(includeBody ? { body: row.body } : {}),
+  };
+}
+
+const SELECT = `SELECT d.*, l.url, l.site, l.excerpt, l.reading_minutes, l.read_at, l.fetched_at, l.fetch_error
+  FROM links l JOIN documents d ON d.id = l.document_id`;
+
+export async function getLink(env: Env, id: string): Promise<LinkRow> {
+  const row = await env.DB.prepare(`${SELECT} WHERE d.id = ? AND d.deleted_at IS NULL`).bind(id).first<LinkRow>();
+  if (!row) throw new DocumentError("Link not found", 404);
+  return row;
+}
+
+export async function listLinks(env: Env, state: "unread" | "read" | "all" = "all", limit = 500): Promise<LinkRow[]> {
+  const filter = state === "unread" ? " AND l.read_at IS NULL" : state === "read" ? " AND l.read_at IS NOT NULL" : "";
+  const { results } = await env.DB.prepare(
+    `${SELECT} WHERE d.deleted_at IS NULL${filter} ORDER BY d.created_at DESC LIMIT ?`,
+  ).bind(Math.min(Math.max(limit, 1), 2000)).all<LinkRow>();
+  return results;
+}
+
+/** Fetches the page and stores its readable text. Failures are recorded, not thrown. */
+export async function fetchArticle(env: Env, id: string, now = new Date()): Promise<LinkRow> {
+  const link = await getLink(env, id);
+  const stamp = now.toISOString();
+  try {
+    const response = await fetch(link.url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; anurag-os-reader/1.0)", Accept: "text/html,application/xhtml+xml" },
+      redirect: "follow",
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`The site answered ${response.status}`);
+    const type = response.headers.get("content-type") ?? "";
+    if (!/html|xml/i.test(type)) throw new Error(`Not a web page (${type.split(";")[0] || "unknown type"})`);
+    const html = (await response.text()).slice(0, 3_000_000);
+    const article = extractArticle(html, response.url || link.url);
+    const title = (article.title ?? link.title).slice(0, 300);
+    await env.DB.batch([
+      env.DB.prepare("UPDATE documents SET title = ?, body = ?, updated_at = ?, version = version + 1 WHERE id = ?")
+        .bind(title, article.markdown, stamp, id),
+      env.DB.prepare("UPDATE links SET site = ?, excerpt = ?, reading_minutes = ?, fetched_at = ?, fetch_error = NULL WHERE document_id = ?")
+        .bind(article.site, article.excerpt, Math.max(1, Math.round(article.words / 230)), stamp, id),
+    ]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await env.DB.prepare("UPDATE links SET fetch_error = ?, fetched_at = ? WHERE document_id = ?").bind(message.slice(0, 300), stamp, id).run();
+  }
+  return getLink(env, id);
+}
+
+/** Saves a URL once. Saving it again returns the same link (and brings it back if it was deleted). */
+export async function saveLink(env: Env, rawUrl: string, now = new Date()): Promise<LinkRow> {
+  const url = normalizeUrl(rawUrl);
+  const existing = await env.DB.prepare("SELECT document_id FROM links WHERE url = ?").bind(url).first<{ document_id: string }>();
+  if (existing) {
+    await env.DB.prepare("UPDATE documents SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL")
+      .bind(now.toISOString(), existing.document_id).run();
+    return getLink(env, existing.document_id);
+  }
+  const host = new URL(url).hostname.replace(/^www\./, "");
+  const doc = await createDocument(env, { kind: "link", title: host, body: "", folder: "Links", frontmatter: { url } }, now);
+  await env.DB.prepare("INSERT INTO links (document_id, url, site) VALUES (?, ?, ?)").bind(doc.id, url, host).run();
+  return fetchArticle(env, doc.id, now);
+}
+
+export async function markRead(env: Env, id: string, read: boolean, now = new Date()): Promise<LinkRow> {
+  await getLink(env, id);
+  const stamp = now.toISOString();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE links SET read_at = ? WHERE document_id = ?").bind(read ? stamp : null, id),
+    // Bump updated_at so the apps' incremental sync sees the change.
+    env.DB.prepare("UPDATE documents SET updated_at = ? WHERE id = ?").bind(stamp, id),
+  ]);
+  return getLink(env, id);
+}

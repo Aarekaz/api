@@ -15,6 +15,7 @@ import {
   setPublished,
   type DocumentInput,
 } from "../services/documents";
+import { isSingleUrl, presentLink, saveLink } from "../services/links";
 
 // /v1/documents: everything the OS writes and keeps (Cloudflare is the source of truth).
 const app = new Hono<{ Bindings: Env }>();
@@ -128,6 +129,8 @@ captureRoute.post("/", async (c) => {
   const text = typeof body?.text === "string" ? body.text.trim() : "";
   if (!text || text.length > 4000) return c.json({ error: "text is required (up to 4000 characters)" }, 400);
   try {
+    // A bare URL is something to read later, not a line in the inbox.
+    if (isSingleUrl(text)) return c.json({ ok: true, link: presentLink(await saveLink(c.env, text)) });
     const dump = await captureToDump(c.env, text);
     return c.json({ ok: true, document: present(dump, false) });
   } catch (error) {

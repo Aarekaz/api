@@ -48,6 +48,7 @@ import vaultRoute from "./routes/vault";
 import appAuthRoute, { signOutRoute } from "./routes/app-auth";
 import documentsRoute, { searchRoute, captureRoute } from "./routes/documents";
 import syncStatusRoute from "./routes/sync-status";
+import linksRoute from "./routes/links";
 import { maybeRunVaultBackup } from "./services/backup";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -184,6 +185,7 @@ app.route("/v1/documents", documentsRoute);
 app.route("/v1/search", searchRoute);
 app.route("/v1/capture", captureRoute);
 app.route("/v1/sync/status", syncStatusRoute);
+app.route("/v1/links", linksRoute);
 app.route("/v1/crowd", crowdRoute); // public — un-gated via AUTH_SKIP_PATHS
 
 // Export Cloudflare Worker handlers

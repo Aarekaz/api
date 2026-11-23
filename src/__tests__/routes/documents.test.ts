@@ -2,11 +2,13 @@
 import { readFileSync } from "node:fs";
 // @ts-expect-error same as above (node:sqlite is Node's built-in SQLite).
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import type { Env } from "../../types/env";
 import documentsRoute, { captureRoute, searchRoute } from "../../routes/documents";
 import syncStatusRoute from "../../routes/sync-status";
+import linksRoute from "../../routes/links";
+import { extractArticle, normalizeUrl } from "../../services/links";
 import { pendingDocuments } from "../../services/backup";
 import { classify, matchPost, splitFrontmatter, stripDatePrefix, toMarkdown, ulid } from "../../services/documents-core";
 
@@ -48,6 +50,7 @@ function app() {
   root.route("/v1/search", searchRoute);
   root.route("/v1/capture", captureRoute);
   root.route("/v1/sync/status", syncStatusRoute);
+  root.route("/v1/links", linksRoute);
   return root;
 }
 
@@ -186,5 +189,71 @@ describe("vault backup", () => {
       "INSERT INTO documents (id, kind, folder, title, slug, body, visibility, created_at, updated_at, version) VALUES ('a', 'note', '', 'A', 'a', '', 'private', ?, ?, 1)",
     ).bind("2026-11-23T02:48:09.000Z", "2026-11-23T02:48:09.000Z").run();
     expect((await pendingDocuments(env, "2026-11-23T03:39:26.000Z", 10)).map((d) => d.id)).toEqual(["a"]);
+  });
+});
+
+const PAGE = `<html><head><title>Ignored | Site</title>
+<meta property="og:title" content="Why Agents Need Schemas">
+<meta property="og:site_name" content="Field Notes">
+<meta name="description" content="Tools are product work &amp; deserve care.">
+</head><body><nav><a>Home</a></nav><script>var x = "<p>no</p>";</script>
+<article><h1>Why Agents Need Schemas</h1><p>First <em>real</em> paragraph that is long enough to count as text.</p>
+<ul><li>One</li><li>Two</li></ul><blockquote><p>Quoted line</p></blockquote><pre><code>let a = 1 &lt; 2</code></pre></article>
+<footer><p>Copyright</p></footer></body></html>`;
+
+describe("read later", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("extracts the readable part of a page as Markdown", () => {
+    const a = extractArticle(PAGE, "https://www.example.com/post");
+    expect(a.title).toBe("Why Agents Need Schemas");
+    expect(a.site).toBe("Field Notes");
+    expect(a.excerpt).toBe("Tools are product work & deserve care.");
+    expect(a.markdown).toBe("First real paragraph that is long enough to count as text.\n\n- One\n\n- Two\n\n> Quoted line\n\n```\nlet a = 1 < 2\n```");
+    expect(a.markdown).not.toContain("Copyright");
+  });
+
+  it("cleans URLs and refuses other schemes", () => {
+    expect(normalizeUrl("https://a.com/x?utm_source=t&id=2#top")).toBe("https://a.com/x?id=2");
+    expect(() => normalizeUrl("javascript:alert(1)")).toThrow();
+  });
+
+  it("saves a link once, fetches its text, and tracks reading", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(PAGE, { headers: { "content-type": "text/html; charset=utf-8" } })));
+    const env = { DB: d1() } as Env;
+    const root = app();
+    const saved = await root.request("/v1/links", json({ url: "https://example.com/post?utm_medium=x" }), env);
+    expect(saved.status).toBe(201);
+    const link = await saved.json() as { id: string; title: string; body: string; reading_minutes: number; url: string; fetch_error: string | null };
+    expect(link).toMatchObject({ title: "Why Agents Need Schemas", url: "https://example.com/post", fetch_error: null, reading_minutes: 1 });
+    expect(link.body).toContain("First real paragraph");
+
+    const again = await (await root.request("/v1/links", json({ url: "https://example.com/post" }), env)).json() as { id: string };
+    expect(again.id).toBe(link.id);
+
+    await root.request(`/v1/links/${link.id}/read`, { method: "POST" }, env);
+    const unread = await (await root.request("/v1/links?state=unread", {}, env)).json() as { links: unknown[] };
+    const read = await (await root.request("/v1/links?state=read", {}, env)).json() as { links: unknown[] };
+    expect(unread.links).toHaveLength(0);
+    expect(read.links).toHaveLength(1);
+
+    const found = await (await root.request("/v1/search?q=schemas", {}, env)).json() as { results: Array<{ kind: string }> };
+    expect(found.results[0].kind).toBe("link");
+  });
+
+  it("records a failed fetch instead of failing the save", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 403 })));
+    const env = { DB: d1() } as Env;
+    const link = await (await app().request("/v1/links", json({ url: "https://paywalled.com/a" }), env)).json() as { title: string; fetch_error: string };
+    expect(link.title).toBe("paywalled.com");
+    expect(link.fetch_error).toBe("The site answered 403");
+  });
+
+  it("captures a bare URL as a link, not a Dump line", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(PAGE, { headers: { "content-type": "text/html" } })));
+    const env = { DB: d1() } as Env;
+    const res = await (await app().request("/v1/capture", json({ text: "https://example.com/post" }), env)).json() as { link: { title: string } };
+    expect(res.link.title).toBe("Why Agents Need Schemas");
+    expect(await env.DB.prepare("SELECT 1 FROM documents WHERE source = 'vault:Dump.md'").first()).toBeNull();
   });
 });
