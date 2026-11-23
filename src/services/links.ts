@@ -97,6 +97,24 @@ function metaTags(html: string): Map<string, string> {
 }
 
 /** The readable part of a page as Markdown: headings, paragraphs, lists, quotes, code. */
+/**
+ * Pages without an <article> tag bring their shop, menus and newsletter boxes along.
+ * The story runs from the first real paragraph to the last one, so cut what's outside
+ * (keeping a heading or image that leads straight into it).
+ */
+export function trimToArticle(lines: string[]) {
+  const isProse = (l: string) => !/^(## |- |> |!\[|```)/.test(l)
+    && l.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[*_`]/g, "").length >= 100;
+  const first = lines.findIndex(isProse);
+  if (first < 0) return;
+  let last = lines.length - 1;
+  while (last > first && !isProse(lines[last]) && !/^(- |> |```|!\[)/.test(lines[last])) last--;
+  let start = first;
+  while (start > 0 && start > first - 2 && /^(## |!\[)/.test(lines[start - 1])) start--;
+  lines.splice(last + 1);
+  lines.splice(0, start);
+}
+
 export function extractArticle(html: string, url: string): Article {
   const meta = metaTags(html);
   const titleTag = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
@@ -148,6 +166,7 @@ export function extractArticle(html: string, url: string): Article {
     else if (tag === "blockquote") lines.push(`> ${text}`);
     else lines.push(text);
   }
+  trimToArticle(lines);
   // Drop a leading heading that only repeats the title.
   if (title && lines[0]?.replace(/^## /, "").replace(/\*/g, "") === title) lines.shift();
   const markdown = lines.join("\n\n").slice(0, 200_000);

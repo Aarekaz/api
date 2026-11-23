@@ -12,7 +12,7 @@ import highlightsRoute from "../../routes/highlights";
 import visitsRoute, { findTrips } from "../../routes/visits";
 import { createMusicRoute } from "../../routes/music";
 import { playsFrom, savePlays } from "../../services/spotify/history";
-import { extractArticle, normalizeUrl } from "../../services/links";
+import { extractArticle, normalizeUrl, trimToArticle } from "../../services/links";
 import { pendingDocuments } from "../../services/backup";
 import { classify, matchPost, splitFrontmatter, stripDatePrefix, toMarkdown, ulid } from "../../services/documents-core";
 
@@ -476,5 +476,20 @@ describe("music history", () => {
     expect(top.plays).toBe(2);
     expect(top.minutes).toBe(6);
     expect(top.tracks[0].plays).toBe(2);
+  });
+});
+
+describe("article trimming", () => {
+  it("drops shop and newsletter lines around the story", () => {
+    const long = "This is a real paragraph of the article, long enough to count as prose and not as a button or a menu item.";
+    const lines = ["## Your Cart", "## Order the bestseller", "Subscribe", "## The idea", long, "- a point", long, "## Join 800k readers", "Click here"];
+    trimToArticle(lines);
+    expect(lines).toEqual(["## The idea", long, "- a point", long]);
+  });
+
+  it("leaves short pages alone", () => {
+    const lines = ["## Title", "Short line", "- list"];
+    trimToArticle(lines);
+    expect(lines).toEqual(["## Title", "Short line", "- list"]);
   });
 });
