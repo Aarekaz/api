@@ -38,14 +38,28 @@ async function github(env: Env, path: string, init: RequestInit = {}) {
   });
 }
 
+/**
+ * The next documents to back up, after the cursor `updated_at|id`. The id breaks
+ * ties, because many documents can share one updated_at (an import, a bulk
+ * commit) and a batch must not skip the rest of them. A cursor written before
+ * ids were added has no `|`; start over from the beginning so anything it
+ * skipped is written too.
+ */
+export async function pendingDocuments(env: Env, cursor: string | null, limit: number): Promise<DocumentRow[]> {
+  const [since, afterId] = cursor?.includes("|") ? cursor.split("|") : ["1970-01-01T00:00:00.000Z", ""];
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM documents
+      WHERE (updated_at > ? OR (updated_at = ? AND id > ?)) AND deleted_at IS NULL
+      ORDER BY updated_at ASC, id ASC LIMIT ?`,
+  ).bind(since, since, afterId, limit).all<DocumentRow>();
+  return results;
+}
+
 /** Writes all changed documents as one commit using the Git Data API. */
 export async function runVaultBackup(env: Env, now = new Date()): Promise<{ written: number }> {
   const { repo, branch } = vaultConfig(env);
   const state = await env.DB.prepare("SELECT cursor FROM job_runs WHERE job = ?").bind(JOB).first<{ cursor: string | null }>();
-  const since = state?.cursor ?? "1970-01-01T00:00:00.000Z";
-  const { results } = await env.DB.prepare(
-    "SELECT * FROM documents WHERE updated_at > ? AND deleted_at IS NULL ORDER BY updated_at ASC LIMIT ?",
-  ).bind(since, BATCH).all<DocumentRow>();
+  const results = await pendingDocuments(env, state?.cursor ?? null, BATCH);
   if (results.length === 0) {
     await recordJob(env, JOB, { ok: true }, now);
     return { written: 0 };
@@ -69,7 +83,8 @@ export async function runVaultBackup(env: Env, now = new Date()): Promise<{ writ
       method: "PATCH", body: JSON.stringify({ sha: newCommit.sha }),
     });
     if (!update.ok) throw new Error(`GitHub ref update failed: ${update.status}`);
-    await recordJob(env, JOB, { ok: true, cursor: results[results.length - 1].updated_at }, now);
+    const last = results[results.length - 1];
+    await recordJob(env, JOB, { ok: true, cursor: `${last.updated_at}|${last.id}` }, now);
     return { written: results.length };
   } catch (error) {
     await recordJob(env, JOB, { ok: false, error: error instanceof Error ? error.message : String(error) }, now);

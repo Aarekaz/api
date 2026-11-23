@@ -7,6 +7,7 @@ import { Hono } from "hono";
 import type { Env } from "../../types/env";
 import documentsRoute, { captureRoute, searchRoute } from "../../routes/documents";
 import syncStatusRoute from "../../routes/sync-status";
+import { pendingDocuments } from "../../services/backup";
 import { classify, matchPost, splitFrontmatter, stripDatePrefix, toMarkdown, ulid } from "../../services/documents-core";
 
 /** A real SQLite database behind the subset of the D1 API the code uses. */
@@ -154,5 +155,36 @@ describe("documents routes", () => {
     const res = await (await app().request("/v1/sync/status", {}, env)).json() as { sources: Array<{ id: string; status: string }> };
     expect(res.sources.map((s) => s.id)).toEqual(["documents", "whoop", "wakatime", "github", "spotify", "backup"]);
     expect(res.sources.find((s) => s.id === "backup")?.status).toBe("pending");
+  });
+});
+
+describe("vault backup", () => {
+  it("does not skip documents that share an updated_at across batches", async () => {
+    const DB = d1();
+    const env = { DB } as unknown as Env;
+    const stamp = "2026-11-23T02:48:09.000Z";
+    for (let i = 0; i < 5; i++) {
+      await DB.prepare(
+        "INSERT INTO documents (id, kind, folder, title, slug, body, visibility, created_at, updated_at, version) VALUES (?, 'note', '', ?, ?, '', 'private', ?, ?, 1)",
+      ).bind(`doc${i}`, `Note ${i}`, `note-${i}`, stamp, stamp).run();
+    }
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let round = 0; round < 5; round++) {
+      const batch = await pendingDocuments(env, cursor, 2);
+      if (batch.length === 0) break;
+      seen.push(...batch.map((d) => d.id));
+      cursor = `${batch[batch.length - 1].updated_at}|${batch[batch.length - 1].id}`;
+    }
+    expect(seen).toEqual(["doc0", "doc1", "doc2", "doc3", "doc4"]);
+  });
+
+  it("starts over from a cursor written before ids were added", async () => {
+    const DB = d1();
+    const env = { DB } as unknown as Env;
+    await DB.prepare(
+      "INSERT INTO documents (id, kind, folder, title, slug, body, visibility, created_at, updated_at, version) VALUES ('a', 'note', '', 'A', 'a', '', 'private', ?, ?, 1)",
+    ).bind("2026-11-23T02:48:09.000Z", "2026-11-23T02:48:09.000Z").run();
+    expect((await pendingDocuments(env, "2026-11-23T03:39:26.000Z", 10)).map((d) => d.id)).toEqual(["a"]);
   });
 });
