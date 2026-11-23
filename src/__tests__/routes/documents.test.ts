@@ -1,4 +1,6 @@
+// @ts-expect-error vitest runs in Node; the Worker tsconfig has no Node types.
 import { readFileSync } from "node:fs";
+// @ts-expect-error same as above (node:sqlite is Node's built-in SQLite).
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
@@ -16,11 +18,11 @@ function d1(): D1Database {
   const statement = (sql: string, args: unknown[] = []) => ({
     bind: (...next: unknown[]) => statement(sql, next),
     async run() {
-      const info = db.prepare(sql).run(...(args as never[]));
+      const info = db.prepare(sql).run(...args) as { changes: number; lastInsertRowid: number };
       return { meta: { changes: Number(info.changes), last_row_id: Number(info.lastInsertRowid) } };
     },
-    async first<T>() { return (db.prepare(sql).get(...(args as never[])) as T) ?? null; },
-    async all<T>() { return { results: db.prepare(sql).all(...(args as never[])) as T[] }; },
+    async first<T>() { return (db.prepare(sql).get(...args) as T) ?? null; },
+    async all<T>() { return { results: db.prepare(sql).all(...args) as T[] }; },
   });
   return {
     prepare: (sql: string) => statement(sql),
