@@ -46,6 +46,9 @@ import spotifyIntegrationRoute from "./routes/spotify-integration";
 import musicRoute from "./routes/music";
 import vaultRoute from "./routes/vault";
 import appAuthRoute, { signOutRoute } from "./routes/app-auth";
+import documentsRoute, { searchRoute, captureRoute } from "./routes/documents";
+import syncStatusRoute from "./routes/sync-status";
+import { maybeRunVaultBackup } from "./services/backup";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -177,6 +180,10 @@ app.route("/v1/finance", financeRoute);
 app.route("/v1/music", musicRoute);
 app.route("/v1/vault", vaultRoute);
 app.route("/v1/app/signout", signOutRoute);
+app.route("/v1/documents", documentsRoute);
+app.route("/v1/search", searchRoute);
+app.route("/v1/capture", captureRoute);
+app.route("/v1/sync/status", syncStatusRoute);
 app.route("/v1/crowd", crowdRoute); // public — un-gated via AUTH_SKIP_PATHS
 
 // Export Cloudflare Worker handlers
@@ -185,7 +192,8 @@ export default {
     return app.fetch(request, env);
   },
   async scheduled(event: ScheduledEvent, env: Env): Promise<void> {
-    return handleScheduled(event, env);
+    await handleScheduled(event, env);
+    await maybeRunVaultBackup(env, new Date(event.scheduledTime));
   },
   async queue(batch: MessageBatch<WhoopQueueMessage>, env: Env): Promise<void> {
     return handleWhoopQueue(batch, env);
