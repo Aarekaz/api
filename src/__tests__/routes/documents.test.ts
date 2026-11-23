@@ -9,6 +9,7 @@ import documentsRoute, { captureRoute, searchRoute } from "../../routes/document
 import syncStatusRoute from "../../routes/sync-status";
 import linksRoute from "../../routes/links";
 import highlightsRoute from "../../routes/highlights";
+import visitsRoute from "../../routes/visits";
 import { extractArticle, normalizeUrl } from "../../services/links";
 import { pendingDocuments } from "../../services/backup";
 import { classify, matchPost, splitFrontmatter, stripDatePrefix, toMarkdown, ulid } from "../../services/documents-core";
@@ -20,6 +21,10 @@ function d1(): D1Database {
     summary TEXT, content TEXT, tags_json TEXT, published_at TEXT, pinned INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT);`);
   db.exec(readFileSync("migrations/0025_documents.sql", "utf8"));
   db.exec(readFileSync("migrations/0026_highlights.sql", "utf8"));
+  db.exec(readFileSync("migrations/0027_visits.sql", "utf8"));
+  db.exec(`CREATE TABLE location_history (id INTEGER PRIMARY KEY AUTOINCREMENT, latitude REAL NOT NULL, longitude REAL NOT NULL,
+    altitude REAL, accuracy REAL, speed REAL, heading REAL, recorded_at TEXT NOT NULL, address TEXT, city TEXT, state TEXT,
+    country TEXT, postal_code TEXT, label TEXT, notes TEXT, source TEXT, created_at TEXT NOT NULL, updated_at TEXT);`);
   const statement = (sql: string, args: unknown[] = []) => ({
     bind: (...next: unknown[]) => statement(sql, next),
     async run() {
@@ -54,6 +59,7 @@ function app() {
   root.route("/v1/sync/status", syncStatusRoute);
   root.route("/v1/links", linksRoute);
   root.route("/v1/highlights", highlightsRoute);
+  root.route("/v1/visits", visitsRoute);
   return root;
 }
 
@@ -342,5 +348,33 @@ describe("highlights and link state", () => {
     const unstarred = await (await patch({ starred: false })).json() as { starred_at: string | null; tags: string[] };
     expect(unstarred).toMatchObject({ starred_at: null, tags: ["ai", "agents"] });
     expect((await patch({ tags: "nope" })).status).toBe(400);
+  });
+});
+
+describe("visits", () => {
+  it("stores visits once, however often they're sent, and keeps Today's place current", async () => {
+    const env = { DB: d1() } as Env;
+    const root = app();
+    const now = new Date().toISOString();
+    const batch = {
+      visits: [
+        { latitude: 38.9, longitude: -77.03, arrived_at: "2024-05-01T13:00:00Z", departed_at: "2024-05-01T15:00:00Z", place: "Blue Bottle", source: "google-timeline", source_key: "gt:2024-05-01T13:00:00Z:abc" },
+        { latitude: 38.91, longitude: -77.04, arrived_at: "2024-05-01T18:00:00Z", source: "photos" },
+        { latitude: 999, longitude: 0, arrived_at: "2024-05-01T18:00:00Z", source: "photos" },
+        { latitude: 38.92, longitude: -77.05, arrived_at: now, place: "Home", city: "Washington", source: "visit" },
+      ],
+    };
+    const first = await (await root.request("/v1/visits", json(batch), env)).json() as { received: number; valid: number; added: number };
+    expect(first).toEqual({ received: 4, valid: 3, added: 3 });
+    const again = await (await root.request("/v1/visits", json(batch), env)).json() as { added: number };
+    expect(again.added).toBe(0);
+
+    const list = await (await root.request("/v1/visits", {}, env)).json() as { visits: Array<{ place: string | null }>; sources: unknown[] };
+    expect(list.visits.map((v) => v.place)).toEqual(["Home", null, "Blue Bottle"]);
+    expect(list.sources).toHaveLength(3);
+
+    const latest = await env.DB.prepare("SELECT label, source FROM location_history").all<{ label: string; source: string }>();
+    expect(latest.results).toEqual([{ label: "Home", source: "visit" }]);
+    expect((await root.request("/v1/visits", json({ visits: [] }), env)).status).toBe(400);
   });
 });
