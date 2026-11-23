@@ -133,13 +133,37 @@ describe("documents routes", () => {
     expect(after?.published_at).toBeNull();
   });
 
-  it("captures into the Dump inbox", async () => {
+  it("captures each thought as its own note in Inbox", async () => {
     const env = { DB: d1() } as Env;
     const root = app();
     await root.request("/v1/capture", json({ text: "first idea" }), env);
-    await root.request("/v1/capture", json({ text: "second\nidea" }), env);
-    const dump = await env.DB.prepare("SELECT body FROM documents WHERE source = 'vault:Dump.md'").first<{ body: string }>();
-    expect(dump?.body).toContain("## Inbox\n\n- first idea\n- second idea");
+    await root.request("/v1/capture", json({ text: "Gym plan\nsquat 3x5\nrow 3x8" }), env);
+    const { results } = await env.DB.prepare("SELECT kind, folder, title, body FROM documents ORDER BY created_at").all<{ kind: string; folder: string; title: string; body: string }>();
+    expect(results).toEqual([
+      { kind: "note", folder: "Inbox", title: "first idea", body: "# first idea\n\n" },
+      { kind: "note", folder: "Inbox", title: "Gym plan", body: "# Gym plan\n\nsquat 3x5\nrow 3x8\n" },
+    ]);
+  });
+
+  it("changes what a page is, but never takes live writing off the site by accident", async () => {
+    const env = { DB: d1() } as Env;
+    const root = app();
+    const note = await (await root.request("/v1/documents", json({ kind: "note", title: "Idea", body: "# Idea\n\nText." }), env)).json() as { id: string };
+    const put = (body: unknown) => root.request(`/v1/documents/${note.id}`, { ...json(body), method: "PUT" }, env);
+
+    const writing = await (await put({ kind: "writing", version: 1 })).json() as { kind: string; status: string; version: number };
+    expect(writing).toMatchObject({ kind: "writing", status: "draft" });
+
+    await root.request(`/v1/documents/${note.id}/publish`, { method: "POST" }, env);
+    const refused = await put({ kind: "note", version: 3 });
+    expect(refused.status).toBe(400);
+
+    await root.request(`/v1/documents/${note.id}/unpublish`, { method: "POST" }, env);
+    const back = await (await put({ kind: "journal", version: 4 })).json() as { kind: string; status: string | null; visibility: string };
+    expect(back).toMatchObject({ kind: "journal", status: null, visibility: "locked" });
+
+    const again = await (await put({ kind: "note", version: 5 })).json() as { kind: string; visibility: string };
+    expect(again).toMatchObject({ kind: "note", visibility: "private" });
   });
 
   it("soft deletes and lists changes since a time", async () => {

@@ -8,7 +8,6 @@ import {
   slugify,
   ulid,
 } from "./documents-core";
-import { insertIntoInbox } from "./vault";
 
 export interface DocumentRow {
   id: string;
@@ -132,10 +131,24 @@ export async function saveDocument(env: Env, id: string, input: DocumentInput, n
   const title = asString(input.title, 300, "title")?.trim() || current.title;
   const body = asString(input.body, 1_000_000, "body") ?? current.body;
   const folder = asString(input.folder, 200, "folder") ?? current.folder;
+
+  // A page can change what it is: note, journal or writing. Live writing has to
+  // be unpublished first, so nothing disappears from the site by accident.
+  const kind = (input.kind ?? current.kind) as DocumentKind;
+  const pages: DocumentKind[] = ["note", "journal", "writing"];
+  if (kind !== current.kind && (!pages.includes(kind) || !pages.includes(current.kind))) {
+    throw new DocumentError("Only notes, journal entries and writing can change into each other", 400);
+  }
+  if (kind !== current.kind && current.kind === "writing" && current.status === "published") {
+    throw new DocumentError("Unpublish this piece before changing what it is", 400);
+  }
+  const status: DocumentStatus | null = kind === current.kind ? current.status : kind === "writing" ? "draft" : null;
+
   let visibility = (input.visibility ?? current.visibility) as Visibility;
   if (!VISIBILITIES.includes(visibility)) throw new DocumentError("Unknown visibility", 400);
-  if (current.kind === "journal") visibility = "locked";
-  if (current.kind === "note" && visibility === "public") visibility = "agents";
+  if (kind === "journal") visibility = "locked";
+  else if (current.kind === "journal" && visibility === "locked") visibility = "private";
+  if (kind !== "writing" && visibility === "public") visibility = "agents";
   const frontmatter = input.frontmatter && typeof input.frontmatter === "object"
     ? JSON.stringify(input.frontmatter) : current.frontmatter_json;
   const stamp = now.toISOString();
@@ -145,9 +158,9 @@ export async function saveDocument(env: Env, id: string, input: DocumentInput, n
       "INSERT OR IGNORE INTO document_versions (document_id, version, title, body, frontmatter_json, saved_at) VALUES (?, ?, ?, ?, ?, ?)",
     ).bind(id, current.version, current.title, current.body, current.frontmatter_json, current.updated_at),
     env.DB.prepare(
-      `UPDATE documents SET title = ?, body = ?, folder = ?, visibility = ?, frontmatter_json = ?, updated_at = ?, version = version + 1
+      `UPDATE documents SET kind = ?, status = ?, title = ?, body = ?, folder = ?, visibility = ?, frontmatter_json = ?, updated_at = ?, version = version + 1
        WHERE id = ? AND version = ? AND deleted_at IS NULL`,
-    ).bind(title, body, folder, visibility, frontmatter, stamp, id, expected),
+    ).bind(kind, status, title, body, folder, visibility, frontmatter, stamp, id, expected),
   ]);
   if ((update.meta?.changes ?? 0) !== 1) throw new DocumentError("This document changed since you loaded it", 409);
   const saved = await getDocument(env, id);
@@ -222,27 +235,19 @@ export async function searchDocuments(env: Env, q: string, limit = 30) {
   return results;
 }
 
-export const DUMP_SOURCE = "vault:Dump.md";
+export const INBOX_FOLDER = "Inbox";
 
-/** Capture a line into the Dump document's Inbox, creating it if needed. Retries once on a race. */
-export async function captureToDump(env: Env, text: string, now = new Date()): Promise<DocumentRow> {
-  const item = text.replace(/\s*\n\s*/g, " ").trim();
-  if (!item) throw new DocumentError("text is required", 400);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const dump = await env.DB.prepare("SELECT * FROM documents WHERE source = ? AND deleted_at IS NULL").bind(DUMP_SOURCE).first<DocumentRow>();
-    if (!dump) {
-      const stamp = now.toISOString();
-      await env.DB.prepare(
-        `INSERT INTO documents (id, kind, folder, title, slug, body, visibility, status, source, created_at, updated_at, version)
-         VALUES (?, 'note', '', 'Dump', ?, ?, 'agents', NULL, ?, ?, ?, 1)`,
-      ).bind(ulid(), await uniqueSlug(env, "dump"), insertIntoInbox("# Dump\n", item), DUMP_SOURCE, stamp, stamp).run();
-      return (await env.DB.prepare("SELECT * FROM documents WHERE source = ?").bind(DUMP_SOURCE).first<DocumentRow>())!;
-    }
-    try {
-      return await saveDocument(env, dump.id, { body: insertIntoInbox(dump.body, item), version: dump.version }, now);
-    } catch (error) {
-      if (!(error instanceof DocumentError) || error.status !== 409 || attempt === 1) throw error;
-    }
-  }
-  throw new DocumentError("Capture failed", 409);
+/**
+ * A capture becomes its own note in the Inbox section: the first line is the
+ * title, the rest is the body. Sort it, move it or turn it into writing later.
+ */
+export async function captureToInbox(env: Env, text: string, now = new Date()): Promise<DocumentRow> {
+  const trimmed = text.trim();
+  if (!trimmed) throw new DocumentError("text is required", 400);
+  const [first, ...rest] = trimmed.split("\n");
+  const line = first.replace(/^#+\s*/, "").trim();
+  const title = line.length > 80 ? line.slice(0, 77).trimEnd() + "…" : line;
+  const remainder = (line.length > 80 ? trimmed : rest.join("\n")).trim();
+  const body = `# ${title}\n\n${remainder}${remainder ? "\n" : ""}`;
+  return createDocument(env, { kind: "note", title, body, folder: INBOX_FOLDER }, now);
 }

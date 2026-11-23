@@ -4,7 +4,7 @@ import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
 import {
   DocumentError,
-  captureToDump,
+  captureToInbox,
   createDocument,
   deleteDocument,
   getDocument,
@@ -122,17 +122,17 @@ searchRoute.get("/", async (c) => {
   }
 });
 
-/** POST /v1/capture { text } → Dump inbox. */
+/** POST /v1/capture { text } → a new note in Inbox (a bare URL goes to Read later). */
 export const captureRoute = new Hono<{ Bindings: Env }>();
 captureRoute.post("/", async (c) => {
   const body = (await parseJson(c.req.raw)) as { text?: unknown } | null;
   const text = typeof body?.text === "string" ? body.text.trim() : "";
-  if (!text || text.length > 4000) return c.json({ error: "text is required (up to 4000 characters)" }, 400);
+  if (!text || text.length > 20000) return c.json({ error: "text is required (up to 20000 characters)" }, 400);
   try {
     // A bare URL is something to read later, not a line in the inbox.
     if (isSingleUrl(text)) return c.json({ ok: true, link: presentLink(await saveLink(c.env, text)) });
-    const dump = await captureToDump(c.env, text);
-    return c.json({ ok: true, document: present(dump, false) });
+    const note = await captureToInbox(c.env, text);
+    return c.json({ ok: true, document: present(note, false) });
   } catch (error) {
     return fail(c, error);
   }
