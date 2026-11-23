@@ -181,64 +181,75 @@ app.get("/day", async (c) => {
   return c.json({ date, start, end, visits: visits.results, journeys: journeys.results });
 });
 
-const toRad = (d: number) => (d * Math.PI) / 180;
-export function distanceKm(a: [number, number], b: [number, number]) {
-  const dLat = toRad(b[0] - a[0]), dLng = toRad(b[1] - a[1]);
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.sin(dLng / 2) ** 2;
-  return 12_742 * Math.asin(Math.sqrt(h));
+export interface AwayDay {
+  day: string; visits: number; lat: number; lng: number;
+  min_lat: number; max_lat: number; min_lng: number; max_lng: number;
+  keys: string | null; cities: string | null; countries: string | null;
 }
 
-interface Row { latitude: number; longitude: number; arrived_at: string; key: string; city: string | null; country: string | null }
-
-/** Group days spent far from home into trips. Home is the most-visited place of that era. */
-export function findTrips(rows: Row[], offsetMinutes = 0, awayKm = 100) {
-  if (rows.length === 0) return [];
-  // Home changes over the years (moving countries), so use the most-visited place per year.
-  const homeByYear = new Map<string, [number, number]>();
-  const byYear = new Map<string, Map<string, { n: number; at: [number, number] }>>();
-  for (const r of rows) {
-    const y = r.arrived_at.slice(0, 4);
-    const m = byYear.get(y) ?? new Map();
-    const e = m.get(r.key) ?? { n: 0, at: [r.latitude, r.longitude] as [number, number] };
-    e.n += 1; m.set(r.key, e); byYear.set(y, m);
-  }
-  for (const [y, m] of byYear) homeByYear.set(y, [...m.values()].sort((a, b) => b.n - a.n)[0].at);
-  const local = (iso: string) => new Date(Date.parse(iso) + offsetMinutes * 60_000).toISOString().slice(0, 10);
-  const away = rows.filter((r) => distanceKm(homeByYear.get(r.arrived_at.slice(0, 4))!, [r.latitude, r.longitude]) > awayKm);
-  away.sort((a, b) => a.arrived_at.localeCompare(b.arrived_at));
-  type Trip = { start: string; end: string; rows: Row[] };
+/** Days away from home (computed in SQL), joined into trips when no more than a day apart. */
+export function findTrips(days: AwayDay[]) {
+  type Trip = { start: string; end: string; days: AwayDay[] };
   const trips: Trip[] = [];
-  for (const r of away) {
-    const day = local(r.arrived_at);
+  for (const d of [...days].sort((a, b) => a.day.localeCompare(b.day))) {
     const last = trips[trips.length - 1];
-    if (last && (Date.parse(day) - Date.parse(last.end)) / 86_400_000 <= 1) { last.end = day; last.rows.push(r); }
-    else trips.push({ start: day, end: day, rows: [r] });
+    if (last && (Date.parse(d.day) - Date.parse(last.end)) / 86_400_000 <= 2) { last.end = d.day; last.days.push(d); }
+    else trips.push({ start: d.day, end: d.day, days: [d] });
   }
+  const top = (lists: Array<string | null>) => {
+    const counts = new Map<string, number>();
+    for (const list of lists) for (const x of (list ?? "").split("|")) if (x) counts.set(x, (counts.get(x) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  };
   return trips.map((t) => {
-    const lat = t.rows.reduce((s, r) => s + r.latitude, 0) / t.rows.length;
-    const lng = t.rows.reduce((s, r) => s + r.longitude, 0) / t.rows.length;
-    const cities = new Map<string, number>();
-    for (const r of t.rows) if (r.city) cities.set(r.city, (cities.get(r.city) ?? 0) + 1);
-    const city = [...cities.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-    const lats = t.rows.map((r) => r.latitude), lngs = t.rows.map((r) => r.longitude);
+    const visits = t.days.reduce((s, d) => s + d.visits, 0);
     return {
       start: t.start, end: t.end, days: Math.round((Date.parse(t.end) - Date.parse(t.start)) / 86_400_000) + 1,
-      visits: t.rows.length, places: new Set(t.rows.map((r) => r.key)).size, lat, lng, city,
-      country: t.rows.find((r) => r.country)?.country ?? null,
-      bounds: { min_lat: Math.min(...lats), max_lat: Math.max(...lats), min_lng: Math.min(...lngs), max_lng: Math.max(...lngs) },
+      visits, places: new Set(t.days.flatMap((d) => (d.keys ?? "").split("|").filter(Boolean))).size,
+      lat: t.days.reduce((s, d) => s + d.lat * d.visits, 0) / visits,
+      lng: t.days.reduce((s, d) => s + d.lng * d.visits, 0) / visits,
+      city: top(t.days.map((d) => d.cities)), country: top(t.days.map((d) => d.countries)),
+      bounds: {
+        min_lat: Math.min(...t.days.map((d) => d.min_lat)), max_lat: Math.max(...t.days.map((d) => d.max_lat)),
+        min_lng: Math.min(...t.days.map((d) => d.min_lng)), max_lng: Math.max(...t.days.map((d) => d.max_lng)),
+      },
     };
   }).reverse();
 }
 
-/** Trips: days more than 100 km from home, grouped. ?offset=-300 */
+/**
+ * Trips: days spent roughly 100 km or more from home, grouped. Home is the busiest place over a
+ * three-month window, so moving cities doesn't turn your new life into one long trip.
+ * All the heavy lifting is SQL; the Worker only joins the few hundred away-days. ?offset=-300
+ */
 app.get("/trips", async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT v.latitude, v.longitude, v.arrived_at, ${KEY.replace(/latitude|longitude/g, (m) => "v." + m)} AS key,
-       COALESCE(n.city, v.city) AS city, COALESCE(n.country, v.country) AS country
-     FROM visits AS v LEFT JOIN place_names AS n ON n.key = ${KEY.replace(/latitude|longitude/g, (m) => "v." + m)}`,
-  ).all();
+  const keyV = KEY.replace(/latitude|longitude/g, (m) => "v." + m);
+  const { results } = await c.env.DB.prepare(`
+    WITH v AS (
+      SELECT v.latitude AS lat, v.longitude AS lng, ${keyV} AS key, substr(v.arrived_at, 1, 7) AS mo,
+        strftime('%Y-%m-%d', v.arrived_at, ?1) AS day, COALESCE(n.city, v.city) AS city, COALESCE(n.country, v.country) AS country
+      FROM visits AS v LEFT JOIN place_names AS n ON n.key = ${keyV}),
+    mk AS (SELECT mo, key, COUNT(*) AS n, AVG(lat) AS lat, AVG(lng) AS lng FROM v GROUP BY mo, key),
+    months AS (SELECT DISTINCT mo FROM v),
+    win AS (
+      SELECT m.mo, k.key, SUM(k.n) AS n, AVG(k.lat) AS lat, AVG(k.lng) AS lng
+      FROM months AS m JOIN mk AS k
+        ON k.mo BETWEEN substr(date(m.mo || '-01', '-1 month'), 1, 7) AND substr(date(m.mo || '-01', '+1 month'), 1, 7)
+      GROUP BY m.mo, k.key),
+    ranked AS (SELECT mo, lat, lng, ROW_NUMBER() OVER (PARTITION BY mo ORDER BY n DESC) AS r FROM win),
+    home AS (SELECT mo, lat, lng FROM ranked WHERE r = 1)
+    SELECT v.day, COUNT(*) AS visits, AVG(v.lat) AS lat, AVG(v.lng) AS lng,
+      MIN(v.lat) AS min_lat, MAX(v.lat) AS max_lat, MIN(v.lng) AS min_lng, MAX(v.lng) AS max_lng,
+      group_concat(DISTINCT v.key) AS keys_csv, group_concat(v.city, '|') AS cities, group_concat(v.country, '|') AS countries
+    FROM v JOIN home AS h ON h.mo = v.mo
+    WHERE abs(v.lat - h.lat) > 0.9 OR abs(v.lng - h.lng) > 1.1
+    GROUP BY v.day`).bind(modifier(offsetOf(c.req.query("offset")))).all();
+  // Keys contain commas themselves, so pick them out by shape.
+  const days = (results as unknown as Array<AwayDay & { keys_csv: string | null }>).map((d) => ({
+    ...d, keys: ((d.keys_csv ?? "").match(/-?\d+\.\d{3},-?\d+\.\d{3}/g) ?? []).join("|"),
+  }));
   cached(c, 600);
-  return c.json({ trips: findTrips(results as unknown as Row[], offsetOf(c.req.query("offset"))) });
+  return c.json({ trips: findTrips(days) });
 });
 
 /** POST { names: [{ key, name, city, country }] }: names looked up on a device. */

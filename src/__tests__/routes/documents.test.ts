@@ -437,10 +437,10 @@ describe("places map", () => {
     expect(trips.trips[0]).toMatchObject({ start: "2024-06-10", end: "2024-06-11", days: 2, places: 2 });
   });
 
-  it("splits trips by a gap of more than a day", () => {
-    const r = (lat: number, at: string) => ({ latitude: lat, longitude: 0, arrived_at: at, key: `${lat}`, city: null, country: null });
-    const rows = [r(0, "2024-01-01T00:00:00Z"), r(0, "2024-01-02T00:00:00Z"), r(0, "2024-01-03T00:00:00Z"),
-      r(5, "2024-02-01T00:00:00Z"), r(5, "2024-02-02T00:00:00Z"), r(5, "2024-03-01T00:00:00Z")];
-    expect(findTrips(rows).map((t) => t.start)).toEqual(["2024-03-01", "2024-02-01"]);
+  it("joins away days into trips, split by a gap of more than two days", () => {
+    const d = (day: string, keys: string) => ({ day, visits: 2, lat: 1, lng: 1, min_lat: 0, max_lat: 2, min_lng: 0, max_lng: 2,
+      keys, cities: "Paris|Paris|Lyon", countries: "France" });
+    const trips = findTrips([d("2024-01-01", "a|b"), d("2024-01-03", "b|c"), d("2024-02-01", "x")]);
+    expect(trips.map((t) => [t.start, t.days, t.places, t.city])).toEqual([["2024-02-01", 1, 1, "Paris"], ["2024-01-01", 3, 3, "Paris"]]);
   });
 });
