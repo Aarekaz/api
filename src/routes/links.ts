@@ -13,7 +13,7 @@ import {
 } from "../schemas/openapi";
 import { linkReadingSchema, linkSchema } from "../schemas/documents";
 import {
-  fetchArticle, getLink, linkTags, listLinks, markRead, presentLink, readingOf, saveLink, saveProgress, setLinkNote, updateLink,
+  fetchArticle, getLink, linkTags, listLinks, markRead, presentLink, readingOf, readingStats, saveLink, saveProgress, setLinkNote, updateLink,
   type LinkListState,
 } from "../services/links";
 
@@ -41,6 +41,15 @@ const Progress = z.object({
   /** When you were there (the device's clock), for last-write-wins. Defaults to now. */
   updated_at: z.string().datetime({ offset: true }).optional(),
   device: z.string().trim().max(60).nullish(),
+  /** The device's local date, so time read lands on the day you read it. */
+  day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+});
+
+const ReadingStats = z.object({
+  days: z.array(z.object({ day: z.string(), minutes: z.number(), articles: z.number() })),
+  finished_by_month: z.array(z.object({ month: z.string(), count: z.number() })),
+  top_sites: z.array(z.object({ site: z.string(), count: z.number() })),
+  totals: z.object({ saved: z.number(), finished: z.number(), reading: z.number(), highlights: z.number() }),
 });
 
 const SaveLink = z.object({ url: z.string().min(1).max(4000) });
@@ -131,6 +140,15 @@ openApiRegistry.registerPath({
 });
 
 openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/links/stats",
+  summary: "Reading stats: minutes and articles per day, finished per month, favourite sites",
+  security: authSecurity,
+  request: { query: z.object({ since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().openapi({ description: "First day (default: a year ago)" }) }) },
+  responses: structuredOkResponses(ReadingStats),
+});
+
+openApiRegistry.registerPath({
   method: "put",
   path: "/v1/links/{id}/progress",
   summary: "Save reading progress (last write wins by updated_at)",
@@ -196,6 +214,12 @@ app.post("/", async (c) => {
   } catch (error) {
     return fail(c, error);
   }
+});
+
+app.get("/stats", async (c) => {
+  const since = c.req.query("since");
+  const day = since && /^\d{4}-\d{2}-\d{2}$/.test(since) ? since : new Date(Date.now() - 366 * 86_400_000).toISOString().slice(0, 10);
+  return c.json(await readingStats(c.env, day));
 });
 
 app.get("/:id", async (c) => {

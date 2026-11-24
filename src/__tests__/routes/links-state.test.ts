@@ -19,6 +19,7 @@ function d1(): D1Database {
   db.exec(readFileSync("migrations/0025_documents.sql", "utf8"));
   db.exec(readFileSync("migrations/0026_highlights.sql", "utf8"));
   db.exec(readFileSync("migrations/0036_links_state.sql", "utf8"));
+  db.exec(readFileSync("migrations/0038_reading_days.sql", "utf8"));
   const statement = (sql: string, args: unknown[] = []) => ({
     bind: (...next: unknown[]) => statement(sql, next),
     async run() {
@@ -264,5 +265,26 @@ describe("links: refetching never loses text", () => {
     expect((before.body ?? "").length).toBeGreaterThan(600);
     expect(after.title).toBe("The Long One");
     expect((after.body ?? "").length).toBe((before.body ?? "").length);
+  });
+});
+
+describe("links: reading stats", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(PAGE, { headers: { "content-type": "text/html" } })));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("counts minutes on the day you read, only going forward", async () => {
+    const { send, save } = setup();
+    const link = await save("https://example.com/slow");
+    const put = (body: unknown) => send(`/v1/links/${link.id}/progress`, "PUT", body);
+    await put({ progress: 0.5, updated_at: "2026-11-20T10:00:00.000Z", day: "2026-11-20" });
+    await put({ progress: 0.3, updated_at: "2026-11-20T10:05:00.000Z", day: "2026-11-20" });
+    await put({ progress: 0.8, updated_at: "2026-11-21T09:00:00.000Z", day: "2026-11-21" });
+    const stats = await (await send("/v1/links/stats?since=2026-11-01")).json() as { days: Array<{ day: string; minutes: number }>; totals: { saved: number } };
+    expect(stats.days.map((d) => d.day)).toEqual(["2026-11-20", "2026-11-21"]);
+    expect(stats.days[0].minutes).toBeCloseTo(0.5, 1);
+    expect(stats.days[1].minutes).toBeCloseTo(0.5, 1);
+    expect(stats.totals.saved).toBe(1);
   });
 });

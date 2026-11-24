@@ -276,7 +276,7 @@ export async function linkTags(env: Env): Promise<Array<{ tag: string; count: nu
   return results.map((r) => ({ tag: r.tag, count: Number(r.count), inbox: Number(r.inbox) }));
 }
 
-export interface ProgressInput { progress: number; anchor?: string | null; updated_at?: string; device?: string | null }
+export interface ProgressInput { progress: number; anchor?: string | null; updated_at?: string; device?: string | null; day?: string | null }
 
 /**
  * Where you are in an article. Last write wins by the time the reading
@@ -285,7 +285,7 @@ export interface ProgressInput { progress: number; anchor?: string | null; updat
  * wrong clock) counts as now. `applied` says whether this write won.
  */
 export async function saveProgress(env: Env, id: string, input: ProgressInput, now = new Date()) {
-  await getLink(env, id);
+  const before = await getLink(env, id);
   const sent = input.updated_at ? new Date(input.updated_at) : now;
   const at = (Number.isNaN(sent.getTime()) || sent.getTime() > now.getTime() + 60_000 ? now : sent).toISOString();
   const progress = Math.min(1, Math.max(0, input.progress));
@@ -299,7 +299,67 @@ export async function saveProgress(env: Env, id: string, input: ProgressInput, n
      WHERE link_reading.progress_updated_at IS NULL OR link_reading.progress_updated_at < excluded.progress_updated_at`,
   ).bind(id, progress, input.anchor ?? null, at, input.device ?? null, at).run();
   const applied = (result.meta?.changes ?? 0) === 1;
+  // Time read: how far you moved forward, in the article's minutes, on the day you read it
+  // (the phone's own date when it sends one). Going back up adds nothing.
+  const gained = progress - (before.progress ?? 0);
+  if (applied && gained > 0.002) {
+    const day = typeof input.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input.day) ? input.day : at.slice(0, 10);
+    const minutes = Math.min(gained, 1) * Math.max(before.reading_minutes ?? 1, 1);
+    try {
+      await env.DB.prepare(
+        `INSERT INTO reading_days (day, document_id, minutes) VALUES (?, ?, ?)
+         ON CONFLICT (day, document_id) DO UPDATE SET minutes = reading_days.minutes + excluded.minutes`,
+      ).bind(day, id, minutes).run();
+    } catch { /* stats are a bonus; the position itself is saved */ }
+  }
   return { applied, ...readingOf(await getLink(env, id)) };
+}
+
+/**
+ * Reading over time: minutes and articles per day, finished per month, favourite
+ * sites. Articles finished before time was tracked count their reading time on
+ * the day you finished them, so the history starts full.
+ */
+export async function readingStats(env: Env, since: string) {
+  const tracked = await env.DB.prepare(
+    `SELECT day, SUM(minutes) AS minutes, COUNT(*) AS articles FROM reading_days WHERE day >= ? GROUP BY day`,
+  ).bind(since).all<{ day: string; minutes: number; articles: number }>();
+  const earlier = await env.DB.prepare(
+    `SELECT substr(l.read_at, 1, 10) AS day, SUM(COALESCE(l.reading_minutes, 1)) AS minutes, COUNT(*) AS articles
+     FROM links l JOIN documents d ON d.id = l.document_id
+     WHERE d.deleted_at IS NULL AND l.read_at IS NOT NULL AND substr(l.read_at, 1, 10) >= ?
+       AND NOT EXISTS (SELECT 1 FROM reading_days r WHERE r.document_id = l.document_id)
+     GROUP BY day`,
+  ).bind(since).all<{ day: string; minutes: number; articles: number }>();
+  const byDay = new Map<string, { day: string; minutes: number; articles: number }>();
+  for (const r of [...(tracked.results ?? []), ...(earlier.results ?? [])]) {
+    const d = byDay.get(r.day) ?? { day: r.day, minutes: 0, articles: 0 };
+    d.minutes += r.minutes; d.articles += r.articles;
+    byDay.set(r.day, d);
+  }
+  const finished = await env.DB.prepare(
+    `SELECT substr(l.read_at, 1, 7) AS month, COUNT(*) AS count FROM links l JOIN documents d ON d.id = l.document_id
+     WHERE d.deleted_at IS NULL AND l.read_at IS NOT NULL GROUP BY month ORDER BY month DESC LIMIT 24`,
+  ).all<{ month: string; count: number }>();
+  const sites = await env.DB.prepare(
+    `SELECT l.site AS site, COUNT(*) AS count FROM links l JOIN documents d ON d.id = l.document_id
+     LEFT JOIN link_reading r ON r.document_id = l.document_id
+     WHERE d.deleted_at IS NULL AND l.site IS NOT NULL AND (l.read_at IS NOT NULL OR COALESCE(r.progress, 0) > 0.1)
+     GROUP BY l.site ORDER BY count DESC LIMIT 5`,
+  ).all<{ site: string; count: number }>();
+  const totals = await env.DB.prepare(
+    `SELECT COUNT(*) AS saved, SUM(CASE WHEN l.read_at IS NOT NULL THEN 1 ELSE 0 END) AS finished,
+       SUM(CASE WHEN l.read_at IS NULL AND COALESCE(r.progress, 0) > 0.02 THEN 1 ELSE 0 END) AS reading
+     FROM links l JOIN documents d ON d.id = l.document_id LEFT JOIN link_reading r ON r.document_id = l.document_id
+     WHERE d.deleted_at IS NULL`,
+  ).first<{ saved: number; finished: number; reading: number }>();
+  const highlights = await env.DB.prepare(`SELECT COUNT(*) AS n FROM highlights`).first<{ n: number }>();
+  return {
+    days: [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day)).map((d) => ({ ...d, minutes: Math.round(d.minutes * 10) / 10 })),
+    finished_by_month: finished.results ?? [],
+    top_sites: sites.results ?? [],
+    totals: { saved: totals?.saved ?? 0, finished: totals?.finished ?? 0, reading: totals?.reading ?? 0, highlights: highlights?.n ?? 0 },
+  };
 }
 
 export function readingOf(row: LinkRow) {
