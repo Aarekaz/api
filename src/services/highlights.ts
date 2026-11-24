@@ -8,18 +8,18 @@ import { ulid } from "./documents-core";
 export interface HighlightRow {
   id: string; document_id: string; text: string; prefix: string | null; suffix: string | null;
   note: string | null; color: string | null; created_at: string; updated_at: string; deleted_at: string | null;
-  title?: string; kind?: string; url?: string | null;
+  title?: string; kind?: string; url?: string | null; site?: string | null;
 }
 
 export function presentHighlight(row: HighlightRow) {
   return {
     id: row.id, document_id: row.document_id, text: row.text, prefix: row.prefix, suffix: row.suffix,
     note: row.note, color: row.color, created_at: row.created_at, updated_at: row.updated_at,
-    ...(row.title !== undefined ? { title: row.title, kind: row.kind, url: row.url ?? null } : {}),
+    ...(row.title !== undefined ? { title: row.title, kind: row.kind, url: row.url ?? null, site: row.site ?? null } : {}),
   };
 }
 
-const SELECT = `SELECT h.*, d.title, d.kind, l.url FROM highlights h
+const SELECT = `SELECT h.*, d.title, d.kind, l.url, l.site FROM highlights h
   JOIN documents d ON d.id = h.document_id
   LEFT JOIN links l ON l.document_id = h.document_id`;
 

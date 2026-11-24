@@ -196,9 +196,24 @@ export function isSingleUrl(text: string): boolean {
   return /^https?:\/\/\S+$/i.test(text.trim());
 }
 
-interface LinkRow extends DocumentRow {
+export interface LinkRow extends DocumentRow {
   url: string; site: string | null; excerpt: string | null; reading_minutes: number | null;
   read_at: string | null; fetched_at: string | null; fetch_error: string | null;
+  // From link_reading (null until the link is first opened or noted).
+  progress: number | null; progress_anchor: string | null; progress_updated_at: string | null;
+  progress_device: string | null; opened_at: string | null; note: string | null; note_updated_at: string | null;
+}
+
+export type LinkKind = "article" | "video" | "pdf" | "post";
+
+/** What kind of page a link is, so the apps can open it the right way. */
+export function linkKind(url: string, fetchError: string | null = null): LinkKind {
+  let host = "", path = "";
+  try { const u = new URL(url); host = u.hostname.replace(/^(www|m|mobile)\./, "").toLowerCase(); path = u.pathname.toLowerCase(); } catch { /* article */ }
+  if (/^(youtube\.com|youtu\.be|vimeo\.com|tiktok\.com|twitch\.tv|loom\.com)$/.test(host)) return "video";
+  if (path.endsWith(".pdf") || /application\/pdf/i.test(fetchError ?? "")) return "pdf";
+  if (/^(x\.com|twitter\.com|threads\.net|bsky\.app|instagram\.com)$/.test(host)) return "post";
+  return "article";
 }
 
 function meta(row: { frontmatter_json: string | null }): { image?: string; icon?: string; starred_at?: string; tags?: string[] } {
@@ -213,12 +228,20 @@ export function presentLink(row: LinkRow, includeBody = false) {
     starred_at: meta(row).starred_at ?? null, tags: meta(row).tags ?? [],
     fetch_error: row.fetch_error, visibility: row.visibility, created_at: row.created_at,
     updated_at: row.updated_at, version: row.version,
+    // Added with link_reading (0036). Archived is read_at, under its plan name.
+    state: row.read_at ? "archived" as const : "inbox" as const, archived_at: row.read_at,
+    kind: linkKind(row.url, row.fetch_error),
+    progress: row.progress ?? 0, progress_anchor: row.progress_anchor ?? null,
+    progress_updated_at: row.progress_updated_at ?? null, progress_device: row.progress_device ?? null,
+    opened_at: row.opened_at ?? null, note: row.note ?? null, note_updated_at: row.note_updated_at ?? null,
     ...(includeBody ? { body: row.body } : {}),
   };
 }
 
-const SELECT = `SELECT d.*, l.url, l.site, l.excerpt, l.reading_minutes, l.read_at, l.fetched_at, l.fetch_error
-  FROM links l JOIN documents d ON d.id = l.document_id`;
+const SELECT = `SELECT d.*, l.url, l.site, l.excerpt, l.reading_minutes, l.read_at, l.fetched_at, l.fetch_error,
+  r.progress, r.progress_anchor, r.progress_updated_at, r.progress_device, r.opened_at, r.note, r.note_updated_at
+  FROM links l JOIN documents d ON d.id = l.document_id
+  LEFT JOIN link_reading r ON r.document_id = l.document_id`;
 
 export async function getLink(env: Env, id: string): Promise<LinkRow> {
   const row = await env.DB.prepare(`${SELECT} WHERE d.id = ? AND d.deleted_at IS NULL`).bind(id).first<LinkRow>();
@@ -226,13 +249,78 @@ export async function getLink(env: Env, id: string): Promise<LinkRow> {
   return row;
 }
 
-export async function listLinks(env: Env, state: "unread" | "read" | "starred" | "all" = "all", limit = 500): Promise<LinkRow[]> {
-  const filter = state === "unread" ? " AND l.read_at IS NULL" : state === "read" ? " AND l.read_at IS NOT NULL"
+export type LinkListState = "unread" | "read" | "starred" | "all" | "inbox" | "archived";
+
+/** Saved links, newest first. `inbox` is `unread` and `archived` is `read` under their plan names. */
+export async function listLinks(env: Env, state: LinkListState = "all", limit = 500, tag?: string): Promise<LinkRow[]> {
+  const filter = state === "unread" || state === "inbox" ? " AND l.read_at IS NULL"
+    : state === "read" || state === "archived" ? " AND l.read_at IS NOT NULL"
     : state === "starred" ? " AND json_extract(d.frontmatter_json, '$.starred_at') IS NOT NULL" : "";
+  const tagFilter = tag ? " AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(d.frontmatter_json, '$.tags'), '[]')) t WHERE t.value = ?)" : "";
+  const binds: unknown[] = tag ? [tag.trim().toLowerCase()] : [];
   const { results } = await env.DB.prepare(
-    `${SELECT} WHERE d.deleted_at IS NULL${filter} ORDER BY d.created_at DESC LIMIT ?`,
-  ).bind(Math.min(Math.max(limit, 1), 2000)).all<LinkRow>();
+    `${SELECT} WHERE d.deleted_at IS NULL${filter}${tagFilter} ORDER BY d.created_at DESC LIMIT ?`,
+  ).bind(...binds, Math.min(Math.max(limit, 1), 2000)).all<LinkRow>();
   return results;
+}
+
+/** Every tag on a saved link, with how many links carry it (most used first). */
+export async function linkTags(env: Env): Promise<Array<{ tag: string; count: number; inbox: number }>> {
+  const { results } = await env.DB.prepare(
+    `SELECT t.value AS tag, COUNT(*) AS count, SUM(CASE WHEN l.read_at IS NULL THEN 1 ELSE 0 END) AS inbox
+     FROM links l JOIN documents d ON d.id = l.document_id,
+       json_each(COALESCE(json_extract(d.frontmatter_json, '$.tags'), '[]')) t
+     WHERE d.deleted_at IS NULL AND d.kind = 'link' AND t.type = 'text'
+     GROUP BY t.value ORDER BY count DESC, tag ASC`,
+  ).all<{ tag: string; count: number; inbox: number }>();
+  return results.map((r) => ({ tag: r.tag, count: Number(r.count), inbox: Number(r.inbox) }));
+}
+
+export interface ProgressInput { progress: number; anchor?: string | null; updated_at?: string; device?: string | null }
+
+/**
+ * Where you are in an article. Last write wins by the time the reading
+ * happened (sent by the device), so a phone that was offline can't pull the
+ * Mac back to an older spot when it reconnects. A time from the future (a
+ * wrong clock) counts as now. `applied` says whether this write won.
+ */
+export async function saveProgress(env: Env, id: string, input: ProgressInput, now = new Date()) {
+  await getLink(env, id);
+  const sent = input.updated_at ? new Date(input.updated_at) : now;
+  const at = (Number.isNaN(sent.getTime()) || sent.getTime() > now.getTime() + 60_000 ? now : sent).toISOString();
+  const progress = Math.min(1, Math.max(0, input.progress));
+  const result = await env.DB.prepare(
+    `INSERT INTO link_reading (document_id, progress, progress_anchor, progress_updated_at, progress_device, opened_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT (document_id) DO UPDATE SET
+       progress = excluded.progress, progress_anchor = excluded.progress_anchor,
+       progress_updated_at = excluded.progress_updated_at, progress_device = excluded.progress_device,
+       opened_at = COALESCE(link_reading.opened_at, excluded.opened_at)
+     WHERE link_reading.progress_updated_at IS NULL OR link_reading.progress_updated_at < excluded.progress_updated_at`,
+  ).bind(id, progress, input.anchor ?? null, at, input.device ?? null, at).run();
+  const applied = (result.meta?.changes ?? 0) === 1;
+  return { applied, ...readingOf(await getLink(env, id)) };
+}
+
+export function readingOf(row: LinkRow) {
+  return {
+    progress: row.progress ?? 0, progress_anchor: row.progress_anchor ?? null,
+    progress_updated_at: row.progress_updated_at ?? null, progress_device: row.progress_device ?? null,
+    opened_at: row.opened_at ?? null,
+  };
+}
+
+/** Your note on the whole article; null or "" clears it. */
+export async function setLinkNote(env: Env, id: string, note: string | null, now = new Date()) {
+  const text = note?.trim() ? note.trim() : null;
+  const stamp = now.toISOString();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO link_reading (document_id, note, note_updated_at) VALUES (?, ?, ?)
+       ON CONFLICT (document_id) DO UPDATE SET note = excluded.note, note_updated_at = excluded.note_updated_at`,
+    ).bind(id, text, stamp),
+    env.DB.prepare("UPDATE documents SET updated_at = ? WHERE id = ?").bind(stamp, id),
+  ]);
 }
 
 /** Fetches the page and stores its readable text. Failures are recorded, not thrown. */
@@ -286,7 +374,8 @@ export async function markRead(env: Env, id: string, read: boolean, now = new Da
   await getLink(env, id);
   const stamp = now.toISOString();
   await env.DB.batch([
-    env.DB.prepare("UPDATE links SET read_at = ? WHERE document_id = ?").bind(read ? stamp : null, id),
+    // Archiving twice keeps the first time you finished it.
+    env.DB.prepare("UPDATE links SET read_at = CASE WHEN ? THEN COALESCE(read_at, ?) ELSE NULL END WHERE document_id = ?").bind(read ? 1 : 0, stamp, id),
     // Bump updated_at so the apps' incremental sync sees the change.
     env.DB.prepare("UPDATE documents SET updated_at = ? WHERE id = ?").bind(stamp, id),
   ]);

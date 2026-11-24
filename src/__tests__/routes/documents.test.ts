@@ -31,6 +31,7 @@ function d1(): D1Database {
   db.exec(readFileSync("migrations/0030_music_plays.sql", "utf8"));
   db.exec(readFileSync("migrations/0031_training.sql", "utf8"));
   db.exec(readFileSync("migrations/0032_place_categories.sql", "utf8"));
+  db.exec(readFileSync("migrations/0036_links_state.sql", "utf8"));
   db.exec(`CREATE TABLE location_history (id INTEGER PRIMARY KEY AUTOINCREMENT, latitude REAL NOT NULL, longitude REAL NOT NULL,
     altitude REAL, accuracy REAL, speed REAL, heading REAL, recorded_at TEXT NOT NULL, address TEXT, city TEXT, state TEXT,
     country TEXT, postal_code TEXT, label TEXT, notes TEXT, source TEXT, created_at TEXT NOT NULL, updated_at TEXT);`);
