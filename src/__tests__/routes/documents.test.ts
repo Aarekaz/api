@@ -11,6 +11,7 @@ import linksRoute from "../../routes/links";
 import highlightsRoute from "../../routes/highlights";
 import visitsRoute, { findTrips } from "../../routes/visits";
 import { createMusicRoute } from "../../routes/music";
+import trainingRoute, { cleanExercises, cleanWeekdays } from "../../routes/training";
 import { playsFrom, savePlays } from "../../services/spotify/history";
 import { extractArticle, normalizeUrl, trimToArticle } from "../../services/links";
 import { pendingDocuments } from "../../services/backup";
@@ -27,6 +28,7 @@ function d1(): D1Database {
   db.exec(readFileSync("migrations/0028_place_names.sql", "utf8"));
   db.exec(readFileSync("migrations/0029_journeys.sql", "utf8"));
   db.exec(readFileSync("migrations/0030_music_plays.sql", "utf8"));
+  db.exec(readFileSync("migrations/0031_training.sql", "utf8"));
   db.exec(`CREATE TABLE location_history (id INTEGER PRIMARY KEY AUTOINCREMENT, latitude REAL NOT NULL, longitude REAL NOT NULL,
     altitude REAL, accuracy REAL, speed REAL, heading REAL, recorded_at TEXT NOT NULL, address TEXT, city TEXT, state TEXT,
     country TEXT, postal_code TEXT, label TEXT, notes TEXT, source TEXT, created_at TEXT NOT NULL, updated_at TEXT);`);
@@ -491,5 +493,28 @@ describe("article trimming", () => {
     const lines = ["## Title", "Short line", "- list"];
     trimToArticle(lines);
     expect(lines).toEqual(["## Title", "Short line", "- list"]);
+  });
+});
+
+describe("training", () => {
+  it("keeps routines, ticks sets, and remembers last time", async () => {
+    const env = { DB: d1() } as Env;
+    const root = new Hono<{ Bindings: Env }>();
+    root.route("/v1/training", trainingRoute);
+    const put = (path: string, body: unknown) => root.request(path, { method: "PUT", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } }, env);
+    expect(cleanWeekdays([4, 1, 9, 1])).toBe("1,4");
+    expect(cleanExercises([{ name: "Bench", sets: 3, reps: 8, weight: 60 }, { sets: 2 }])).toHaveLength(1);
+    await put("/v1/training/routines/push", { name: "Push", weekdays: [1, 4], exercises: [{ name: "Bench", sets: 3, reps: 8, weight: 60 }] });
+    const list = await (await root.request("/v1/training/routines", {}, env)).json() as { routines: Array<{ name: string; weekdays: number[] }> };
+    expect(list.routines[0]).toMatchObject({ name: "Push", weekdays: [1, 4] });
+    await root.request("/v1/training/sets", json({ routine_id: "push", day: "2026-11-20", exercise: "Bench", set_number: 1, reps: 8, weight: 60 }), env);
+    await root.request("/v1/training/sets", json({ routine_id: "push", day: "2026-11-20", exercise: "Bench", set_number: 1, reps: 9, weight: 60 }), env);
+    await root.request("/v1/training/sets", json({ routine_id: "push", day: "2026-11-24", exercise: "Bench", set_number: 1, reps: 8, weight: 62.5 }), env);
+    const day = await (await root.request("/v1/training/day?day=2026-11-24", {}, env)).json() as { sets: unknown[]; last: Array<{ reps: number; day: string }> };
+    expect(day.sets).toHaveLength(1);
+    expect(day.last).toEqual([expect.objectContaining({ day: "2026-11-20", reps: 9 })]);
+    await root.request("/v1/training/sets?day=2026-11-24&exercise=Bench&set_number=1", { method: "DELETE" }, env);
+    const history = await (await root.request("/v1/training/history?days=3650", {}, env)).json() as { days: Array<{ routine: string }> };
+    expect(history.days).toEqual([expect.objectContaining({ day: "2026-11-20", routine: "Push", sets: 1 })]);
   });
 });
