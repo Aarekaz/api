@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildChapters, km, type MonthPlace } from "../../services/chapters";
+import { applySaved, buildChapters, km, savedCovers, type MonthPlace, type SavedPlace } from "../../services/chapters";
 
 const KTM = { lat: 27.754, lng: 85.346 };
 const COLLEGE = { lat: 27.674, lng: 85.339 };
@@ -62,5 +62,39 @@ describe("chapters", () => {
   it("measures distance on the globe", () => {
     expect(km(KTM, ARL)).toBeGreaterThan(12_000);
     expect(km(KTM, COLLEGE)).toBeLessThan(10);
+  });
+
+  describe("places you saved", () => {
+    const realHome = { lat: 27.73, lng: 85.33 };
+    const saved = (p: Partial<SavedPlace>): SavedPlace => ({
+      id: 1, name: "Home", kind: "home", latitude: realHome.lat, longitude: realHome.lng, radius_m: 200,
+      starts_on: null, ends_on: null, ...p,
+    });
+
+    it("folds the spots inside a saved circle into one place", () => {
+      const near = { lat: realHome.lat + 0.001, lng: realHome.lng };
+      const rows = [row("2020-01", realHome, 100, 10, "Some street"), row("2020-01", near, 50, 5, "Other street")];
+      const out = applySaved(rows, [saved({})]);
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject({ key: "saved:1", name: "Home", hours: 150, n: 15, saved: "home" });
+    });
+
+    it("only in the months it applies", () => {
+      expect(savedCovers(saved({ starts_on: "2017-01", ends_on: "2024-07" }), "2024-08")).toBe(false);
+      expect(savedCovers(saved({ starts_on: "2017-01", ends_on: "2024-07-15" }), "2024-07")).toBe(true);
+      expect(savedCovers(saved({ starts_on: "2017-01" }), "2016-12")).toBe(false);
+    });
+
+    it("a saved home wins over the busiest spot, and a saved work is the anchor", () => {
+      const rows = months("2023-01", 6).flatMap((mo) => [
+        row(mo, KTM, 500, 30, "Golphutar Main Sadak", "Nepal"),
+        row(mo, realHome, 300, 20, "Somewhere"),
+        row(mo, COLLEGE, 40, 4, "Kathford"),
+      ]);
+      const places = [saved({}), saved({ id: 2, name: "Office", kind: "work", latitude: COLLEGE.lat, longitude: COLLEGE.lng })];
+      const [chapter] = buildChapters(applySaved(rows, places), [], [], []);
+      expect(chapter.home.name).toBe("Home");
+      expect(chapter.anchor?.name).toBe("Office");
+    });
   });
 });

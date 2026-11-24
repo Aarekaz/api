@@ -6,8 +6,37 @@
 export type MonthPlace = {
   mo: string; key: string; hours: number; n: number; lat: number; lng: number;
   name: string | null; city: string | null; country: string | null;
+  /** The kind of a place you saved (home, work…), when the spot is one. */
+  saved?: string;
 };
 export type MonthCount = { mo: string; n: number };
+/** A place you defined: everything inside the circle, in its months, is this place. */
+export type SavedPlace = {
+  id: number; name: string; kind: string; latitude: number; longitude: number; radius_m: number;
+  starts_on: string | null; ends_on: string | null;
+};
+
+/** Whether a saved place applies in a month ("2019-04"); dates are "YYYY-MM" or "YYYY-MM-DD". */
+export function savedCovers(p: SavedPlace, mo: string) {
+  return (!p.starts_on || mo >= p.starts_on.slice(0, 7)) && (!p.ends_on || mo <= p.ends_on.slice(0, 7));
+}
+
+/** Folds each month's spots inside a saved place into one spot named for it. */
+export function applySaved(rows: MonthPlace[], saved: SavedPlace[]): MonthPlace[] {
+  if (!saved.length) return rows;
+  const merged = new Map<string, MonthPlace>();
+  for (const r of rows) {
+    const p = saved
+      .filter((s) => savedCovers(s, r.mo) && km(r, { lat: s.latitude, lng: s.longitude }) * 1000 <= s.radius_m)
+      .sort((a, b) => a.radius_m - b.radius_m)[0];
+    const row = p ? { ...r, key: `saved:${p.id}`, name: p.name, lat: p.latitude, lng: p.longitude, saved: p.kind } : r;
+    const id = `${row.mo}|${row.key}`;
+    const into = merged.get(id);
+    if (into) { into.hours += row.hours; into.n += row.n; into.city ??= row.city; into.country ??= row.country; }
+    else merged.set(id, { ...row });
+  }
+  return [...merged.values()].sort((a, b) => a.mo.localeCompare(b.mo) || b.hours - a.hours);
+}
 export type MonthMode = { mo: string; mode: string; m: number };
 
 export type ChapterPlace = {
@@ -52,6 +81,9 @@ function cityOf(places: ChapterPlace[]) {
 /** A month's home: the spot whose neighbourhood (300 m) holds the most hours,
  *  since one home is often several neighbouring keys. */
 function homeOf(list: MonthPlace[]) {
+  // A home you saved for this month wins over any guess.
+  const saved = list.filter((p) => p.saved === "home").sort((a, b) => b.hours - a.hours)[0];
+  if (saved) return saved;
   let best = list[0], bestHours = -1;
   for (const p of list) {
     const around = list.reduce((s, q) => s + (km(p, q) < 0.3 ? q.hours : 0), 0);
@@ -63,6 +95,7 @@ function homeOf(list: MonthPlace[]) {
 type Run = { start: string; end: string; homes: MonthPlace[]; months: string[] };
 
 export function buildChapters(rows: MonthPlace[], visits: MonthCount[], fresh: MonthCount[], modes: MonthMode[]): Chapter[] {
+  const kinds = new Map(rows.filter((r) => r.saved).map((r) => [r.key, r.saved!]));
   const byMonth = new Map<string, MonthPlace[]>();
   for (const r of rows) byMonth.set(r.mo, [...(byMonth.get(r.mo) ?? []), r]);
   const months = [...byMonth.keys()].sort();
@@ -107,12 +140,14 @@ export function buildChapters(rows: MonthPlace[], visits: MonthCount[], fresh: M
     }
     const all = [...totals.values()].sort((a, b) => b.hours - a.hours);
     const centre = run.homes[Math.floor(run.homes.length / 2)];
-    const home = all.find((p) => km(p, centre) < 0.3) ?? all[0];
+    const home = all.find((p) => p.key === centre.key) ?? all.find((p) => km(p, centre) < 0.3) ?? all[0];
     // Away from home but in the same part of the world: a visit back to an old city isn't a haunt here.
     const away = all.filter((p) => km(p, home) >= 0.5 && km(p, home) < 50);
     // An anchor is somewhere you kept going back to: at least ten visits and a real share of the days.
-    const anchorPick = [...away].sort((a, b) => b.visits - a.visits)[0];
-    const anchor = anchorPick && anchorPick.visits >= 10 ? anchorPick : null;
+    // A work or school you saved is the anchor whenever it has time in this chapter.
+    const savedAnchor = away.find((p) => p.key.startsWith("saved:") && kinds.get(p.key) && ["work", "school"].includes(kinds.get(p.key)!));
+    const anchorPick = savedAnchor ?? [...away].sort((a, b) => b.visits - a.visits)[0];
+    const anchor = anchorPick && (savedAnchor || anchorPick.visits >= 10) ? anchorPick : null;
     // One entry per named place (a campus can span several keys), the anchor left out.
     const seen = new Set([anchor?.name?.trim().toLowerCase()]);
     const haunts = away.filter((p) => {

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { buildChapters, type MonthCount, type MonthMode, type MonthPlace } from "../services/chapters";
+import { applySaved, buildChapters, type MonthCount, type MonthMode, type MonthPlace, type SavedPlace } from "../services/chapters";
 import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
 import { z } from "zod";
@@ -283,6 +283,65 @@ openApiRegistry.registerPath({
       modes: z.array(z.object({ mode: z.string(), km: z.number() })),
     })),
   })),
+});
+
+const savedPlace = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  kind: z.enum(["home", "work", "school", "gym", "other"]),
+  latitude: z.number(),
+  longitude: z.number(),
+  radius_m: z.number().int().openapi({ description: "Everything within this many metres is this place (25 to 2000)" }),
+  address: z.string().nullable(),
+  starts_on: z.string().nullable().openapi({ description: "First month it applies, YYYY-MM; null for always" }),
+  ends_on: z.string().nullable().openapi({ description: "Last month it applies, YYYY-MM; null for still" }),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+const savedPlaceInput = z.object({
+  name: z.string().min(1).max(120),
+  kind: z.enum(["home", "work", "school", "gym", "other"]).optional(),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  radius_m: z.number().int().min(25).max(2000).optional(),
+  address: z.string().max(300).nullable().optional(),
+  starts_on: z.string().nullable().optional(),
+  ends_on: z.string().nullable().optional(),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/visits/saved",
+  summary: "List the places you defined (a centre, a radius, a name, the months it applies)",
+  security: authSecurity,
+  responses: okResponses(z.object({ places: z.array(savedPlace) })),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/visits/saved",
+  summary: "Save a place of your own: visits inside its circle, in its months, count as it",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(savedPlaceInput) },
+  responses: okResponses(savedPlace),
+});
+
+openApiRegistry.registerPath({
+  method: "patch",
+  path: "/v1/visits/saved/{id}",
+  summary: "Change a place you saved",
+  security: authSecurity,
+  request: { params: z.object({ id: z.string() }), body: openApiJsonRequestBody(savedPlaceInput.partial()) },
+  responses: okResponses(savedPlace),
+});
+
+openApiRegistry.registerPath({
+  method: "delete",
+  path: "/v1/visits/saved/{id}",
+  summary: "Remove a place you saved (the visits stay)",
+  security: authSecurity,
+  request: { params: z.object({ id: z.string() }) },
+  responses: okResponses(z.object({ deleted: z.boolean() })),
 });
 
 openApiRegistry.registerPath({
@@ -574,7 +633,7 @@ app.get("/flights", async (c) => {
 /** Your eras: where home was, where the days went, how you got around. See services/chapters.ts. */
 app.get("/chapters", async (c) => {
   const db = c.env.DB;
-  const [rows, visits, fresh, modes] = await Promise.all([
+  const [rows, visits, fresh, modes, saved] = await Promise.all([
     db.prepare(`
       WITH v AS (SELECT ${KEY} AS key, latitude AS lat, longitude AS lng, substr(arrived_at, 1, 7) AS mo,
         MIN(MAX((julianday(departed_at) - julianday(arrived_at)) * 24, 0), 24) AS h
@@ -587,10 +646,12 @@ app.get("/chapters", async (c) => {
     db.prepare(`SELECT substr(first, 1, 7) AS mo, COUNT(*) AS n FROM (SELECT ${KEY} AS key, MIN(arrived_at) AS first FROM visits GROUP BY key) GROUP BY mo`).all(),
     db.prepare(`SELECT substr(started_at, 1, 7) AS mo, mode, SUM(distance_m) AS m FROM journeys
       WHERE distance_m IS NOT NULL AND mode NOT IN ('path', 'unknown') GROUP BY mo, mode`).all(),
+    db.prepare("SELECT * FROM saved_places").all(),
   ]);
-  cached(c, 3600);
+  // Changes to your own places show at once, so the answer isn't cached for an hour.
+  cached(c, 60);
   return c.json({
-    chapters: buildChapters(rows.results as unknown as MonthPlace[], visits.results as unknown as MonthCount[],
+    chapters: buildChapters(applySaved(rows.results as unknown as MonthPlace[], saved.results as unknown as SavedPlace[]), visits.results as unknown as MonthCount[],
       fresh.results as unknown as MonthCount[], modes.results as unknown as MonthMode[]),
   });
 });
@@ -623,6 +684,64 @@ app.get("/trips", async (c) => {
   }));
   cached(c, 600);
   return c.json({ trips: findTrips(days) });
+});
+
+// Places you define: a centre and a radius (see services/chapters.ts applySaved).
+const KINDS = ["home", "work", "school", "gym", "other"];
+const month = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}(-\d{2})?$/.test(v) ? v.slice(0, 7) : null);
+
+/** A saved place from a request body; `partial` for a change, where missing fields stay. */
+export function cleanSaved(b: Record<string, unknown>, partial = false) {
+  const out: Record<string, unknown> = {};
+  if (b.name !== undefined || !partial) { const n = str(b.name, 120); if (!n) return null; out.name = n; }
+  if (b.kind !== undefined || !partial) out.kind = KINDS.includes(String(b.kind)) ? String(b.kind) : "other";
+  for (const [k, lo, hi] of [["latitude", -90, 90], ["longitude", -180, 180]] as const) {
+    if (b[k] === undefined && partial) continue;
+    const v = Number(b[k]);
+    if (!Number.isFinite(v) || v < lo || v > hi) return null;
+    out[k] = v;
+  }
+  if (b.radius_m !== undefined || !partial) out.radius_m = Math.round(Math.min(Math.max(Number(b.radius_m) || 150, 25), 2000));
+  if (b.address !== undefined) out.address = str(b.address, 300);
+  if (b.starts_on !== undefined) out.starts_on = month(b.starts_on);
+  if (b.ends_on !== undefined) out.ends_on = month(b.ends_on);
+  return out;
+}
+
+app.get("/saved", async (c) => {
+  const { results } = await c.env.DB.prepare("SELECT * FROM saved_places ORDER BY name").all();
+  return c.json({ places: results });
+});
+
+app.post("/saved", async (c) => {
+  const body = (await parseJson(c.req.raw)) as Record<string, unknown> | null;
+  const p = body && cleanSaved(body);
+  if (!p) return c.json({ error: "Send name, latitude and longitude" }, 400);
+  const now = new Date().toISOString();
+  const row = await c.env.DB.prepare(
+    `INSERT INTO saved_places (name, kind, latitude, longitude, radius_m, address, starts_on, ends_on, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+  ).bind(p.name, p.kind, p.latitude, p.longitude, p.radius_m, p.address ?? null, p.starts_on ?? null, p.ends_on ?? null, now, now).first();
+  return c.json(row);
+});
+
+app.patch("/saved/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  const body = (await parseJson(c.req.raw)) as Record<string, unknown> | null;
+  const p = body && cleanSaved(body, true);
+  if (!Number.isInteger(id) || !p) return c.json({ error: "Invalid place" }, 400);
+  const fields = Object.keys(p);
+  const row = await c.env.DB.prepare(
+    `UPDATE saved_places SET ${[...fields.map((f) => `${f} = ?`), "updated_at = ?"].join(", ")} WHERE id = ? RETURNING *`,
+  ).bind(...fields.map((f) => p[f] as string | number | null), new Date().toISOString(), id).first();
+  return row ? c.json(row) : c.json({ error: "Not found" }, 404);
+});
+
+app.delete("/saved/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id)) return c.json({ error: "Invalid id" }, 400);
+  const r = await c.env.DB.prepare("DELETE FROM saved_places WHERE id = ?").bind(id).run();
+  return c.json({ deleted: (r.meta.changes ?? 0) > 0 });
 });
 
 /**
