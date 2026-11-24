@@ -5,7 +5,14 @@ import { parseJson } from "../utils/json";
 // /v1/training: a simple plan of what to do and when. WHOOP tracks the effort.
 const app = new Hono<{ Bindings: Env }>();
 
-type Exercise = { name: string; sets: number; reps: number; weight?: number | null; unit?: string; rest?: number };
+/**
+ * One exercise in a routine. Reps can be a range (8–12), per side (split
+ * squats), or a hold in seconds (plank 30–45 s) instead of reps.
+ */
+type Exercise = {
+  name: string; sets: number; reps: number; reps_max?: number | null; per_side?: boolean;
+  seconds?: number | null; seconds_max?: number | null; weight?: number | null; unit?: string; rest?: number; note?: string | null;
+};
 const str = (v: unknown, max = 120) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const isDay = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
@@ -15,9 +22,18 @@ export function cleanExercises(list: unknown): Exercise[] {
   return list.slice(0, 40).flatMap((e: Record<string, unknown>) => {
     const name = str(e?.name);
     if (!name) return [];
+    const clamp = (v: number | null, lo: number, hi: number) => (v === null ? null : Math.min(Math.max(Math.round(v), lo), hi));
+    const reps = clamp(num(e.reps), 1, 200) ?? 10;
+    const repsMax = clamp(num(e.reps_max), 1, 200);
+    const seconds = clamp(num(e.seconds), 1, 3600);
+    const secondsMax = clamp(num(e.seconds_max), 1, 3600);
     return [{
-      name, sets: Math.min(Math.max(Math.round(num(e.sets) ?? 3), 1), 20), reps: Math.min(Math.max(Math.round(num(e.reps) ?? 10), 1), 200),
-      weight: num(e.weight), unit: str(e.unit, 8) ?? "kg", rest: Math.min(Math.max(Math.round(num(e.rest) ?? 90), 0), 900),
+      name, sets: clamp(num(e.sets), 1, 20) ?? 3, reps,
+      reps_max: repsMax !== null && repsMax > reps ? repsMax : null,
+      per_side: e.per_side === true,
+      seconds, seconds_max: seconds !== null && secondsMax !== null && secondsMax > seconds ? secondsMax : null,
+      weight: num(e.weight), unit: str(e.unit, 8) ?? "kg", rest: clamp(num(e.rest), 0, 900) ?? 90,
+      note: str(e.note, 200),
     }];
   });
 }
@@ -25,6 +41,37 @@ export function cleanExercises(list: unknown): Exercise[] {
 export function cleanWeekdays(v: unknown): string {
   const days = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : [];
   return [...new Set(days.map(Number).filter((d) => Number.isInteger(d) && d >= 1 && d <= 7))].sort().join(",");
+}
+
+type RotationRoutine = { id: string; weekdays: number[]; exercises: unknown[] };
+
+const dayNumber = (day: string) => Math.round(Date.parse(day + "T12:00:00Z") / 86_400_000);
+
+/**
+ * What's up today in a rotation (routines without weekdays, in order): the
+ * workout after the last one you did. A routine with no exercises is a rest
+ * day; it takes one calendar day and then passes. If you've already done
+ * something today, today stays on that workout.
+ */
+export function nextInRotation(
+  routines: RotationRoutine[], last: { day: string; routine_id: string } | null, today: string,
+): { routine_id: string | null; state: "first" | "doing" | "next" | "rest" | "none" } {
+  const rotation = routines.filter((r) => r.weekdays.length === 0);
+  if (rotation.length === 0) return { routine_id: null, state: "none" };
+  const isRest = (r: RotationRoutine) => r.exercises.length === 0;
+  if (rotation.every(isRest)) return { routine_id: rotation[0].id, state: "rest" };
+  const start = rotation.findIndex((r) => !isRest(r));
+  const lastIndex = last ? rotation.findIndex((r) => r.id === last.routine_id) : -1;
+  if (!last || lastIndex < 0) return { routine_id: rotation[start].id, state: "first" };
+  if (last.day === today) return { routine_id: last.routine_id, state: "doing" };
+  let gap = dayNumber(today) - dayNumber(last.day);   // days since the last workout (1 = yesterday)
+  let i = (lastIndex + 1) % rotation.length;
+  for (let guard = 0; guard < rotation.length && isRest(rotation[i]); guard++) {
+    if (gap <= 1) return { routine_id: rotation[i].id, state: "rest" };
+    gap -= 1;                                         // that rest day has passed
+    i = (i + 1) % rotation.length;
+  }
+  return { routine_id: rotation[i].id, state: "next" };
 }
 
 const present = (r: Record<string, unknown>) => ({
@@ -35,6 +82,18 @@ const present = (r: Record<string, unknown>) => ({
 app.get("/routines", async (c) => {
   const { results } = await c.env.DB.prepare("SELECT * FROM training_routines WHERE archived = 0 ORDER BY position, created_at").all();
   return c.json({ routines: (results as Record<string, unknown>[]).map(present) });
+});
+
+/** Today's workout in the rotation. ?today=YYYY-MM-DD (the phone's local date) */
+app.get("/next", async (c) => {
+  const today = c.req.query("today");
+  if (!isDay(today)) return c.json({ error: "today must look like 2026-11-24" }, 400);
+  const { results } = await c.env.DB.prepare("SELECT * FROM training_routines WHERE archived = 0 ORDER BY position, created_at").all();
+  const routines = (results as Record<string, unknown>[]).map(present) as unknown as RotationRoutine[];
+  const last = await c.env.DB.prepare(
+    "SELECT day, routine_id FROM training_sets WHERE routine_id IS NOT NULL AND day <= ? ORDER BY day DESC, done_at DESC LIMIT 1",
+  ).bind(today).first<{ day: string; routine_id: string }>();
+  return c.json({ ...nextInRotation(routines, last ?? null, today), last_day: last?.day ?? null, last_routine_id: last?.routine_id ?? null });
 });
 
 /** Create or replace a routine. { id?, name, weekdays: [1..7], exercises: [...] } */
@@ -93,12 +152,16 @@ app.get("/day", async (c) => {
   return c.json({ day, sets: sets.results, last: last.results });
 });
 
-/** Days you trained, with the routine and how many sets. ?days=90 */
+/**
+ * Days you trained, with the routine, how many sets, and when you started and
+ * finished (the first and last set you ticked). ?days=90
+ */
 app.get("/history", async (c) => {
   const days = Math.min(Math.max(Number(c.req.query("days")) || 90, 1), 3650);
   const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
   const { results } = await c.env.DB.prepare(
-    `SELECT s.day, s.routine_id, r.name AS routine, COUNT(*) AS sets FROM training_sets AS s
+    `SELECT s.day, s.routine_id, r.name AS routine, COUNT(*) AS sets, MIN(s.done_at) AS started_at, MAX(s.done_at) AS ended_at,
+            ROUND(SUM(COALESCE(s.weight, 0) * COALESCE(s.reps, 0))) AS volume FROM training_sets AS s
      LEFT JOIN training_routines AS r ON r.id = s.routine_id WHERE s.day >= ? GROUP BY s.day, s.routine_id ORDER BY s.day DESC`,
   ).bind(since).all();
   return c.json({ days: results });

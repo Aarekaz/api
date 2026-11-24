@@ -103,7 +103,8 @@ app.get("/places", async (c) => {
     top AS (SELECT key, place FROM p AS a WHERE n = (SELECT MAX(n) FROM p AS b WHERE b.key = a.key) GROUP BY key),
     city AS (SELECT key, MAX(city) AS city, MAX(country) AS country FROM v WHERE city IS NOT NULL GROUP BY key)
     SELECT g.*, COALESCE(n.name, top.place) AS name, top.place AS label,
-      COALESCE(n.city, city.city) AS city, COALESCE(n.country, city.country) AS country
+      COALESCE(n.city, city.city) AS city, COALESCE(n.country, city.country) AS country,
+      n.category AS category, n.map_item_id AS map_item_id
     FROM g LEFT JOIN place_names AS n ON n.key = g.key LEFT JOIN top ON top.key = g.key LEFT JOIN city ON city.key = g.key
     ORDER BY visits DESC`).bind(...args).all();
   cached(c, 300);
@@ -118,6 +119,17 @@ app.get("/years", async (c) => {
   ).all();
   cached(c, 300);
   return c.json({ years: results });
+});
+
+/** Visits per month, for the map's timeline. ?offset= minutes from UTC for local months. */
+app.get("/months", async (c) => {
+  const shift = modifier(offsetOf(c.req.query("offset")));
+  const { results } = await c.env.DB.prepare(
+    `SELECT substr(datetime(arrived_at, ?), 1, 7) AS month, COUNT(*) AS visits, COUNT(DISTINCT ${KEY}) AS places
+     FROM visits GROUP BY month ORDER BY month`,
+  ).bind(shift).all();
+  cached(c, 300);
+  return c.json({ months: results });
 });
 
 /** One place's visits, newest first. ?key=38.898,-77.037 */
@@ -252,7 +264,11 @@ app.get("/trips", async (c) => {
   return c.json({ trips: findTrips(days) });
 });
 
-/** POST { names: [{ key, name, city, country }] }: names looked up on a device. */
+/**
+ * POST { names: [{ key, name?, city?, country?, category?, map_item_id? }] }:
+ * names (and Apple's category and place ID) looked up on a device. Missing
+ * fields keep what's already there.
+ */
 app.post("/names", async (c) => {
   const body = (await parseJson(c.req.raw)) as { names?: unknown } | null;
   const list = Array.isArray(body?.names) ? (body!.names as Array<Record<string, unknown>>) : null;
@@ -260,10 +276,11 @@ app.post("/names", async (c) => {
   const now = new Date().toISOString();
   const valid = list.filter((n) => typeof n.key === "string" && /^-?\d+\.\d{3},-?\d+\.\d{3}$/.test(n.key));
   const statements = valid.map((n) => c.env.DB.prepare(
-    `INSERT INTO place_names (key, name, city, country, updated_at) VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO place_names (key, name, city, country, category, map_item_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(key) DO UPDATE SET name = COALESCE(excluded.name, name), city = COALESCE(excluded.city, city),
-       country = COALESCE(excluded.country, country), updated_at = excluded.updated_at`,
-  ).bind(n.key, str(n.name, 200), str(n.city, 120), str(n.country, 120), now));
+       country = COALESCE(excluded.country, country), category = COALESCE(excluded.category, category),
+       map_item_id = COALESCE(excluded.map_item_id, map_item_id), updated_at = excluded.updated_at`,
+  ).bind(n.key, str(n.name, 200), str(n.city, 120), str(n.country, 120), str(n.category, 80), str(n.map_item_id, 300), now));
   for (let i = 0; i < statements.length; i += 50) await c.env.DB.batch(statements.slice(i, i + 50));
   return c.json({ received: list.length, saved: valid.length });
 });

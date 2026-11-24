@@ -11,7 +11,7 @@ import linksRoute from "../../routes/links";
 import highlightsRoute from "../../routes/highlights";
 import visitsRoute, { findTrips } from "../../routes/visits";
 import { createMusicRoute } from "../../routes/music";
-import trainingRoute, { cleanExercises, cleanWeekdays } from "../../routes/training";
+import trainingRoute, { cleanExercises, cleanWeekdays, nextInRotation } from "../../routes/training";
 import { playsFrom, savePlays } from "../../services/spotify/history";
 import { extractArticle, normalizeUrl, trimToArticle } from "../../services/links";
 import { pendingDocuments } from "../../services/backup";
@@ -29,6 +29,7 @@ function d1(): D1Database {
   db.exec(readFileSync("migrations/0029_journeys.sql", "utf8"));
   db.exec(readFileSync("migrations/0030_music_plays.sql", "utf8"));
   db.exec(readFileSync("migrations/0031_training.sql", "utf8"));
+  db.exec(readFileSync("migrations/0032_place_categories.sql", "utf8"));
   db.exec(`CREATE TABLE location_history (id INTEGER PRIMARY KEY AUTOINCREMENT, latitude REAL NOT NULL, longitude REAL NOT NULL,
     altitude REAL, accuracy REAL, speed REAL, heading REAL, recorded_at TEXT NOT NULL, address TEXT, city TEXT, state TEXT,
     country TEXT, postal_code TEXT, label TEXT, notes TEXT, source TEXT, created_at TEXT NOT NULL, updated_at TEXT);`);
@@ -414,7 +415,14 @@ describe("places map", () => {
     await root.request("/v1/visits/names", json({ names: [{ key: "38.910,-77.040", name: "Blue Bottle", city: "Washington" }, { key: "bad" }] }), env);
     body = await (await root.request("/v1/visits/places?year=2024", {}, env)).json() as typeof body;
     expect(body.places.find((p) => p.key === "38.910,-77.040")).toMatchObject({ name: "Blue Bottle", city: "Washington" });
+    // Apple's category and place ID arrive later and don't wipe the name.
+    await root.request("/v1/visits/names", json({ names: [{ key: "38.910,-77.040", category: "MKPOICategoryCafe", map_item_id: "I123" }] }), env);
+    body = await (await root.request("/v1/visits/places?year=2024", {}, env)).json() as typeof body;
+    expect(body.places.find((p) => p.key === "38.910,-77.040")).toMatchObject({ name: "Blue Bottle", category: "MKPOICategoryCafe", map_item_id: "I123" });
     expect(body.places.find((p) => p.key === "38.898,-77.037")).toMatchObject({ visits: 2 });
+    const months = await (await root.request("/v1/visits/months", {}, env)).json() as { months: Array<{ month: string; visits: number }> };
+    expect(months.months.reduce((n, m) => n + m.visits, 0)).toBe(6);
+    expect(months.months[0].month).toMatch(/^\d{4}-\d{2}$/);
     const years = await (await root.request("/v1/visits/years", {}, env)).json() as { years: unknown[] };
     expect(years.years).toEqual([{ year: "2023", visits: 1, places: 1 }, { year: "2024", visits: 5, places: 4 }]);
     const at = await (await root.request("/v1/visits/at?key=38.898,-77.037", {}, env)).json() as { visits: unknown[] };
@@ -515,6 +523,33 @@ describe("training", () => {
     expect(day.last).toEqual([expect.objectContaining({ day: "2026-11-20", reps: 9 })]);
     await root.request("/v1/training/sets?day=2026-11-24&exercise=Bench&set_number=1", { method: "DELETE" }, env);
     const history = await (await root.request("/v1/training/history?days=3650", {}, env)).json() as { days: Array<{ routine: string }> };
-    expect(history.days).toEqual([expect.objectContaining({ day: "2026-11-20", routine: "Push", sets: 1 })]);
+    expect(history.days).toEqual([expect.objectContaining({ day: "2026-11-20", routine: "Push", sets: 1, volume: 540 })]);
+    expect((history.days[0] as unknown as { started_at: string }).started_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("keeps rep ranges, per-side and timed holds", () => {
+    const [split, plank] = cleanExercises([
+      { name: "Split squat", sets: 3, reps: 8, reps_max: 12, per_side: true },
+      { name: "Plank", sets: 3, reps: 1, seconds: 30, seconds_max: 45 },
+    ]);
+    expect(split).toMatchObject({ reps: 8, reps_max: 12, per_side: true, seconds: null });
+    expect(plank).toMatchObject({ seconds: 30, seconds_max: 45, per_side: false });
+    expect(cleanExercises([{ name: "Row", reps: 10, reps_max: 6 }])[0].reps_max).toBeNull();   // a "range" that goes down isn't one
+  });
+
+  it("walks a rotation: in order, a rest day takes one day, today stays on today", () => {
+    const work = (id: string) => ({ id, weekdays: [], exercises: [{ name: "x" }] });
+    const rest = (id: string) => ({ id, weekdays: [], exercises: [] });
+    const plan = [work("d1"), work("d2"), rest("rest"), work("d3"), work("d4")];
+    const at = (routine_id: string, day: string) => ({ routine_id, day });
+    expect(nextInRotation(plan, null, "2026-11-24")).toEqual({ routine_id: "d1", state: "first" });
+    expect(nextInRotation(plan, at("d1", "2026-11-24"), "2026-11-24")).toEqual({ routine_id: "d1", state: "doing" });
+    // Day 2 doesn't show up until Day 1 is done, however long it's been.
+    expect(nextInRotation(plan, at("d1", "2026-11-20"), "2026-11-24")).toEqual({ routine_id: "d2", state: "next" });
+    expect(nextInRotation(plan, at("d2", "2026-11-25"), "2026-11-26")).toEqual({ routine_id: "rest", state: "rest" });
+    expect(nextInRotation(plan, at("d2", "2026-11-25"), "2026-11-27")).toEqual({ routine_id: "d3", state: "next" });
+    expect(nextInRotation(plan, at("d4", "2026-11-29"), "2026-11-30")).toEqual({ routine_id: "d1", state: "next" });
+    // Weekday routines aren't part of the rotation.
+    expect(nextInRotation([{ id: "mon", weekdays: [1], exercises: [{}] }], null, "2026-11-24")).toEqual({ routine_id: null, state: "none" });
   });
 });
