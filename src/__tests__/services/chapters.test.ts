@@ -79,6 +79,11 @@ describe("chapters", () => {
       expect(out[0]).toMatchObject({ key: "saved:1", name: "Home", hours: 150, n: 15, saved: "home" });
     });
 
+    it("a place marked hidden drops out", () => {
+      const out = applySaved([row("2020-01", realHome, 100, 10, "A road")], [saved({ kind: "hidden" })]);
+      expect(out).toHaveLength(0);
+    });
+
     it("only in the months it applies", () => {
       expect(savedCovers(saved({ starts_on: "2017-01", ends_on: "2024-07" }), "2024-08")).toBe(false);
       expect(savedCovers(saved({ starts_on: "2017-01", ends_on: "2024-07-15" }), "2024-07")).toBe(true);

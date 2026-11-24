@@ -29,6 +29,8 @@ export function applySaved(rows: MonthPlace[], saved: SavedPlace[]): MonthPlace[
     const p = saved
       .filter((s) => savedCovers(s, r.mo) && km(r, { lat: s.latitude, lng: s.longitude }) * 1000 <= s.radius_m)
       .sort((a, b) => a.radius_m - b.radius_m)[0];
+    // A place you marked as not a place (a road, a car park): its time doesn't count.
+    if (p?.kind === "hidden") continue;
     const row = p ? { ...r, key: `saved:${p.id}`, name: p.name, lat: p.latitude, lng: p.longitude, saved: p.kind } : r;
     const id = `${row.mo}|${row.key}`;
     const into = merged.get(id);

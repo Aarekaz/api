@@ -288,25 +288,27 @@ openApiRegistry.registerPath({
 const savedPlace = z.object({
   id: z.number().int(),
   name: z.string(),
-  kind: z.enum(["home", "work", "school", "gym", "other"]),
+  kind: z.enum(["home", "work", "school", "gym", "other", "hidden"]),
   latitude: z.number(),
   longitude: z.number(),
   radius_m: z.number().int().openapi({ description: "Everything within this many metres is this place (25 to 2000)" }),
   address: z.string().nullable(),
   starts_on: z.string().nullable().openapi({ description: "First month it applies, YYYY-MM; null for always" }),
   ends_on: z.string().nullable().openapi({ description: "Last month it applies, YYYY-MM; null for still" }),
+  note: z.string().nullable().openapi({ description: "A line of context: \"Dad's office\"" }),
   created_at: z.string(),
   updated_at: z.string(),
 });
 const savedPlaceInput = z.object({
   name: z.string().min(1).max(120),
-  kind: z.enum(["home", "work", "school", "gym", "other"]).optional(),
+  kind: z.enum(["home", "work", "school", "gym", "other", "hidden"]).optional(),
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
   radius_m: z.number().int().min(25).max(2000).optional(),
   address: z.string().max(300).nullable().optional(),
   starts_on: z.string().nullable().optional(),
   ends_on: z.string().nullable().optional(),
+  note: z.string().max(500).nullable().optional(),
 });
 
 openApiRegistry.registerPath({
@@ -495,7 +497,10 @@ app.get("/places", async (c) => {
       SELECT key, AVG(latitude) AS lat, AVG(longitude) AS lng, COUNT(*) AS visits,
         CAST(SUM(CASE WHEN departed_at IS NOT NULL
           THEN MIN(MAX((julianday(departed_at) - julianday(arrived_at)) * 1440, 0), 1440) ELSE 0 END) AS INTEGER) AS minutes,
-        MIN(arrived_at) AS first, MAX(arrived_at) AS last
+        MIN(arrived_at) AS first, MAX(arrived_at) AS last,
+        SUM(CASE WHEN source = 'photos' THEN 1 ELSE 0 END) AS photos,
+        SUM(CASE WHEN departed_at IS NOT NULL AND (julianday(departed_at) - julianday(arrived_at)) * 1440 < 10 THEN 1 ELSE 0 END) AS brief,
+        SUM(CASE WHEN (julianday(departed_at) - julianday(arrived_at)) * 24 >= 6 THEN 1 ELSE 0 END) AS long_stays
       FROM v GROUP BY key),
     p AS (SELECT key, place, COUNT(*) AS n FROM v WHERE place IS NOT NULL GROUP BY key, place),
     top AS (SELECT key, place FROM p AS a WHERE n = (SELECT MAX(n) FROM p AS b WHERE b.key = a.key) GROUP BY key),
@@ -726,7 +731,7 @@ app.get("/trips", async (c) => {
 });
 
 // Places you define: a centre and a radius (see services/chapters.ts applySaved).
-const KINDS = ["home", "work", "school", "gym", "other"];
+const KINDS = ["home", "work", "school", "gym", "other", "hidden"];
 const month = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}(-\d{2})?$/.test(v) ? v.slice(0, 7) : null);
 
 /** A saved place from a request body; `partial` for a change, where missing fields stay. */
@@ -744,6 +749,7 @@ export function cleanSaved(b: Record<string, unknown>, partial = false) {
   if (b.address !== undefined) out.address = str(b.address, 300);
   if (b.starts_on !== undefined) out.starts_on = month(b.starts_on);
   if (b.ends_on !== undefined) out.ends_on = month(b.ends_on);
+  if (b.note !== undefined) out.note = str(b.note, 500);
   return out;
 }
 
@@ -758,9 +764,9 @@ app.post("/saved", async (c) => {
   if (!p) return c.json({ error: "Send name, latitude and longitude" }, 400);
   const now = new Date().toISOString();
   const row = await c.env.DB.prepare(
-    `INSERT INTO saved_places (name, kind, latitude, longitude, radius_m, address, starts_on, ends_on, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
-  ).bind(p.name, p.kind, p.latitude, p.longitude, p.radius_m, p.address ?? null, p.starts_on ?? null, p.ends_on ?? null, now, now).first();
+    `INSERT INTO saved_places (name, kind, latitude, longitude, radius_m, address, starts_on, ends_on, note, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+  ).bind(p.name, p.kind, p.latitude, p.longitude, p.radius_m, p.address ?? null, p.starts_on ?? null, p.ends_on ?? null, p.note ?? null, now, now).first();
   return c.json(row);
 });
 
