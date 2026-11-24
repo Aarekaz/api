@@ -245,3 +245,24 @@ describe("links: notes and tags", () => {
     expect(unnoted).toMatchObject({ note: null, color: "blue" });
   });
 });
+
+describe("links: refetching never loses text", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps the article when the site serves a stripped page", async () => {
+    const long = Array.from({ length: 30 }, (_, i) => `<p>Paragraph ${i} of a long article that is well worth keeping around for later reading.</p>`).join("");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(`<html><head><meta property="og:title" content="The Long One"></head><body><article>${long}</article></body></html>`,
+      { headers: { "content-type": "text/html" } })));
+    const { send, save } = setup();
+    const link = await save("https://example.com/long");
+    const before = await (await send(`/v1/links/${link.id}`)).json() as { body?: string; title: string };
+
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(`<html><head><title>Someone on X</title></head><body><p>tiny</p></body></html>`,
+      { headers: { "content-type": "text/html" } })));
+    await send(`/v1/links/${link.id}/refetch`, "POST");
+    const after = await (await send(`/v1/links/${link.id}`)).json() as { body?: string; title: string };
+    expect((before.body ?? "").length).toBeGreaterThan(600);
+    expect(after.title).toBe("The Long One");
+    expect((after.body ?? "").length).toBe((before.body ?? "").length);
+  });
+});

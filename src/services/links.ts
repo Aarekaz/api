@@ -324,6 +324,106 @@ export async function setLinkNote(env: Env, id: string, note: string | null, now
 }
 
 /** Fetches the page and stores its readable text. Failures are recorded, not thrown. */
+/**
+ * Titles sites give their pages for sharing, cleaned for a reading list:
+ * `Dhravya Shah on X: "Jev changes a lot" / X` becomes the quoted words.
+ */
+export function cleanTitle(title: string): string {
+  const x = title.match(/^(.+?) on (?:X|Twitter): ["“](.+)["”]\s*\/\s*(?:X|Twitter)$/s);
+  if (x) return x[2].trim();
+  return title.trim();
+}
+
+/** The words of a post as X's own embed gives them: paragraphs, no media links. */
+export function postText(oembedHtml: string): string {
+  const p = oembedHtml.match(/<p[^>]*>([\s\S]*?)<\/p>/i)?.[1] ?? "";
+  return decodeEntities(p
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<a[^>]*>(?:pic\.twitter\.com|https?:\/\/t\.co)[^<]*<\/a>/gi, "")
+    .replace(/<a[^>]*>([^<]*)<\/a>/gi, "$1")
+    .replace(/<[^>]+>/g, ""))
+    .replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** A short title from a post's first line, cut at a word. */
+export function titleFromText(text: string, max = 90): string {
+  const first = (text.split("\n").find((l) => l.trim().length > 0) ?? "").trim();
+  if (first.length <= max) return first.replace(/[:：]\s*$/, "");
+  const cut = first.slice(0, max);
+  return cut.slice(0, Math.max(cut.lastIndexOf(" "), 40)).replace(/[,;:—-]\s*$/, "") + "…";
+}
+
+/** "Some-Paper_v2.pdf" → "Some Paper v2". */
+export function titleFromPdfUrl(url: string): string | null {
+  try {
+    const name = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() ?? "");
+    const base = name.replace(/\.pdf$/i, "").replace(/[-_]+/g, " ").trim();
+    return base.length >= 3 && !/^\d+(\.\d+)?(v\d+)?$/.test(base) ? base : null;
+  } catch { return null; }
+}
+
+interface OEmbed { title?: string; author_name?: string; html?: string; thumbnail_url?: string }
+
+async function oembed(endpoint: string, url: string): Promise<OEmbed | null> {
+  try {
+    const r = await fetch(`${endpoint}?url=${encodeURIComponent(url)}&format=json&omit_script=1&dnt=true`,
+      { redirect: "follow", signal: AbortSignal.timeout(8_000) });
+    return r.ok ? await r.json() as OEmbed : null;
+  } catch { return null; }
+}
+
+/** What a non-article is, from the place that knows best (X's and YouTube's embeds, the file name, arXiv). */
+async function describeNonArticle(link: LinkRow): Promise<{ title: string; site?: string; body?: string; image?: string; excerpt?: string } | null> {
+  const host = new URL(link.url).hostname.replace(/^www\./, "");
+  const kind = linkKind(link.url, link.fetch_error);
+  if (kind === "post" && /^(x\.com|twitter\.com)$/.test(host)) {
+    const o = await oembed("https://publish.twitter.com/oembed", link.url);
+    if (!o?.html) return null;
+    const text = postText(o.html);
+    const truncated = text.endsWith("…");
+    const body = text + (truncated ? `\n\n[Read the whole post on X](${link.url})` : "");
+    return { title: titleFromText(text) || `${o.author_name ?? "A post"} on X`, site: o.author_name, body, excerpt: text.slice(0, 280) };
+  }
+  if (kind === "video") {
+    const endpoint = /youtu/.test(host) ? "https://www.youtube.com/oembed" : /vimeo\.com$/.test(host) ? "https://vimeo.com/api/oembed.json" : null;
+    const o = endpoint ? await oembed(endpoint, link.url) : null;
+    return o?.title ? { title: o.title, site: o.author_name, image: o.thumbnail_url } : null;
+  }
+  if (kind === "pdf") {
+    const arxiv = link.url.match(/arxiv\.org\/pdf\/([\w.\/-]+?)(?:\.pdf)?$/i)?.[1];
+    if (arxiv) {
+      try {
+        const r = await fetch(`https://arxiv.org/abs/${arxiv}`, { signal: AbortSignal.timeout(8_000) });
+        const t = r.ok ? extractArticle(await r.text(), `https://arxiv.org/abs/${arxiv}`).title : null;
+        if (t) return { title: t.replace(/^\[[^\]]+\]\s*/, ""), site: "arXiv" };
+      } catch { /* fall through to the file name */ }
+    }
+    const fromName = titleFromPdfUrl(link.url);
+    return fromName ? { title: fromName } : null;
+  }
+  return null;
+}
+
+/** Fills in what a page fetch can't: posts' words, videos' titles, PDFs' names. Never fails the save. */
+async function enrich(env: Env, id: string): Promise<void> {
+  const link = await getLink(env, id);
+  const extra = await describeNonArticle(link);
+  if (!extra) return;
+  const fm = link.frontmatter_json ? JSON.parse(link.frontmatter_json) : {};
+  const body = link.body ?? "";
+  // A long X post ("article") already came in whole, with a clean title: only add who wrote it.
+  const alreadyWhole = body.length > 600;
+  const title = alreadyWhole && extra.body ? link.title : extra.title;
+  const newBody = extra.body && !alreadyWhole ? `${extra.body}\n\n${body}`.trim() : body;
+  const image = extra.image && !fm.image ? { image: extra.image } : {};
+  await env.DB.batch([
+    env.DB.prepare("UPDATE documents SET title = ?, body = ?, frontmatter_json = ?, version = version + 1 WHERE id = ?")
+      .bind(title.slice(0, 300), newBody, JSON.stringify({ ...fm, ...image }), id),
+    env.DB.prepare("UPDATE links SET site = COALESCE(?, site), excerpt = COALESCE(?, excerpt) WHERE document_id = ?")
+      .bind(extra.site ?? null, alreadyWhole ? null : extra.excerpt ?? null, id),
+  ]);
+}
+
 export async function fetchArticle(env: Env, id: string, now = new Date()): Promise<LinkRow> {
   const link = await getLink(env, id);
   const stamp = now.toISOString();
@@ -337,8 +437,13 @@ export async function fetchArticle(env: Env, id: string, now = new Date()): Prom
     const type = response.headers.get("content-type") ?? "";
     if (!/html|xml/i.test(type)) throw new Error(`Not a web page (${type.split(";")[0] || "unknown type"})`);
     const html = (await response.text()).slice(0, 3_000_000);
-    const article = extractArticle(html, response.url || link.url);
-    const title = (article.title ?? link.title).slice(0, 300);
+    const fresh = extractArticle(html, response.url || link.url);
+    // Never trade good text for worse: some sites (X especially) serve a stripped page now and then.
+    const had = (link.body ?? "").length;
+    const worse = had > 600 && fresh.markdown.length < had * 0.5;
+    const article = worse ? { ...fresh, markdown: link.body ?? "", title: link.title, excerpt: link.excerpt ?? fresh.excerpt,
+      words: Math.max(fresh.words, (link.reading_minutes ?? 1) * 230) } : fresh;
+    const title = cleanTitle(article.title ?? link.title).slice(0, 300);
     await env.DB.batch([
       env.DB.prepare("UPDATE documents SET title = ?, body = ?, frontmatter_json = ?, updated_at = ?, version = version + 1 WHERE id = ?")
         .bind(title, article.markdown,
@@ -352,6 +457,7 @@ export async function fetchArticle(env: Env, id: string, now = new Date()): Prom
     const message = error instanceof Error ? error.message : String(error);
     await env.DB.prepare("UPDATE links SET fetch_error = ?, fetched_at = ? WHERE document_id = ?").bind(message.slice(0, 300), stamp, id).run();
   }
+  try { await enrich(env, id); } catch { /* the page as fetched is still saved */ }
   return getLink(env, id);
 }
 
