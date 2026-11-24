@@ -8,6 +8,7 @@ import type { Env } from "../../types/env";
 import documentsRoute, { captureRoute, searchRoute } from "../../routes/documents";
 import syncStatusRoute from "../../routes/sync-status";
 import linksRoute from "../../routes/links";
+import journalRoute from "../../routes/journal";
 import highlightsRoute from "../../routes/highlights";
 import visitsRoute, { findTrips } from "../../routes/visits";
 import { createMusicRoute } from "../../routes/music";
@@ -551,5 +552,39 @@ describe("training", () => {
     expect(nextInRotation(plan, at("d4", "2026-11-29"), "2026-11-30")).toEqual({ routine_id: "d1", state: "next" });
     // Weekday routines aren't part of the rotation.
     expect(nextInRotation([{ id: "mon", weekdays: [1], exercises: [{}] }], null, "2026-11-24")).toEqual({ routine_id: null, state: "none" });
+  });
+});
+
+describe("journal", () => {
+  it("keeps moments with when, where and how you felt; locked; edits need the version", async () => {
+    const env = { DB: d1() } as Env;
+    const root = new Hono<{ Bindings: Env }>();
+    root.route("/v1/journal", journalRoute);
+    const send = (path: string, method: string, body?: unknown) =>
+      root.request(path, { method, body: body === undefined ? undefined : JSON.stringify(body), headers: { "Content-Type": "application/json" } }, env);
+
+    const first = await (await send("/v1/journal", "POST", { body: "Morning run by the river.", happened_at: "2026-11-24T07:10:00-05:00",
+      place: { name: "Potomac", lat: 38.88, lng: -77.05 }, mood: "great" })).json() as { id: string; version: number; happened_at: string };
+    expect(first.happened_at).toBe("2026-11-24T12:10:00.000Z");
+    await send("/v1/journal", "POST", { body: "Late thoughts.", happened_at: "2026-11-24T23:30:00-05:00" });
+    const bad = await send("/v1/journal", "POST", { body: "x", mood: "ecstatic" });
+    expect(bad.status).toBe(400);
+    expect((await bad.json() as { error: { code: string } }).error.code).toBe("invalid");
+
+    let list = await (await send("/v1/journal?from=2026-11-24T00:00:00Z", "GET")).json() as { items: Array<{ body: string; mood: string | null }> };
+    expect(list.items.map((i) => i.body)).toEqual(["Late thoughts.", "Morning run by the river."]);
+    expect(list.items[1].mood).toBe("great");
+
+    const doc = await env.DB.prepare("SELECT visibility FROM documents WHERE id = ?").bind(first.id).first<{ visibility: string }>();
+    expect(doc?.visibility).toBe("locked");
+
+    const edited = await (await send(`/v1/journal/${first.id}`, "PATCH", { version: first.version, body: "Morning run by the river. Cold." })).json() as { body: string; place: { name: string }; version: number };
+    expect(edited).toMatchObject({ body: "Morning run by the river. Cold.", place: { name: "Potomac" } });
+    const stale = await send(`/v1/journal/${first.id}`, "PATCH", { version: first.version, body: "old" });
+    expect(stale.status).toBe(409);
+
+    await send(`/v1/journal/${first.id}`, "DELETE");
+    list = await (await send("/v1/journal", "GET")).json() as typeof list;
+    expect(list.items).toHaveLength(1);
   });
 });
