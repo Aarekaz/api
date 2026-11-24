@@ -55,6 +55,8 @@ import highlightsRoute from "./routes/highlights";
 import visitsRoute from "./routes/visits";
 import trainingRoute from "./routes/training";
 import recipesRoute from "./routes/recipes";
+import sectionsRoute from "./routes/sections";
+import siteRoute from "./routes/site";
 import { maybeRunVaultBackup } from "./services/backup";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -197,6 +199,8 @@ app.route("/v1/highlights", highlightsRoute);
 app.route("/v1/visits", visitsRoute);
 app.route("/v1/training", trainingRoute);
 app.route("/v1/recipes", recipesRoute);
+app.route("/v1/sections", sectionsRoute);
+app.route("/v1/site", siteRoute);
 app.route("/v1/crowd", crowdRoute); // public — un-gated via AUTH_SKIP_PATHS
 
 // Export Cloudflare Worker handlers
