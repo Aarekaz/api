@@ -84,6 +84,22 @@ export function nextInRotation(
   return { routine_id: rotation[i].id, state: "next" };
 }
 
+/**
+ * Today's workout once your own pick is counted: a set already ticked today
+ * wins (you're doing it), else the day you picked, else the plan. The plan's
+ * own answer stays in planned_routine_id so a client can offer "back to plan".
+ */
+export function withPick(
+  planned: { routine_id: string | null; state: "first" | "doing" | "next" | "rest" | "none" },
+  routines: RotationRoutine[], pick: string | null,
+): { routine_id: string | null; state: "first" | "doing" | "next" | "rest" | "none"; picked: boolean; planned_routine_id: string | null } {
+  const base = { ...planned, picked: false, planned_routine_id: planned.routine_id };
+  if (planned.state === "doing" || !pick || pick === planned.routine_id) return base;
+  const r = routines.find((x) => x.id === pick);
+  if (!r) return base;
+  return { routine_id: r.id, state: r.exercises.length === 0 ? "rest" : "next", picked: true, planned_routine_id: planned.routine_id };
+}
+
 const present = (r: Record<string, unknown>) => ({
   id: r.id, name: r.name, weekdays: String(r.weekdays || "").split(",").filter(Boolean).map(Number),
   exercises: JSON.parse(String(r.exercises_json || "[]")), position: r.position, updated_at: r.updated_at,
@@ -145,9 +161,25 @@ openApiRegistry.registerPath({
   responses: okResponses(z.object({
     routine_id: z.string().nullable(),
     state: z.enum(["first", "doing", "next", "rest", "none"]),
+    picked: z.boolean().openapi({ description: "True when today is a day you picked instead of the plan" }),
+    planned_routine_id: z.string().nullable().openapi({ description: "What the plan says, whatever you picked" }),
     last_day: day.nullable(),
     last_routine_id: z.string().nullable(),
   })),
+});
+
+openApiRegistry.registerPath({
+  method: "put",
+  path: "/v1/training/pick",
+  summary: "Pick today's workout (or rest) instead of the plan",
+  security: authSecurity,
+  request: {
+    body: openApiJsonRequestBody(z.object({
+      day: day.openapi({ description: "The phone's local date" }),
+      routine_id: z.string().max(64).nullable().openapi({ description: "null puts the day back on the plan" }),
+    })),
+  },
+  responses: okResponses(z.object({ ok: z.boolean(), day: day, routine_id: z.string().nullable() })),
 });
 
 openApiRegistry.registerPath({
@@ -268,7 +300,24 @@ app.get("/next", async (c) => {
   const last = await c.env.DB.prepare(
     "SELECT day, routine_id FROM training_sets WHERE routine_id IS NOT NULL AND day <= ? ORDER BY day DESC, done_at DESC LIMIT 1",
   ).bind(today).first<{ day: string; routine_id: string }>();
-  return c.json({ ...nextInRotation(routines, last ?? null, today), last_day: last?.day ?? null, last_routine_id: last?.routine_id ?? null });
+  const pick = await c.env.DB.prepare("SELECT routine_id FROM training_picks WHERE day = ?").bind(today).first<{ routine_id: string }>();
+  const planned = nextInRotation(routines, last ?? null, today);
+  return c.json({ ...withPick(planned, routines, pick?.routine_id ?? null), last_day: last?.day ?? null, last_routine_id: last?.routine_id ?? null });
+});
+
+/** Do another day today (or rest). { day, routine_id } — routine_id null goes back to the plan. */
+app.put("/pick", async (c) => {
+  const b = (await parseJson(c.req.raw)) as Record<string, unknown> | null;
+  if (!b || !isDay(b.day)) return c.json({ error: "Send day (2026-11-24) and routine_id (or null for the plan)" }, 400);
+  const id = str(b.routine_id, 64);
+  if (id) {
+    await c.env.DB.prepare(
+      "INSERT INTO training_picks (day, routine_id, updated_at) VALUES (?, ?, ?) ON CONFLICT(day) DO UPDATE SET routine_id = excluded.routine_id, updated_at = excluded.updated_at",
+    ).bind(b.day, id, new Date().toISOString()).run();
+  } else {
+    await c.env.DB.prepare("DELETE FROM training_picks WHERE day = ?").bind(b.day).run();
+  }
+  return c.json({ ok: true, day: b.day, routine_id: id ?? null });
 });
 
 /** Create or replace a routine. { id?, name, weekdays: [1..7], exercises: [...] } */
