@@ -114,6 +114,13 @@ export const SHOW_SHELF_STATUSES = [
   "dropped",
 ] as const;
 
+// Anime follows AniList's lists (planning, watching, completed, paused,
+// dropped), spelled with the show statuses the site already knows.
+export const ANIME_SHELF_STATUSES = SHOW_SHELF_STATUSES;
+
+/** Types the Library tracks. "anime" is app-only for now (see routes/shelf.ts). */
+export const SHELF_MEDIA_TYPES = ["book", "movie", "show", "anime"] as const;
+
 export const SHELF_STATUSES = [
   "library",
   "reading",
@@ -134,6 +141,7 @@ function shelfKindForType(type: string) {
   if (normalized === "book") return "book";
   if (normalized === "movie" || normalized === "film") return "movie";
   if (normalized === "show" || normalized === "tv" || normalized === "series") return "show";
+  if (normalized === "anime") return "anime";
   return "other";
 }
 
@@ -142,7 +150,40 @@ export function statusMatchesShelfType(type: string, status: string) {
   if (kind === "book") return BOOK_SHELF_STATUSES.includes(status as typeof BOOK_SHELF_STATUSES[number]);
   if (kind === "movie") return MOVIE_SHELF_STATUSES.includes(status as typeof MOVIE_SHELF_STATUSES[number]);
   if (kind === "show") return SHOW_SHELF_STATUSES.includes(status as typeof SHOW_SHELF_STATUSES[number]);
+  if (kind === "anime") return ANIME_SHELF_STATUSES.includes(status as typeof ANIME_SHELF_STATUSES[number]);
   return false;
+}
+
+/** The status that means "finished" for a shelf type (books and shows say completed, movies watched). */
+export function finishedStatusFor(type: string): string | null {
+  const kind = shelfKindForType(type);
+  if (kind === "movie") return "watched";
+  if (kind === "book" || kind === "show" || kind === "anime") return "completed";
+  return null;
+}
+
+/** The status that means "in progress" for a shelf type. */
+export function activeStatusFor(type: string): string | null {
+  const kind = shelfKindForType(type);
+  if (kind === "book") return "reading";
+  if (kind === "movie" || kind === "show" || kind === "anime") return "watching";
+  return null;
+}
+
+/** The status that means "want to" for a shelf type. */
+export function queuedStatusFor(type: string): string | null {
+  const kind = shelfKindForType(type);
+  if (kind === "book") return "want_to_read";
+  if (kind === "movie" || kind === "show" || kind === "anime") return "want_to_watch";
+  return null;
+}
+
+/** Paused and dropped, where the type has them (movies have neither; books say dnf). */
+export function stoppedStatusFor(type: string, kind: "paused" | "dropped"): string | null {
+  const shelfKind = shelfKindForType(type);
+  if (kind === "paused") return shelfKind === "movie" || shelfKind === "other" ? null : "paused";
+  if (shelfKind === "book") return "dnf";
+  return shelfKind === "show" || shelfKind === "anime" ? "dropped" : null;
 }
 
 export const shelfItemBaseSchema = z.object({
@@ -189,6 +230,34 @@ export const shelfItemSchema = shelfItemBaseSchema.superRefine((data, ctx) => {
     message: `Invalid ${data.type} shelf status: ${data.status}`,
   });
 });
+
+export const SHELF_LOG_KINDS = ["started", "progress", "finished", "paused", "dropped", "want", "rated", "note"] as const;
+
+/** One diary entry, sent to POST /v1/shelf/:id/log. Everything but kind is optional. */
+export const shelfLogSchema = z.object({
+  kind: z.enum(SHELF_LOG_KINDS),
+  logged_at: dateString.optional(),
+  status: shelfStatusSchema.optional(),
+  progress_current: z.number().min(0).optional(),
+  progress_total: z.number().min(0).optional(),
+  progress_unit: z.string().max(32).optional(),
+  season: z.number().int().min(0).max(1000).optional(),
+  episode: z.number().int().min(0).max(100000).optional(),
+  rating: z.number().min(0).max(10).optional(),
+  rating_scale: z.union([z.literal(5), z.literal(10)]).optional(),
+  note: z.string().max(20000).optional(),
+  rewatch: z.boolean().optional(),
+});
+
+/** Fixing a diary entry later: its date, rating, note or rewatch mark. */
+export const shelfLogPatchSchema = z
+  .object({
+    logged_at: dateString.optional(),
+    rating: z.number().min(0).max(10).nullable().optional(),
+    note: z.string().max(20000).nullable().optional(),
+    rewatch: z.boolean().optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, { message: "At least one field must be provided" });
 
 export const photoSchema = z.object({
   title: z.string().optional(),

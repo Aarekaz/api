@@ -4,10 +4,11 @@ import type { Env } from "../types/env";
 import {
   openApiRegistry,
   genericArraySchema,
+  genericObjectSchema,
   okResponses,
   authSecurity,
 } from "../schemas/openapi";
-import { normalizeTmdbMediaType, searchTmdbMedia } from "../services/tmdb";
+import { getTmdbTvDetails, normalizeTmdbMediaType, searchTmdbMedia } from "../services/tmdb";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -48,6 +49,31 @@ app.get("/search", async (c) => {
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : "TMDB search failed" },
+      502
+    );
+  }
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/media/tv/{id}",
+  summary: "A TMDB show's seasons and episode counts",
+  security: authSecurity,
+  responses: okResponses(genericObjectSchema),
+});
+
+app.get("/tv/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ error: "Invalid id" }, 400);
+  }
+  try {
+    const details = await getTmdbTvDetails(c.env, id);
+    if (!details) return c.json({ error: "Show not found" }, 404);
+    return c.json(details);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "TMDB request failed" },
       502
     );
   }

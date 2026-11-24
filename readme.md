@@ -222,6 +222,16 @@ List endpoints support `?limit&offset&search&sort&tags&start&end` where applicab
 - `PUT /v1/shelf/{id}`
 - `PATCH /v1/shelf/{id}`
 - `DELETE /v1/shelf/{id}`
+- `POST /v1/shelf/{id}/enrich` (TMDB poster and metadata)
+- `GET /v1/shelf/diary` (Library diary, newest first; `type`, `item_id`, `kind`, `start`, `end`)
+- `POST /v1/shelf/{id}/log` (log a start, progress, finish, pause, drop or rating; moves the item along)
+- `PATCH /v1/shelf/log/{logId}`, `DELETE /v1/shelf/log/{logId}`
+- `GET /v1/media/search?type=movie|show&q=`, `GET /v1/media/tv/{id}` (seasons and episode counts)
+
+Shelf types: `book`, `movie`, `show`, `anime` (plus `quote`, `article`, `visual`, `wallpaper`).
+`GET /v1/shelf` without `type` lists every type except `anime`, as it did before
+anime existed (the public site reads it that way); ask for anime with `type=anime`,
+a comma list (`type=book,movie,show,anime`) or `type=all`.
 
 ### Location
 

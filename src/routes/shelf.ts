@@ -6,7 +6,18 @@ import { nowIso } from "../utils/date";
 import { parseJson, mapJsonField } from "../utils/json";
 import { validateBody } from "../utils/validation";
 import { normalizeShelfItem } from "../utils/normalizers";
-import { shelfItemBaseSchema, shelfItemSchema, statusMatchesShelfType } from "../schemas/content";
+import {
+  SHELF_MEDIA_TYPES,
+  activeStatusFor,
+  finishedStatusFor,
+  queuedStatusFor,
+  shelfItemBaseSchema,
+  shelfItemSchema,
+  shelfLogPatchSchema,
+  shelfLogSchema,
+  statusMatchesShelfType,
+  stoppedStatusFor,
+} from "../schemas/content";
 import { shelfResponseSchema } from "../schemas/responses";
 import { listQuerySchema } from "../schemas/common";
 import { getTmdbMedia, normalizeTmdbMediaType, searchTmdbMedia, type TmdbCandidate } from "../services/tmdb";
@@ -36,9 +47,26 @@ import {
 
 const app = new Hono<{ Bindings: Env }>();
 
-const shelfPatchSchema = shelfItemBaseSchema.partial().refine((data) => Object.keys(data).length > 0, {
-  message: "At least one field must be provided",
-});
+// A PATCH may also clear a field with null (a rating, a date, a note).
+const clearable = shelfItemBaseSchema.shape;
+const shelfPatchSchema = shelfItemBaseSchema
+  .extend({
+    author: clearable.author.unwrap().nullable(),
+    note: clearable.note.unwrap().nullable(),
+    rating: clearable.rating.unwrap().nullable(),
+    rating_scale: clearable.rating_scale.unwrap().nullable(),
+    started_at: clearable.started_at.unwrap().nullable(),
+    completed_at: clearable.completed_at.unwrap().nullable(),
+    last_watched_at: clearable.last_watched_at.unwrap().nullable(),
+    progress_current: clearable.progress_current.unwrap().nullable(),
+    progress_total: clearable.progress_total.unwrap().nullable(),
+    progress_unit: clearable.progress_unit.unwrap().nullable(),
+    status: clearable.status.unwrap().nullable(),
+  })
+  .partial()
+  .refine((data) => Object.keys(data).length > 0, {
+    message: "At least one field must be provided",
+  });
 
 const shelfEnrichSchema = z.object({
   tmdb_id: z.number().int().positive().optional(),
@@ -48,8 +76,56 @@ const shelfEnrichSchema = z.object({
 });
 
 const shelfQuerySchema = listQuerySchema.extend({
-  type: z.enum(["book", "movie", "show"]).optional(),
+  type: z
+    .string()
+    .optional()
+    .describe(
+      'One type ("book", "movie", "show", "anime", "quote", ...), a comma list, or "all". ' +
+        'Without it every type except "anime" is listed, exactly as before anime existed.'
+    ),
 });
+
+const shelfDiaryQuerySchema = listQuerySchema.extend({
+  type: z.string().optional(),
+  item_id: z.string().optional(),
+  kind: z.string().optional(),
+});
+
+/**
+ * Types left out of an unfiltered GET /v1/shelf. The public site reads the
+ * shelf without a type and sorts items into its own sections; "anime" is new
+ * and only the apps know it, so it stays out of that default list and is
+ * returned only when asked for (type=anime, a list naming it, or type=all).
+ */
+const OPT_IN_TYPES = ["anime"];
+
+const SHELF_TYPE_PATTERN = /^[a-z_]{1,32}$/;
+
+function addShelfTypeFilter(filters: ReturnType<typeof createFilterBuilder>, raw: string | undefined) {
+  const value = raw?.trim().toLowerCase();
+  if (!value) {
+    filters.clauses.push(`type NOT IN (${OPT_IN_TYPES.map(() => "?").join(", ")})`);
+    filters.params.push(...OPT_IN_TYPES);
+    return;
+  }
+  if (value === "all") return;
+  const types = [...new Set(value.split(",").map((part) => part.trim()).filter(Boolean))];
+  if (types.length === 1) {
+    // Exactly the old behaviour for a single type (raw value, as the site sends it).
+    filters.clauses.push("type = ?");
+    filters.params.push(raw!.includes(",") ? types[0] : raw!);
+    return;
+  }
+  const safe = types.filter((type) => SHELF_TYPE_PATTERN.test(type));
+  if (safe.length === 0) {
+    filters.clauses.push("1 = 0");
+    return;
+  }
+  filters.clauses.push(`type IN (${safe.map(() => "?").join(", ")})`);
+  filters.params.push(...safe);
+}
+
+const DIARY_TYPES: readonly string[] = SHELF_MEDIA_TYPES;
 
 type ShelfItemInput = z.infer<typeof shelfItemSchema>;
 
@@ -175,6 +251,41 @@ openApiRegistry.registerPath({
   responses: okResponses(genericObjectSchema),
 });
 
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/shelf/diary",
+  summary: "The Library diary: every start, update and finish, newest first",
+  security: authSecurity,
+  request: { query: shelfDiaryQuerySchema },
+  responses: okResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/shelf/{id}/log",
+  summary: "Log a start, progress, finish, pause, drop or rating; updates the item and writes the diary",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(shelfLogSchema) },
+  responses: createdResponses(genericObjectSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "patch",
+  path: "/v1/shelf/log/{logId}",
+  summary: "Fix a diary entry (date, rating, note, rewatch)",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(shelfLogPatchSchema) },
+  responses: okResponses(okUpdatedSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "delete",
+  path: "/v1/shelf/log/{logId}",
+  summary: "Delete a diary entry (the item itself stays)",
+  security: authSecurity,
+  responses: okResponses(okDeletedSchema),
+});
+
 // Route handlers
 app.get("/", async (c) => {
   const query = c.req.query();
@@ -186,10 +297,7 @@ app.get("/", async (c) => {
   addDateRangeFilter(filters, "date_added", start, end);
   addPublishedFilter(filters, query);
 
-  if (query.type) {
-    filters.clauses.push("type = ?");
-    filters.params.push(query.type);
-  }
+  addShelfTypeFilter(filters, query.type);
 
   const orderBy = parseSort(
     sort,
@@ -213,6 +321,260 @@ app.get("/", async (c) => {
   );
   return c.json(results);
 });
+
+function normalizeLogRow(row: JsonRecord): JsonRecord {
+  const { rewatch, published, ...rest } = row;
+  return {
+    ...rest,
+    rewatch: Boolean(rewatch),
+    ...(published === undefined ? {} : { published: published == null ? true : Boolean(published) }),
+  };
+}
+
+function shelfKind(type: string): string {
+  const normalized = type.toLowerCase();
+  if (normalized === "film") return "movie";
+  if (normalized === "tv" || normalized === "series") return "show";
+  return normalized;
+}
+
+function statusForLog(type: string, kind: string): string | null {
+  switch (kind) {
+    case "started":
+    case "progress":
+      return activeStatusFor(type);
+    case "finished":
+      return finishedStatusFor(type);
+    case "paused":
+      return stoppedStatusFor(type, "paused");
+    case "dropped":
+      return stoppedStatusFor(type, "dropped");
+    case "want":
+      return queuedStatusFor(type);
+    default:
+      return null;
+  }
+}
+
+app.get("/diary", async (c) => {
+  const query = c.req.query();
+  const { limit, offset, start, end } = parseListQuery(query);
+  const clauses: string[] = [];
+  const params: (string | number)[] = [];
+
+  const itemId = query.item_id ? parseId(query.item_id) : null;
+  if (query.item_id && !itemId) return c.json({ error: "Invalid item_id" }, 400);
+  if (itemId) {
+    clauses.push("l.item_id = ?");
+    params.push(itemId);
+  }
+  const types = (query.type ?? "")
+    .toLowerCase()
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => DIARY_TYPES.includes(part));
+  if (types.length > 0) {
+    clauses.push(`s.type IN (${types.map(() => "?").join(", ")})`);
+    params.push(...types);
+  }
+  const kinds = (query.kind ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => (shelfLogSchema.shape.kind.options as readonly string[]).includes(part));
+  if (kinds.length > 0) {
+    clauses.push(`l.kind IN (${kinds.map(() => "?").join(", ")})`);
+    params.push(...kinds);
+  }
+  if (start) {
+    clauses.push("l.logged_at >= ?");
+    params.push(start);
+  }
+  if (end) {
+    clauses.push("l.logged_at <= ?");
+    params.push(end);
+  }
+
+  const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+  const rows = await c.env.DB.prepare(
+    `SELECT l.*, s.type AS type, s.title AS title, s.author AS author, s.image_url AS image_url,
+       s.cover_override_url AS cover_override_url, s.status AS item_status, s.published AS published
+     FROM shelf_log l JOIN shelf_items s ON s.id = l.item_id${where}
+     ORDER BY l.logged_at DESC, l.id DESC LIMIT ? OFFSET ?`
+  )
+    .bind(...params, limit, offset)
+    .all();
+
+  return c.json({
+    items: (rows.results ?? []).map((row) => normalizeLogRow(row as JsonRecord)),
+    limit,
+    offset,
+  });
+});
+
+app.patch("/log/:logId", async (c) => {
+  const logId = parseId(c.req.param("logId"));
+  if (!logId) return c.json({ error: "Invalid id" }, 400);
+  const body = await parseJson(c.req.raw);
+  if (body === null) return c.json({ error: "Invalid JSON" }, 400);
+  const validation = validateBody(shelfLogPatchSchema, body);
+  if (!validation.ok) return validation.response;
+
+  const updates: string[] = [];
+  const params: (string | number | null)[] = [];
+  const data = validation.data;
+  if (data.logged_at !== undefined) {
+    updates.push("logged_at = ?");
+    params.push(data.logged_at);
+  }
+  if (data.rating !== undefined) {
+    updates.push("rating = ?");
+    params.push(data.rating);
+  }
+  if (data.note !== undefined) {
+    updates.push("note = ?");
+    params.push(data.note);
+  }
+  if (data.rewatch !== undefined) {
+    updates.push("rewatch = ?");
+    params.push(data.rewatch ? 1 : 0);
+  }
+  const updatedAt = nowIso();
+  updates.push("updated_at = ?");
+  params.push(updatedAt, logId);
+
+  const result = await c.env.DB.prepare(`UPDATE shelf_log SET ${updates.join(", ")} WHERE id = ?`)
+    .bind(...params)
+    .run();
+  if (result.meta.changes === 0) return c.json({ error: "Diary entry not found" }, 404);
+  return c.json({ ok: true, updated_at: updatedAt });
+});
+
+app.delete("/log/:logId", async (c) => {
+  const logId = parseId(c.req.param("logId"));
+  if (!logId) return c.json({ error: "Invalid id" }, 400);
+  const result = await c.env.DB.prepare("DELETE FROM shelf_log WHERE id = ?").bind(logId).run();
+  if (result.meta.changes === 0) return c.json({ error: "Diary entry not found" }, 404);
+  return c.json({ ok: true, id: logId, deleted_at: nowIso() });
+});
+
+/**
+ * Log something: "finished it", "on page 120", "watched S2 E5", "rated it".
+ * Writes one diary row and moves the item along in the same call, so the
+ * site (which reads shelf_items) updates by itself.
+ */
+app.post("/:id/log", async (c) => {
+  const id = parseId(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid id" }, 400);
+  const body = await parseJson(c.req.raw);
+  if (body === null) return c.json({ error: "Invalid JSON" }, 400);
+  const validation = validateBody(shelfLogSchema, body);
+  if (!validation.ok) return validation.response;
+  const data = validation.data;
+
+  const existing = await c.env.DB.prepare("SELECT * FROM shelf_items WHERE id = ?").bind(id).first<JsonRecord>();
+  if (!existing) return c.json({ error: "Shelf item not found" }, 404);
+
+  const type = String(existing.type ?? "");
+  if (!DIARY_TYPES.includes(shelfKind(type))) {
+    return c.json({ error: "Only books, movies, shows and anime keep a diary" }, 400);
+  }
+
+  const status = data.status ?? statusForLog(type, data.kind);
+  if (status && !statusMatchesShelfType(type, status)) {
+    return c.json({ error: `Invalid ${type} shelf status: ${status}` }, 400);
+  }
+
+  const loggedAt = data.logged_at ?? nowIso();
+  const updatedAt = nowIso();
+  const updates: string[] = [];
+  const params: (string | number | null)[] = [];
+  const set = (column: string, value: string | number | null) => {
+    updates.push(`${column} = ?`);
+    params.push(value);
+  };
+
+  if (status) set("status", status);
+
+  const total = data.progress_total ?? (typeof existing.progress_total === "number" ? existing.progress_total : null);
+  let current = data.progress_current ?? null;
+  if (current === null && data.kind === "finished" && total !== null && total > 0 && !data.rewatch) current = total;
+  if (current !== null) set("progress_current", current);
+  if (data.progress_total !== undefined) set("progress_total", data.progress_total);
+  if (data.progress_unit !== undefined) set("progress_unit", data.progress_unit);
+
+  if (data.rating !== undefined) {
+    set("rating", data.rating);
+    set("rating_scale", data.rating_scale ?? (typeof existing.rating_scale === "number" ? existing.rating_scale : 5));
+  }
+
+  if (data.season !== undefined || data.episode !== undefined) {
+    const metadata = parseStoredRecord(existing.metadata_json);
+    const previous = isJsonRecord(metadata.progress) ? metadata.progress : {};
+    metadata.progress = compactRecord({
+      ...previous,
+      season: data.season ?? previous.season,
+      episode: data.episode ?? previous.episode,
+      updated_at: loggedAt,
+    });
+    set("metadata_json", mapJsonField(metadata));
+  }
+
+  const isScreen = shelfKind(type) !== "book";
+  if ((data.kind === "started" || data.kind === "progress" || data.kind === "finished") && !existing.started_at) {
+    set("started_at", loggedAt);
+  }
+  if (data.kind === "finished") set("completed_at", loggedAt);
+  if (isScreen && (data.kind === "progress" || data.kind === "finished" || data.kind === "started")) {
+    set("last_watched_at", loggedAt);
+  }
+
+  set("updated_at", updatedAt);
+  params.push(id);
+
+  const insert = c.env.DB.prepare(
+    `INSERT INTO shelf_log (item_id, kind, logged_at, status, progress_current, progress_total, progress_unit,
+       season, episode, rating, note, rewatch, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    id,
+    data.kind,
+    loggedAt,
+    status ?? null,
+    current,
+    data.progress_total ?? null,
+    data.progress_unit ?? null,
+    data.season ?? null,
+    data.episode ?? null,
+    data.rating ?? null,
+    data.note ?? null,
+    data.rewatch ? 1 : 0,
+    updatedAt
+  );
+  const update = c.env.DB.prepare(`UPDATE shelf_items SET ${updates.join(", ")} WHERE id = ?`).bind(...params);
+  const [logResult] = (await c.env.DB.batch([insert, update])) as { meta: { last_row_id?: number } }[];
+
+  const row = await c.env.DB.prepare("SELECT * FROM shelf_items WHERE id = ?").bind(id).first<JsonRecord>();
+  return c.json(
+    {
+      ok: true,
+      log_id: logResult?.meta?.last_row_id ?? null,
+      logged_at: loggedAt,
+      status: status ?? null,
+      item: row ? normalizeShelfItem(row) : null,
+    },
+    201
+  );
+});
+
+function parseStoredRecord(value: unknown): JsonRecord {
+  if (typeof value !== "string" || !value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return isJsonRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 app.post("/:id/enrich", async (c) => {
   const id = parseId(c.req.param("id"));
@@ -337,7 +699,7 @@ app.post("/", async (c) => {
 
   const createdAt = nowIso();
   const dateAdded = validation.data.date_added ?? createdAt;
-  await c.env.DB.prepare(
+  const insert = await c.env.DB.prepare(
     `INSERT INTO shelf_items (
       type, title, quote, author, source, url, note, image_url, drawer, tags_json, date_added, published,
       status, rating, rating_scale, started_at, completed_at, last_watched_at, progress_current, progress_total,
@@ -367,7 +729,9 @@ app.post("/", async (c) => {
     )
     .run();
 
-  return c.json({ ok: true, created_at: createdAt }, 201);
+  // The new id lets the apps log the item straight away ("finished it today").
+  const newId = (insert as { meta?: { last_row_id?: number } })?.meta?.last_row_id;
+  return c.json({ ok: true, ...(newId ? { id: newId } : {}), created_at: createdAt }, 201);
 });
 
 app.put("/:id", async (c) => {
@@ -618,6 +982,9 @@ app.delete("/:id", async (c) => {
   if (result.meta.changes === 0) {
     return c.json({ error: "Shelf item not found" }, 404);
   }
+
+  // Its diary goes with it (the diary only lists entries whose item exists anyway).
+  await c.env.DB.prepare("DELETE FROM shelf_log WHERE item_id = ?").bind(id).run().catch(() => undefined);
 
   return c.json({ ok: true, id, deleted_at: nowIso() });
 });

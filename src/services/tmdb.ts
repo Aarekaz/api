@@ -92,6 +92,73 @@ export async function getTmdbMedia(
   return toCandidate(result, input.type, result.title ?? result.name ?? "", undefined);
 }
 
+export type TmdbTvSeason = {
+  season_number: number;
+  episode_count: number;
+  name?: string;
+  air_date?: string;
+};
+
+export type TmdbTvDetails = {
+  tmdb_id: number;
+  title: string;
+  status?: string;
+  number_of_seasons: number;
+  number_of_episodes: number;
+  /** Regular seasons in order; specials (season 0) are left out. */
+  seasons: TmdbTvSeason[];
+  next_episode_to_air?: { season_number: number; episode_number: number; air_date?: string };
+  poster_url?: string;
+};
+
+/** A show's seasons and episode counts, so the apps can say "S2 E5" and what's next. */
+export async function getTmdbTvDetails(env: Env, tmdbId: number): Promise<TmdbTvDetails | null> {
+  const url = new URL(`${TMDB_API_BASE_URL}/tv/${tmdbId}`);
+  url.searchParams.set("language", "en-US");
+  applyApiKey(url, env);
+
+  type Raw = {
+    id?: number;
+    name?: string;
+    status?: string;
+    number_of_seasons?: number;
+    number_of_episodes?: number;
+    poster_path?: string | null;
+    seasons?: { season_number?: number; episode_count?: number; name?: string; air_date?: string | null }[];
+    next_episode_to_air?: { season_number?: number; episode_number?: number; air_date?: string | null } | null;
+  };
+  const raw = await tmdbFetch<Raw>(url, env);
+  if (!raw?.id) return null;
+  const seasons = (Array.isArray(raw.seasons) ? raw.seasons : [])
+    .filter((season) => Number(season.season_number) > 0 && Number(season.episode_count) > 0)
+    .map((season) => ({
+      season_number: Number(season.season_number),
+      episode_count: Number(season.episode_count),
+      ...(season.name ? { name: season.name } : {}),
+      ...(season.air_date ? { air_date: season.air_date } : {}),
+    }))
+    .sort((left, right) => left.season_number - right.season_number);
+  const next = raw.next_episode_to_air;
+  return {
+    tmdb_id: raw.id,
+    title: raw.name ?? "",
+    ...(raw.status ? { status: raw.status } : {}),
+    number_of_seasons: Number(raw.number_of_seasons) || seasons.length,
+    number_of_episodes: Number(raw.number_of_episodes) || seasons.reduce((sum, season) => sum + season.episode_count, 0),
+    seasons,
+    ...(next && next.season_number && next.episode_number
+      ? {
+          next_episode_to_air: {
+            season_number: next.season_number,
+            episode_number: next.episode_number,
+            ...(next.air_date ? { air_date: next.air_date } : {}),
+          },
+        }
+      : {}),
+    ...(raw.poster_path ? { poster_url: tmdbPosterUrl(raw.poster_path) } : {}),
+  };
+}
+
 async function tmdbFetch<T>(url: URL, env: Env): Promise<T> {
   const headers = new Headers({ accept: "application/json" });
   if (env.TMDB_ACCESS_TOKEN) {
