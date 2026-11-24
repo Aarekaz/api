@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { buildChapters, type MonthCount, type MonthMode, type MonthPlace } from "../services/chapters";
 import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
 import { z } from "zod";
@@ -245,6 +246,34 @@ openApiRegistry.registerPath({
     end: z.string(),
     visits: z.array(visitWithNameSchema),
     journeys: z.array(journeySchema),
+  })),
+});
+
+const chapterPlace = z.object({
+  key: z.string(), name: z.string().nullable(), city: z.string().nullable(), country: z.string().nullable(),
+  lat: z.number(), lng: z.number(), hours: z.number(), visits: z.number().int(),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/visits/chapters",
+  summary: "Your eras: where home was each stretch, where the days went, the places you kept going to, how you got around",
+  security: authSecurity,
+  responses: okResponses(z.object({
+    chapters: z.array(z.object({
+      start: z.string().openapi({ description: "First month, YYYY-MM" }),
+      end: z.string().openapi({ description: "Last month, YYYY-MM" }),
+      months: z.number().int(),
+      city: z.string().nullable(),
+      country: z.string().nullable(),
+      home: chapterPlace,
+      anchor: chapterPlace.nullable().openapi({ description: "Where most days went (school, work), if anywhere stands out" }),
+      haunts: z.array(chapterPlace),
+      visits: z.number().int(),
+      newPlaces: z.number().int(),
+      km: z.number().openapi({ description: "Distance moved on the ground" }),
+      modes: z.array(z.object({ mode: z.string(), km: z.number() })),
+    })),
   })),
 });
 
@@ -525,6 +554,30 @@ export function findTrips(days: AwayDay[]) {
  * three-month window, so moving cities doesn't turn your new life into one long trip.
  * All the heavy lifting is SQL; the Worker only joins the few hundred away-days. ?offset=-300
  */
+/** Your eras: where home was, where the days went, how you got around. See services/chapters.ts. */
+app.get("/chapters", async (c) => {
+  const db = c.env.DB;
+  const [rows, visits, fresh, modes] = await Promise.all([
+    db.prepare(`
+      WITH v AS (SELECT ${KEY} AS key, latitude AS lat, longitude AS lng, substr(arrived_at, 1, 7) AS mo,
+        MIN(MAX((julianday(departed_at) - julianday(arrived_at)) * 24, 0), 24) AS h
+        FROM visits WHERE departed_at IS NOT NULL),
+      mk AS (SELECT mo, key, SUM(h) AS hours, COUNT(*) AS n, AVG(lat) AS lat, AVG(lng) AS lng FROM v GROUP BY mo, key),
+      r AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY mo ORDER BY hours DESC) AS rk FROM mk)
+      SELECT r.mo, r.key, r.hours, r.n, r.lat, r.lng, n.name, n.city, n.country
+      FROM r LEFT JOIN place_names AS n ON n.key = r.key WHERE rk <= 12 ORDER BY r.mo, rk`).all(),
+    db.prepare(`SELECT substr(arrived_at, 1, 7) AS mo, COUNT(*) AS n FROM visits GROUP BY mo`).all(),
+    db.prepare(`SELECT substr(first, 1, 7) AS mo, COUNT(*) AS n FROM (SELECT ${KEY} AS key, MIN(arrived_at) AS first FROM visits GROUP BY key) GROUP BY mo`).all(),
+    db.prepare(`SELECT substr(started_at, 1, 7) AS mo, mode, SUM(distance_m) AS m FROM journeys
+      WHERE distance_m IS NOT NULL AND mode NOT IN ('path', 'unknown') GROUP BY mo, mode`).all(),
+  ]);
+  cached(c, 3600);
+  return c.json({
+    chapters: buildChapters(rows.results as unknown as MonthPlace[], visits.results as unknown as MonthCount[],
+      fresh.results as unknown as MonthCount[], modes.results as unknown as MonthMode[]),
+  });
+});
+
 app.get("/trips", async (c) => {
   const keyV = KEY.replace(/latitude|longitude/g, (m) => "v." + m);
   const { results } = await c.env.DB.prepare(`
