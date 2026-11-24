@@ -256,6 +256,14 @@ const chapterPlace = z.object({
 
 openApiRegistry.registerPath({
   method: "get",
+  path: "/v1/visits/flights",
+  summary: "List every flight (journeys flown), oldest first",
+  security: authSecurity,
+  responses: okResponses(z.object({ flights: z.array(z.record(z.string(), z.unknown())) })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
   path: "/v1/visits/chapters",
   summary: "Your eras: where home was each stretch, where the days went, the places you kept going to, how you got around",
   security: authSecurity,
@@ -554,6 +562,15 @@ export function findTrips(days: AwayDay[]) {
  * three-month window, so moving cities doesn't turn your new life into one long trip.
  * All the heavy lifting is SQL; the Worker only joins the few hundred away-days. ?offset=-300
  */
+/** Every flight, oldest first: the arcs of your travels. */
+app.get("/flights", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    "SELECT * FROM journeys WHERE mode = 'flying' ORDER BY started_at",
+  ).all();
+  cached(c, 3600);
+  return c.json({ flights: results });
+});
+
 /** Your eras: where home was, where the days went, how you got around. See services/chapters.ts. */
 app.get("/chapters", async (c) => {
   const db = c.env.DB;
