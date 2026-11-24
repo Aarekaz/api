@@ -4,6 +4,19 @@ import { z } from "zod";
 import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
 import { ulid } from "../services/documents-core";
+import {
+  authSecurity,
+  dateSchema,
+  imageUploadSchema,
+  okSchema,
+  openApiJsonRequestBody,
+  openApiRegistry,
+  openApiResponse,
+  structuredCreatedResponses,
+  structuredErrorResponses,
+  structuredErrorSchema,
+  structuredOkResponses,
+} from "../schemas/openapi";
 import { createDocument, deleteDocument, DocumentError, getDocument, saveDocument, type DocumentRow } from "../services/documents";
 
 // /v1/journal: your journal as a timeline of moments. Each entry is a locked
@@ -429,6 +442,162 @@ app.delete("/:id", async (c) => {
   } catch (error) {
     return fail(c, error);
   }
+});
+
+// MARK: OpenAPI
+
+const entrySchema = z.object({
+  id: z.string(),
+  body: z.string(),
+  happened_at: z.string(),
+  place: Place.nullable(),
+  mood: Mood.nullable(),
+  state_of_mind: StateOfMind.nullable(),
+  attachments: z.array(Attachment),
+  source: Source,
+  external_id: z.string().nullable(),
+  prompt: z.string().nullable(),
+  words: z.number().int(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  version: z.number().int(),
+});
+const entryParams = z.object({ id: z.string() });
+const zone = {
+  tz: z.string().optional().openapi({ description: "IANA time zone for local days, e.g. America/New_York" }),
+  offset: z.coerce.number().int().optional().openapi({ description: "Minutes from UTC, used when tz is absent" }),
+};
+const conflict = { 409: openApiResponse(structuredErrorSchema, "The entry changed since you loaded it") };
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/journal/photos",
+  summary: "Upload a private journal photo (up to 15 MB)",
+  description: "Put the returned ref in an entry's attachments as { kind: \"photo\", ref }.",
+  security: authSecurity,
+  request: {
+    body: {
+      description: "JPEG, PNG, HEIC or WebP image",
+      content: { "image/*": { schema: imageUploadSchema } },
+    },
+  },
+  responses: {
+    201: openApiResponse(z.object({ ref: z.string(), content_type: z.string(), size: z.number().int() }), "Created"),
+    ...structuredErrorResponses,
+    413: openApiResponse(structuredErrorSchema, "Photo too large"),
+    415: openApiResponse(structuredErrorSchema, "Unsupported image type"),
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/journal/photos/{name}",
+  summary: "Get a journal photo",
+  security: authSecurity,
+  request: { params: z.object({ name: z.string().openapi({ description: "The ref without its journal/ prefix" }) }) },
+  responses: {
+    200: { description: "The image", content: { "image/*": { schema: imageUploadSchema } } },
+    ...structuredErrorResponses,
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/journal/stats",
+  summary: "Get entries and words per local day, totals and streaks",
+  description: "Defaults to the 365 days up to today. Only days you wrote are listed.",
+  security: authSecurity,
+  request: {
+    query: z.object({
+      from: dateSchema.optional(),
+      to: dateSchema.optional(),
+      today: dateSchema.optional(),
+      ...zone,
+    }),
+  },
+  responses: structuredOkResponses(z.object({
+    from: dateSchema,
+    to: dateSchema,
+    today: dateSchema,
+    days: z.array(z.object({ day: dateSchema, entries: z.number().int(), words: z.number().int() })),
+    totals: z.object({ entries: z.number().int(), words: z.number().int(), days: z.number().int() }),
+    all_time: z.object({ entries: z.number().int(), days: z.number().int(), first_day: dateSchema.nullable() }),
+    streak: z.object({
+      days: z.number().int(),
+      weeks: z.number().int(),
+      longest_days: z.number().int(),
+      today: z.boolean(),
+    }),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/journal/on-this-day",
+  summary: "List entries from earlier years on this month and day",
+  security: authSecurity,
+  request: { query: z.object({ date: dateSchema.optional(), ...zone }) },
+  responses: structuredOkResponses(z.object({
+    date: dateSchema,
+    items: z.array(entrySchema.extend({ day: dateSchema, years_ago: z.number().int() })),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/journal",
+  summary: "List journal entries, newest first by when they happened",
+  security: authSecurity,
+  request: {
+    query: z.object({
+      from: z.string().optional().openapi({ description: "ISO time" }),
+      to: z.string().optional().openapi({ description: "ISO time" }),
+      q: z.string().optional().openapi({ description: "Every word must appear in the text, place or prompt" }),
+      limit: z.coerce.number().int().min(1).max(2000).optional().openapi({ description: "Default 500" }),
+    }),
+  },
+  responses: structuredOkResponses(z.object({ items: z.array(entrySchema) })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/journal/{id}",
+  summary: "Get journal entry",
+  security: authSecurity,
+  request: { params: entryParams },
+  responses: structuredOkResponses(entrySchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/journal",
+  summary: "Create journal entry",
+  description: "Posting the same source and external_id again returns the first entry with 200.",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(CreateEntry) },
+  responses: {
+    ...structuredCreatedResponses(entrySchema),
+    200: openApiResponse(entrySchema, "Already imported (same source and external_id)"),
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "patch",
+  path: "/v1/journal/{id}",
+  summary: "Update journal entry",
+  description: "Send the version you loaded. Fields left out keep their value.",
+  security: authSecurity,
+  request: { params: entryParams, body: openApiJsonRequestBody(UpdateEntry) },
+  responses: { ...structuredOkResponses(entrySchema), ...conflict },
+});
+
+openApiRegistry.registerPath({
+  method: "delete",
+  path: "/v1/journal/{id}",
+  summary: "Delete journal entry (soft; its photos are kept)",
+  security: authSecurity,
+  request: { params: entryParams },
+  responses: structuredOkResponses(okSchema),
 });
 
 export default app;

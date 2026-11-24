@@ -5,6 +5,14 @@ import type { JsonRecord } from "../types/common";
 import { nowIso } from "../utils/date";
 import { parseJson, parseStoredJson } from "../utils/json";
 import { normalizeProfile } from "../utils/normalizers";
+import {
+  authSecurity,
+  dateTimeSchema,
+  openApiJsonRequestBody,
+  openApiRegistry,
+  structuredOkResponses,
+} from "../schemas/openapi";
+import { profileResponseSchema, shelfConfigResponseSchema } from "../schemas/responses";
 
 // Site control: small, safe writes for what anuragd.me reads, used by the
 // native app's Site space. Everything here is additive: the site keeps reading
@@ -156,6 +164,36 @@ app.patch("/shelf-sections", async (c) => {
   } catch (error) {
     return fail(c, error);
   }
+});
+
+// MARK: OpenAPI
+
+openApiRegistry.registerPath({
+  method: "patch",
+  path: "/v1/site/profile",
+  summary: "Change some profile fields, keeping the rest",
+  description: "Every field is optional; null clears it. Unknown keys are rejected.",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(profilePatchSchema) },
+  responses: structuredOkResponses(z.object({
+    ok: z.boolean(),
+    updated_at: dateTimeSchema,
+    profile: profileResponseSchema,
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "patch",
+  path: "/v1/site/shelf-sections",
+  summary: "Show or hide sections of anuragd.me/shelf",
+  description: "Other keys in the stored shelf config (hiddenItems, future keys) are kept as they were.",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(shelfSectionsPatchSchema) },
+  responses: structuredOkResponses(z.object({
+    ok: z.boolean(),
+    updated_at: dateTimeSchema,
+    shelf_config: shelfConfigResponseSchema,
+  })),
 });
 
 export default app;

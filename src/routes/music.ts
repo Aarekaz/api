@@ -1,5 +1,6 @@
 import { Hono } from "hono";
-import { authSecurity, musicNowResponseSchema, okResponses, openApiRegistry } from "../schemas/openapi";
+import { z } from "zod";
+import { authSecurity, dateTimeSchema, musicNowResponseSchema, okResponses, openApiRegistry } from "../schemas/openapi";
 import { getMusicNow, type MusicNowDependencies } from "../services/spotify/now-playing";
 import type { Env } from "../types/env";
 
@@ -51,6 +52,69 @@ openApiRegistry.registerPath({
     + "on Spotify rate limits or failures the last cached result (or `idle`) is returned.",
   security: authSecurity,
   responses: okResponses(musicNowResponseSchema),
+});
+
+/** A row of music_plays. */
+const musicPlaySchema = z.object({
+  id: z.number().int(),
+  played_at: dateTimeSchema,
+  track_id: z.string(),
+  track: z.string(),
+  artists: z.string().nullable(),
+  album: z.string().nullable(),
+  image_url: z.string().nullable(),
+  duration_ms: z.number().int().nullable(),
+  url: z.string().nullable(),
+  created_at: dateTimeSchema,
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/music/history",
+  summary: "List kept Spotify plays, newest first",
+  security: authSecurity,
+  request: {
+    query: z.object({
+      limit: z.coerce.number().int().min(1).max(1000).optional().openapi({ description: "Default 100" }),
+      before: dateTimeSchema.optional().openapi({ description: "Only plays before this time" }),
+    }),
+  },
+  responses: okResponses(z.object({
+    plays: z.array(musicPlaySchema),
+    total: z.object({
+      n: z.number().int().openapi({ description: "Plays kept in all" }),
+      since: dateTimeSchema.nullable().openapi({ description: "The oldest play kept" }),
+    }).nullable(),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/music/top",
+  summary: "Get top artists and tracks over recent days",
+  security: authSecurity,
+  request: {
+    query: z.object({
+      days: z.coerce.number().int().min(1).max(3650).optional().openapi({ description: "Default 30" }),
+    }),
+  },
+  responses: okResponses(z.object({
+    days: z.number().int(),
+    artists: z.array(z.object({
+      name: z.string(),
+      plays: z.number().int(),
+      image_url: z.string().nullable(),
+    })),
+    tracks: z.array(z.object({
+      track: z.string(),
+      artists: z.string().nullable(),
+      image_url: z.string().nullable(),
+      url: z.string().nullable(),
+      plays: z.number().int(),
+    })),
+    plays: z.number().int().optional(),
+    minutes: z.number().int().optional(),
+  })),
 });
 
 export default createMusicRoute();

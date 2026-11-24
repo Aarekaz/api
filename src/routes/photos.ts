@@ -23,6 +23,10 @@ import {
   authSecurity,
   errorResponses,
   imageUploadSchema,
+  presignResponseSchema,
+  presignHeadersSchema,
+  uploadTokenHeadersSchema,
+  errorSchema,
 } from "../schemas/openapi";
 import {
   parseListQuery,
@@ -154,6 +158,41 @@ openApiRegistry.registerPath({
   responses: {
     201: openApiResponse(photoUploadResponseSchema, "Created"),
     ...errorResponses,
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/photos/presign",
+  summary: "Create a presigned photo upload token",
+  description: "The token is valid for 5 minutes. Upload the file with PUT /v1/photos/upload-presigned.",
+  security: authSecurity,
+  request: { headers: presignHeadersSchema },
+  responses: {
+    ...okResponses(presignResponseSchema),
+    415: openApiResponse(errorSchema, "Unsupported content type"),
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "put",
+  path: "/v1/photos/upload-presigned",
+  summary: "Upload a photo with a presigned token",
+  description: "Authenticated by the X-Upload-Token header instead of the bearer token.",
+  request: {
+    headers: uploadTokenHeadersSchema,
+    body: {
+      description: "Image file",
+      content: {
+        "image/*": { schema: imageUploadSchema },
+      },
+    },
+  },
+  responses: {
+    201: openApiResponse(photoUploadResponseSchema, "Created"),
+    400: openApiResponse(errorSchema, "Missing body"),
+    401: openApiResponse(errorSchema, "Missing upload token"),
+    403: openApiResponse(errorSchema, "Invalid or expired upload token"),
   },
 });
 

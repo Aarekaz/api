@@ -1,6 +1,15 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { z } from "zod";
 import type { Env } from "../types/env";
+import {
+  authSecurity,
+  errorSchema,
+  okResponses,
+  openApiJsonRequestBody,
+  openApiRegistry,
+  openApiResponse,
+} from "../schemas/openapi";
 import { parseJson } from "../utils/json";
 import {
   VaultError,
@@ -25,6 +34,91 @@ function fail(c: Context<{ Bindings: Env }>, error: unknown) {
   console.error("vault route failed", error);
   return c.json({ error: "Vault request failed" }, 500);
 }
+
+// OpenAPI registrations
+const vaultErrors = {
+  404: openApiResponse(errorSchema, "Not found"),
+  409: openApiResponse(errorSchema, "Conflict (the file changed on GitHub)"),
+  502: openApiResponse(errorSchema, "GitHub request failed"),
+  503: openApiResponse(errorSchema, "Vault is not configured"),
+};
+const blobSha = z.string().regex(/^[0-9a-f]{40}$/);
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/vault/tree",
+  summary: "List every file in the vault with its blob sha",
+  security: authSecurity,
+  responses: {
+    ...okResponses(z.object({
+      tree_sha: z.string(),
+      files: z.array(z.object({ path: z.string(), sha: z.string(), size: z.number().int() })),
+    })),
+    ...vaultErrors,
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/vault/blobs",
+  summary: "Read file contents by blob sha",
+  security: authSecurity,
+  request: {
+    body: openApiJsonRequestBody(z.object({
+      shas: z.array(blobSha).min(1).max(MAX_BLOBS_PER_REQUEST),
+    })),
+  },
+  responses: {
+    ...okResponses(z.object({
+      blobs: z.record(z.string()).openapi({ description: "File contents (UTF-8) keyed by blob sha" }),
+    })),
+    ...vaultErrors,
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/vault/file",
+  summary: "Read one vault file",
+  security: authSecurity,
+  request: { query: z.object({ path: z.string().openapi({ description: "Path inside the vault" }) }) },
+  responses: {
+    ...okResponses(z.object({ path: z.string(), sha: z.string(), content: z.string() })),
+    ...vaultErrors,
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "put",
+  path: "/v1/vault/file",
+  summary: "Create or update one vault file",
+  description: "Send the blob sha you loaded (or null for a new file); a stale sha is a 409.",
+  security: authSecurity,
+  request: {
+    body: openApiJsonRequestBody(z.object({
+      path: z.string(),
+      content: z.string().max(MAX_FILE_BYTES),
+      sha: blobSha.nullable().optional(),
+      message: z.string().optional().openapi({ description: "Commit message, prefixed with anurag.os:" }),
+    })),
+  },
+  responses: {
+    ...okResponses(z.object({ path: z.string(), sha: z.string(), commit: z.string() })),
+    ...vaultErrors,
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/vault/capture",
+  summary: "Capture a line into the Inbox section of Dump.md",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(z.object({ text: z.string().min(1).max(2000) })) },
+  responses: {
+    ...okResponses(z.object({ ok: z.boolean(), sha: z.string() })),
+    ...vaultErrors,
+  },
+});
 
 app.get("/tree", async (c) => {
   try {

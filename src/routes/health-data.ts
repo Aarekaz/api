@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import type { Env } from "../types/env";
 import type { JsonRecord } from "../types/common";
 import { nowIso, dateOnly, addDays } from "../utils/date";
@@ -25,6 +26,9 @@ import {
   healthSleepRangeResponseSchema,
   healthWorkoutsRangeResponseSchema,
   healthSummaryResponseSchema,
+  dateSchema,
+  errorSchema,
+  openApiResponse,
   openApiJsonRequestBody,
   okResponses,
   createdResponses,
@@ -148,6 +152,31 @@ openApiRegistry.registerPath({
   summary: "Get health summary",
   security: authSecurity,
   responses: okResponses(healthSummaryResponseSchema),
+});
+
+const healthDatePathSchema = z.object({
+  date: dateSchema.openapi({ example: "2026-11-24" }),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/health/{date}",
+  summary: "Get daily health data for one day",
+  security: authSecurity,
+  request: { params: healthDatePathSchema },
+  responses: {
+    ...okResponses(genericObjectSchema, "The apple_health_daily row for that date"),
+    404: openApiResponse(errorSchema, "No data found for this date"),
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "delete",
+  path: "/v1/health/{date}",
+  summary: "Delete daily health data for one day",
+  security: authSecurity,
+  request: { params: healthDatePathSchema },
+  responses: okResponses(healthDailyDeleteResponseSchema),
 });
 
 // Route handlers

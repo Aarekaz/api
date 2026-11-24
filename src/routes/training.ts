@@ -1,6 +1,16 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
+import { z } from "zod";
+import {
+  authSecurity,
+  dateSchema,
+  dateTimeSchema,
+  okResponses,
+  okSchema,
+  openApiJsonRequestBody,
+  openApiRegistry,
+} from "../schemas/openapi";
 
 // /v1/training: a simple plan of what to do and when. WHOOP tracks the effort.
 const app = new Hono<{ Bindings: Env }>();
@@ -77,6 +87,171 @@ export function nextInRotation(
 const present = (r: Record<string, unknown>) => ({
   id: r.id, name: r.name, weekdays: String(r.weekdays || "").split(",").filter(Boolean).map(Number),
   exercises: JSON.parse(String(r.exercises_json || "[]")), position: r.position, updated_at: r.updated_at,
+});
+
+// OpenAPI registrations. Input here is cleaned rather than validated: bad
+// values are clamped or dropped (see cleanExercises and cleanWeekdays).
+const day = dateSchema.openapi({ example: "2026-11-24" });
+
+const exerciseSchema = z.object({
+  name: z.string().max(120),
+  sets: z.number().int().min(1).max(20).openapi({ description: "Default 3" }),
+  reps: z.number().int().min(1).max(200).openapi({ description: "Default 10" }),
+  reps_max: z.number().int().nullable().optional().openapi({ description: "Top of a rep range (8–12)" }),
+  per_side: z.boolean().optional(),
+  seconds: z.number().int().min(1).max(3600).nullable().optional().openapi({ description: "A hold instead of reps" }),
+  seconds_max: z.number().int().nullable().optional(),
+  weight: z.number().nullable().optional(),
+  unit: z.string().max(8).optional().openapi({ description: "Default kg" }),
+  rest: z.number().int().min(0).max(900).optional().openapi({ description: "Seconds; default 90" }),
+  note: z.string().max(200).nullable().optional(),
+});
+
+const routineSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  weekdays: z.array(z.number().int().min(1).max(7)).openapi({ description: "Empty for a routine in the rotation" }),
+  exercises: z.array(exerciseSchema).openapi({ description: "Empty for a rest day" }),
+  position: z.number().int(),
+  updated_at: dateTimeSchema,
+});
+
+const setRowSchema = z.object({
+  id: z.number().int(),
+  routine_id: z.string().nullable(),
+  day,
+  exercise: z.string(),
+  set_number: z.number().int(),
+  reps: z.number().int().nullable(),
+  weight: z.number().nullable(),
+  unit: z.string().nullable(),
+  done_at: dateTimeSchema,
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/training/routines",
+  summary: "List training routines",
+  security: authSecurity,
+  responses: okResponses(z.object({ routines: z.array(routineSchema) })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/training/next",
+  summary: "Get today's workout in the rotation",
+  security: authSecurity,
+  request: { query: z.object({ today: day.openapi({ description: "The phone's local date" }) }) },
+  responses: okResponses(z.object({
+    routine_id: z.string().nullable(),
+    state: z.enum(["first", "doing", "next", "rest", "none"]),
+    last_day: day.nullable(),
+    last_routine_id: z.string().nullable(),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "put",
+  path: "/v1/training/routines/{id}",
+  summary: "Create or replace a routine",
+  security: authSecurity,
+  request: {
+    params: z.object({ id: z.string().max(64) }),
+    body: openApiJsonRequestBody(z.object({
+      name: z.string().min(1).max(120),
+      weekdays: z.union([z.array(z.number().int().min(1).max(7)), z.string()]).optional()
+        .openapi({ description: "1 (Monday) to 7, as a list or comma-separated" }),
+      exercises: z.array(exerciseSchema.partial().extend({ name: z.string() })).max(40).optional(),
+      position: z.number().optional(),
+    })),
+  },
+  responses: okResponses(routineSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "delete",
+  path: "/v1/training/routines/{id}",
+  summary: "Archive a routine (history keeps it)",
+  security: authSecurity,
+  request: { params: z.object({ id: z.string() }) },
+  responses: okResponses(okSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/training/sets",
+  summary: "Tick a set off (or update it)",
+  security: authSecurity,
+  request: {
+    body: openApiJsonRequestBody(z.object({
+      routine_id: z.string().max(64).nullable().optional(),
+      day,
+      exercise: z.string().min(1).max(120),
+      set_number: z.number(),
+      reps: z.number().nullable().optional(),
+      weight: z.number().nullable().optional(),
+      unit: z.string().max(8).nullable().optional(),
+    })),
+  },
+  responses: okResponses(okSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "delete",
+  path: "/v1/training/sets",
+  summary: "Untick one set",
+  security: authSecurity,
+  request: {
+    query: z.object({
+      day,
+      exercise: z.string(),
+      set_number: z.coerce.number().int(),
+    }),
+  },
+  responses: okResponses(okSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/training/day",
+  summary: "Get one day's ticked sets and the previous time each exercise was done",
+  security: authSecurity,
+  request: { query: z.object({ day }) },
+  responses: okResponses(z.object({
+    day,
+    sets: z.array(setRowSchema),
+    last: z.array(z.object({
+      exercise: z.string(),
+      day,
+      set_number: z.number().int(),
+      reps: z.number().int().nullable(),
+      weight: z.number().nullable(),
+      unit: z.string().nullable(),
+    })),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/training/history",
+  summary: "List days you trained",
+  security: authSecurity,
+  request: {
+    query: z.object({
+      days: z.coerce.number().int().min(1).max(3650).optional().openapi({ description: "Default 90" }),
+    }),
+  },
+  responses: okResponses(z.object({
+    days: z.array(z.object({
+      day,
+      routine_id: z.string().nullable(),
+      routine: z.string().nullable(),
+      sets: z.number().int(),
+      started_at: dateTimeSchema,
+      ended_at: dateTimeSchema,
+      volume: z.number().openapi({ description: "Sum of weight × reps" }),
+    })),
+  })),
 });
 
 app.get("/routines", async (c) => {

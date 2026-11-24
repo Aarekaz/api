@@ -1,6 +1,14 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
+import { z } from "zod";
+import {
+  authSecurity,
+  dateSchema,
+  openApiJsonRequestBody,
+  openApiRegistry,
+  okResponses,
+} from "../schemas/openapi";
 
 // /v1/visits: places you've been. The phone posts visits as they happen;
 // imports (photos, Google Timeline) post them in batches. Safe to repeat.
@@ -30,6 +38,289 @@ export function cleanVisit(v: VisitInput): null | {
   return { latitude: lat, longitude: lng, arrived_at: arrived, departed_at: departed, place: str(v.place),
     address: str(v.address), city: str(v.city, 120), country: str(v.country, 120), source, source_key: key };
 }
+
+// OpenAPI registrations. Posted visits and journeys are cleaned, not
+// validated: invalid items are skipped and counted in `valid`.
+const placeKey = z.string().regex(/^-?\d+\.\d{3},-?\d+\.\d{3}$/).openapi({
+  description: "Grid cell of about 110 m: printf('%.3f,%.3f', lat, lng)",
+  example: "38.898,-77.037",
+});
+const offset = z.coerce.number().int().min(-840).max(840).optional().openapi({
+  description: "Local minutes from UTC (default 0)",
+});
+
+const visitSchema = z.object({
+  id: z.number().int(),
+  latitude: z.number(),
+  longitude: z.number(),
+  arrived_at: z.string(),
+  departed_at: z.string().nullable(),
+  place: z.string().nullable(),
+  address: z.string().nullable(),
+  city: z.string().nullable(),
+  country: z.string().nullable(),
+  source: z.string(),
+  source_key: z.string(),
+  created_at: z.string(),
+});
+const visitWithNameSchema = visitSchema.extend({
+  key: z.string(),
+  place_name: z.string().nullable(),
+  place_city: z.string().nullable(),
+});
+
+const placeNameSchema = z.object({
+  key: z.string(),
+  name: z.string().nullable(),
+  city: z.string().nullable(),
+  country: z.string().nullable(),
+  category: z.string().nullable(),
+  map_item_id: z.string().nullable(),
+  updated_at: z.string(),
+});
+
+const journeySchema = z.object({
+  id: z.number().int(),
+  started_at: z.string(),
+  ended_at: z.string().nullable(),
+  start_lat: z.number().nullable(),
+  start_lng: z.number().nullable(),
+  end_lat: z.number().nullable(),
+  end_lng: z.number().nullable(),
+  distance_m: z.number().nullable(),
+  mode: z.string().nullable(),
+  points_json: z.string().nullable().openapi({ description: "JSON array of [lat, lng(, t)] points" }),
+  source: z.string(),
+  source_key: z.string(),
+  created_at: z.string(),
+});
+
+const batchResultSchema = z.object({
+  received: z.number().int(),
+  valid: z.number().int(),
+  added: z.number().int().openapi({ description: "New rows; repeats are ignored" }),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/visits",
+  summary: "List visits, newest first, with counts per source",
+  security: authSecurity,
+  request: {
+    query: z.object({
+      start: z.string().optional().openapi({ description: "ISO time (default the beginning)" }),
+      end: z.string().optional().openapi({ description: "ISO time (default now)" }),
+      limit: z.coerce.number().int().min(1).max(5000).optional().openapi({ description: "Default 500" }),
+    }),
+  },
+  responses: okResponses(z.object({
+    visits: z.array(visitSchema),
+    sources: z.array(z.object({ source: z.string(), n: z.number().int(), first: z.string() })),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/visits",
+  summary: "Add visits (up to 500 at a time; safe to repeat)",
+  security: authSecurity,
+  request: {
+    body: openApiJsonRequestBody(z.object({
+      visits: z.array(z.object({
+        latitude: z.number().min(-90).max(90),
+        longitude: z.number().min(-180).max(180),
+        arrived_at: z.string(),
+        departed_at: z.string().nullable().optional(),
+        place: z.string().max(300).nullable().optional(),
+        address: z.string().max(300).nullable().optional(),
+        city: z.string().max(120).nullable().optional(),
+        country: z.string().max(120).nullable().optional(),
+        source: z.string().max(40).openapi({ description: "\"visit\" for live visits from the phone" }),
+        source_key: z.string().max(200).nullable().optional(),
+      })).min(1).max(500),
+    })),
+  },
+  responses: okResponses(batchResultSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/visits/places",
+  summary: "List places (grouped visits), most visited first",
+  security: authSecurity,
+  request: {
+    query: z.object({
+      year: z.string().regex(/^\d{4}$/).optional(),
+      from: z.string().optional().openapi({ description: "ISO time" }),
+      to: z.string().optional().openapi({ description: "ISO time" }),
+    }),
+  },
+  responses: okResponses(z.object({
+    places: z.array(z.object({
+      key: z.string(),
+      lat: z.number(),
+      lng: z.number(),
+      visits: z.number().int(),
+      minutes: z.number().int().openapi({ description: "Time spent, each visit capped at a day" }),
+      first: z.string(),
+      last: z.string(),
+      name: z.string().nullable(),
+      label: z.string().nullable(),
+      city: z.string().nullable(),
+      country: z.string().nullable(),
+      category: z.string().nullable(),
+      map_item_id: z.string().nullable(),
+    })),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/visits/years",
+  summary: "Count visits and places per year",
+  security: authSecurity,
+  responses: okResponses(z.object({
+    years: z.array(z.object({ year: z.string(), visits: z.number().int(), places: z.number().int() })),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/visits/months",
+  summary: "Count visits and places per month",
+  security: authSecurity,
+  request: { query: z.object({ offset }) },
+  responses: okResponses(z.object({
+    months: z.array(z.object({ month: z.string(), visits: z.number().int(), places: z.number().int() })),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/visits/at",
+  summary: "List one place's visits, newest first",
+  security: authSecurity,
+  request: { query: z.object({ key: placeKey }) },
+  responses: okResponses(z.object({
+    key: z.string(),
+    name: placeNameSchema.nullable(),
+    visits: z.array(visitSchema),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/visits/on-this-day",
+  summary: "List visits on this month and day in every year",
+  security: authSecurity,
+  request: {
+    query: z.object({
+      md: z.string().regex(/^\d{2}-\d{2}$/).openapi({ example: "11-23" }),
+      offset,
+    }),
+  },
+  responses: okResponses(z.object({ visits: z.array(visitWithNameSchema) })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/visits/days",
+  summary: "List days that have visits, with counts",
+  security: authSecurity,
+  request: { query: z.object({ year: z.string().regex(/^\d{4}$/).optional(), offset }) },
+  responses: okResponses(z.object({
+    days: z.array(z.object({ day: dateSchema, visits: z.number().int(), places: z.number().int() })),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/visits/day",
+  summary: "Get one local day's visits and the journeys between them",
+  security: authSecurity,
+  request: { query: z.object({ date: dateSchema.openapi({ example: "2024-05-01" }), offset }) },
+  responses: okResponses(z.object({
+    date: dateSchema,
+    start: z.string(),
+    end: z.string(),
+    visits: z.array(visitWithNameSchema),
+    journeys: z.array(journeySchema),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/visits/trips",
+  summary: "List trips: days roughly 100 km or more from home, grouped",
+  security: authSecurity,
+  request: { query: z.object({ offset }) },
+  responses: okResponses(z.object({
+    trips: z.array(z.object({
+      start: dateSchema,
+      end: dateSchema,
+      days: z.number().int(),
+      visits: z.number().int(),
+      places: z.number().int(),
+      lat: z.number(),
+      lng: z.number(),
+      city: z.string().nullable(),
+      country: z.string().nullable(),
+      bounds: z.object({
+        min_lat: z.number(),
+        max_lat: z.number(),
+        min_lng: z.number(),
+        max_lng: z.number(),
+      }),
+    })),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/visits/names",
+  summary: "Save place names looked up on a device (up to 500)",
+  description: "Missing fields keep what's already stored. Items with an invalid key are skipped.",
+  security: authSecurity,
+  request: {
+    body: openApiJsonRequestBody(z.object({
+      names: z.array(z.object({
+        key: placeKey,
+        name: z.string().max(200).nullable().optional(),
+        city: z.string().max(120).nullable().optional(),
+        country: z.string().max(120).nullable().optional(),
+        category: z.string().max(80).nullable().optional(),
+        map_item_id: z.string().max(300).nullable().optional(),
+      })).min(1).max(500),
+    })),
+  },
+  responses: okResponses(z.object({ received: z.number().int(), saved: z.number().int() })),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/visits/journeys",
+  summary: "Add journeys (up to 500 at a time; safe to repeat)",
+  security: authSecurity,
+  request: {
+    body: openApiJsonRequestBody(z.object({
+      journeys: z.array(z.object({
+        started_at: z.string(),
+        ended_at: z.string().nullable().optional(),
+        start_lat: z.number().nullable().optional(),
+        start_lng: z.number().nullable().optional(),
+        end_lat: z.number().nullable().optional(),
+        end_lng: z.number().nullable().optional(),
+        distance_m: z.number().nullable().optional(),
+        mode: z.string().max(40).nullable().optional(),
+        points: z.array(z.array(z.number()).min(2).max(3)).max(2000).nullable().optional()
+          .openapi({ description: "[lat, lng] or [lat, lng, t] points" }),
+        source: z.string().max(40),
+        source_key: z.string().max(200).nullable().optional(),
+      })).min(1).max(500),
+    })),
+  },
+  responses: okResponses(batchResultSchema),
+});
 
 app.get("/", async (c) => {
   const end = isDate(c.req.query("end")) ? new Date(c.req.query("end")!).toISOString() : new Date().toISOString();

@@ -3,6 +3,15 @@ import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
+import {
+  authSecurity,
+  openApiJsonRequestBody,
+  openApiRegistry,
+  openApiResponse,
+  structuredCreatedResponses,
+  structuredErrorSchema,
+  structuredOkResponses,
+} from "../schemas/openapi";
 import { MAX_PATH, SectionError, createSection, deleteSection, listSections, updateSection } from "../services/sections";
 
 // /v1/sections: Writing's folders, as a tree (Library › Agent Skills).
@@ -51,6 +60,48 @@ export const SectionList = z.object({
 });
 export const SectionChange = z.object({ section: SectionSchema, moved_pages: z.number().int(), moved_folders: z.number().int() });
 export const SectionDeleted = z.object({ ok: z.literal(true), parent: z.string(), moved_pages: z.number().int(), moved_folders: z.number().int() });
+
+// OpenAPI registrations
+const sectionConflict = { 409: openApiResponse(structuredErrorSchema, "A folder with that path already exists") };
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/sections",
+  summary: "List Writing folders as a tree (depth first)",
+  security: authSecurity,
+  responses: structuredOkResponses(SectionList),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/sections",
+  summary: "Create folder",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(CreateSection) },
+  responses: { ...structuredCreatedResponses(z.object({ section: SectionSchema })), ...sectionConflict },
+});
+
+openApiRegistry.registerPath({
+  method: "patch",
+  path: "/v1/sections",
+  summary: "Rename, nest or reorder a folder",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(UpdateSection) },
+  responses: { ...structuredOkResponses(SectionChange), ...sectionConflict },
+});
+
+openApiRegistry.registerPath({
+  method: "delete",
+  path: "/v1/sections",
+  summary: "Delete a folder (its pages and folders move up into its parent)",
+  description: "The path can be sent as ?path= or in a JSON body { path }.",
+  security: authSecurity,
+  request: {
+    query: z.object({ path: z.string().optional() }),
+    body: { ...openApiJsonRequestBody(DeleteSection), required: false },
+  },
+  responses: structuredOkResponses(SectionDeleted),
+});
 
 /** One error shape for new routes: { error: { code, message } }. */
 function fail(c: Context<{ Bindings: Env }>, error: unknown) {

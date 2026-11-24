@@ -16,9 +16,176 @@ import {
   type DocumentInput,
 } from "../services/documents";
 import { isSingleUrl, presentLink, saveLink } from "../services/links";
+import { z } from "zod";
+import {
+  authSecurity,
+  createdResponses,
+  errorSchema,
+  okResponses,
+  okSchema,
+  openApiJsonRequestBody,
+  openApiRegistry,
+  openApiResponse,
+} from "../schemas/openapi";
+import {
+  documentInputSchema,
+  documentKindSchema,
+  documentSchema,
+  documentStatusSchema,
+  documentSummarySchema,
+  documentVisibilitySchema,
+  linkSchema,
+} from "../schemas/documents";
 
 // /v1/documents: everything the OS writes and keeps (Cloudflare is the source of truth).
 const app = new Hono<{ Bindings: Env }>();
+
+// OpenAPI registrations
+const idParams = z.object({ id: z.string().openapi({ description: "Document ULID" }) });
+const notFound = { 404: openApiResponse(errorSchema, "Document not found") };
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/documents",
+  summary: "List documents, most recently updated first",
+  description: "Without include=body the items leave out body and frontmatter. "
+    + "With include_deleted=1, deleted documents are included with their deleted_at.",
+  security: authSecurity,
+  request: {
+    query: z.object({
+      kind: documentKindSchema.optional(),
+      folder: z.string().optional(),
+      updated_since: z.string().optional().openapi({ description: "Only documents updated after this ISO time" }),
+      include: z.enum(["body"]).optional(),
+      include_deleted: z.enum(["1"]).optional(),
+      limit: z.coerce.number().int().min(1).max(5000).optional().openapi({ description: "Default 2000" }),
+    }),
+  },
+  responses: okResponses(z.object({
+    documents: z.array(documentSummarySchema.extend({
+      body: z.string().optional(),
+      frontmatter: z.record(z.unknown()).optional(),
+      deleted_at: z.string().optional(),
+    })),
+    server_time: z.string(),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/documents/{id}",
+  summary: "Get document",
+  security: authSecurity,
+  request: { params: idParams },
+  responses: { ...okResponses(documentSchema), ...notFound },
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/documents/{id}/versions",
+  summary: "List a document's saved versions (latest 100)",
+  security: authSecurity,
+  request: { params: idParams },
+  responses: okResponses(z.object({
+    versions: z.array(z.object({
+      version: z.number().int(),
+      title: z.string(),
+      saved_at: z.string(),
+      length: z.number().int().openapi({ description: "Body length in characters" }),
+    })),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/documents",
+  summary: "Create document",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(documentInputSchema.omit({ version: true })) },
+  responses: createdResponses(documentSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "put",
+  path: "/v1/documents/{id}",
+  summary: "Save document",
+  description: "Optimistic concurrency: send the version you loaded. A stale version is a 409 with the latest document.",
+  security: authSecurity,
+  request: {
+    params: idParams,
+    body: openApiJsonRequestBody(documentInputSchema.extend({ version: z.number().int() })),
+  },
+  responses: {
+    ...okResponses(documentSchema),
+    ...notFound,
+    409: openApiResponse(
+      errorSchema.extend({ latest: documentSchema.nullable() }),
+      "The document changed since you loaded it",
+    ),
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "delete",
+  path: "/v1/documents/{id}",
+  summary: "Delete document (soft)",
+  security: authSecurity,
+  request: { params: idParams },
+  responses: { ...okResponses(okSchema), ...notFound },
+});
+
+for (const [action, summary] of [
+  ["publish", "Publish document to the website"],
+  ["unpublish", "Unpublish document"],
+] as const) {
+  openApiRegistry.registerPath({
+    method: "post",
+    path: `/v1/documents/{id}/${action}`,
+    summary,
+    security: authSecurity,
+    request: { params: idParams },
+    responses: { ...okResponses(documentSchema), ...notFound },
+  });
+}
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/search",
+  summary: "Full-text search across document titles and bodies",
+  security: authSecurity,
+  request: {
+    query: z.object({
+      q: z.string().optional(),
+      limit: z.coerce.number().int().min(1).max(100).optional().openapi({ description: "Default 30" }),
+    }),
+  },
+  responses: okResponses(z.object({
+    results: z.array(z.object({
+      id: z.string(),
+      kind: documentKindSchema,
+      folder: z.string(),
+      title: z.string(),
+      slug: z.string(),
+      visibility: documentVisibilitySchema,
+      status: documentStatusSchema.nullable(),
+      updated_at: z.string(),
+      snippet: z.string().openapi({ description: "Matching text with hits in [brackets]" }),
+    })),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/capture",
+  summary: "Capture text to the Inbox (a bare URL is saved to Read later)",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(z.object({ text: z.string().min(1).max(20000) })) },
+  responses: okResponses(z.object({
+    ok: z.boolean(),
+    document: documentSummarySchema.optional().openapi({ description: "The new Inbox note" }),
+    link: linkSchema.optional().openapi({ description: "The saved link, when text was a single URL" }),
+  })),
+});
 
 function fail(c: Context<{ Bindings: Env }>, error: unknown) {
   if (error instanceof DocumentError) return c.json({ error: error.message }, error.status);

@@ -69,7 +69,7 @@ const shelfSectionVisibilityResponseSchema = z.object({
   visible: z.boolean(),
 });
 
-const shelfConfigResponseSchema = z.object({
+export const shelfConfigResponseSchema = z.object({
   sections: z
     .object({
       links: shelfSectionVisibilityResponseSchema.optional(),

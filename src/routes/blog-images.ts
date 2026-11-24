@@ -1,6 +1,19 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
 import { fileExtensionForContentType } from "../utils/response";
+import {
+  openApiRegistry,
+  openApiResponse,
+  okResponses,
+  errorResponses,
+  errorSchema,
+  authSecurity,
+  imageUploadSchema,
+  photoUploadResponseSchema,
+  presignResponseSchema,
+  presignHeadersSchema,
+  uploadTokenHeadersSchema,
+} from "../schemas/openapi";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -59,6 +72,58 @@ async function verifyUploadToken(
   if (typeof data.exp !== "number" || Date.now() > data.exp) return null;
   return { key: data.key, contentType: data.contentType };
 }
+
+/* ── OpenAPI ─────────────────────────────────────────────────────────── */
+
+const blogImageBody = {
+  description: "PNG, JPEG or WebP image",
+  content: {
+    "image/png": { schema: imageUploadSchema },
+    "image/jpeg": { schema: imageUploadSchema },
+    "image/webp": { schema: imageUploadSchema },
+  },
+};
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/blog-images/presign",
+  summary: "Create a presigned blog image upload token",
+  description: "X-Content-Type defaults to image/png. The token is valid for 5 minutes.",
+  security: authSecurity,
+  request: { headers: presignHeadersSchema },
+  responses: {
+    ...okResponses(presignResponseSchema),
+    415: openApiResponse(errorSchema, "Unsupported content type"),
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "put",
+  path: "/v1/blog-images/upload-presigned",
+  summary: "Upload a blog image with a presigned token",
+  description: "Authenticated by the X-Upload-Token header instead of the bearer token.",
+  request: { headers: uploadTokenHeadersSchema, body: blogImageBody },
+  responses: {
+    201: openApiResponse(photoUploadResponseSchema, "Created"),
+    400: openApiResponse(errorSchema, "Missing body"),
+    401: openApiResponse(errorSchema, "Missing upload token"),
+    403: openApiResponse(errorSchema, "Invalid or expired upload token"),
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/blog-images/upload",
+  summary: "Upload a blog image to R2 (up to 5 MB)",
+  security: authSecurity,
+  request: { body: blogImageBody },
+  responses: {
+    201: openApiResponse(photoUploadResponseSchema, "Created"),
+    ...errorResponses,
+    413: openApiResponse(errorSchema, "File too large"),
+    415: openApiResponse(errorSchema, "Unsupported content type"),
+  },
+});
 
 /* ── Routes ──────────────────────────────────────────────────────────── */
 

@@ -1,5 +1,7 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import type { Env } from "../types/env";
+import { authSecurity, errorSchema, okResponses, okSchema, openApiRegistry, openApiResponse } from "../schemas/openapi";
 import {
   appAuthConfigured,
   appRedirect,
@@ -45,6 +47,43 @@ signOutRoute.post("/", async (c) => {
   const token = c.req.header("authorization")?.split(" ")[1];
   if (token && token !== c.env.API_TOKEN) await revokeSession(c.env, token);
   return c.json({ ok: true });
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/auth/app/github/start",
+  summary: "Start Sign in with GitHub for the native apps",
+  description: "Public. Redirects to GitHub's authorization page.",
+  responses: {
+    302: { description: "Redirect to GitHub" },
+    503: openApiResponse(errorSchema, "App sign-in is not configured"),
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/auth/app/github/callback",
+  summary: "Complete Sign in with GitHub for the native apps",
+  description: "Public. Always redirects back to the app: with `token` and `login` on success, "
+    + "or with `error` (not_configured, expired, not_allowed, github).",
+  request: {
+    query: z.object({
+      state: z.string().optional(),
+      code: z.string().optional(),
+    }),
+  },
+  responses: {
+    302: { description: "Redirect to the app with a session token or an error" },
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/app/signout",
+  summary: "Sign this device out",
+  description: "Revokes the device session used as the bearer token. The owner API token is never revoked.",
+  security: authSecurity,
+  responses: okResponses(okSchema),
 });
 
 export default app;

@@ -4,6 +4,19 @@ import { z } from "zod";
 import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
 import { ulid } from "../services/documents-core";
+import {
+  authSecurity,
+  dateSchema,
+  imageUploadSchema,
+  okSchema,
+  openApiJsonRequestBody,
+  openApiRegistry,
+  openApiResponse,
+  structuredCreatedResponses,
+  structuredErrorResponses,
+  structuredErrorSchema,
+  structuredOkResponses,
+} from "../schemas/openapi";
 import { cleanIngredients, cleanSteps, extractRecipe, type Ingredient, type Step } from "../services/recipe-import";
 
 // /v1/recipes: the Cookbook. Recipes saved from a link or written by hand,
@@ -155,6 +168,197 @@ async function keepImage(env: Env, url: string | null): Promise<string | null> {
     return url;
   }
 }
+
+// OpenAPI registrations
+const ingredientSchema = z.object({
+  text: z.string(),
+  quantity: z.number().nullable(),
+  quantity_max: z.number().nullable(),
+  unit: z.string().nullable(),
+  item: z.string(),
+  group: z.string().nullable(),
+});
+const stepSchema = z.object({ text: z.string(), group: z.string().nullable() });
+
+const recipeDraftSchema = z.object({
+  title: z.string(),
+  summary: z.string().nullable(),
+  source_url: z.string().nullable(),
+  source_name: z.string().nullable(),
+  author: z.string().nullable(),
+  image_url: z.string().nullable(),
+  servings: z.number().nullable(),
+  yield_text: z.string().nullable(),
+  prep_minutes: z.number().int().nullable(),
+  cook_minutes: z.number().int().nullable(),
+  total_minutes: z.number().int().nullable(),
+  ingredients: z.array(ingredientSchema),
+  steps: z.array(stepSchema),
+  tags: z.array(z.string()),
+});
+
+const recipeLogSchema = z.object({
+  id: z.number().int(),
+  recipe_id: z.string(),
+  cooked_on: dateSchema,
+  rating: z.number().int().min(1).max(5).nullable(),
+  note: z.string().nullable(),
+  servings: z.number().nullable(),
+  created_at: z.string(),
+});
+
+const recipeSchema = recipeDraftSchema.extend({
+  id: z.string(),
+  notes: z.string().nullable(),
+  favorite: z.boolean(),
+  cooked_count: z.number().int(),
+  last_cooked_on: dateSchema.nullable(),
+  rating: z.number().nullable().openapi({ description: "Average log rating, one decimal" }),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+const recipeWithLogSchema = recipeSchema.extend({ log: z.array(recipeLogSchema) });
+const recipeParams = z.object({ id: z.string() });
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/recipes",
+  summary: "List recipes, most recently changed first",
+  security: authSecurity,
+  request: {
+    query: z.object({
+      q: z.string().optional(),
+      tag: z.string().optional(),
+      favorite: z.enum(["1"]).optional(),
+      limit: z.coerce.number().int().min(1).max(2000).optional().openapi({ description: "Default 1000" }),
+    }),
+  },
+  responses: structuredOkResponses(z.object({ items: z.array(recipeSchema) })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/recipes/tags",
+  summary: "List recipe collections with how many recipes are in each",
+  security: authSecurity,
+  responses: structuredOkResponses(z.object({ items: z.array(z.object({ tag: z.string(), count: z.number().int() })) })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/recipes/log",
+  summary: "List what you cooked, newest first, across every recipe",
+  security: authSecurity,
+  request: {
+    query: z.object({
+      limit: z.coerce.number().int().min(1).max(2000).optional().openapi({ description: "Default 200" }),
+    }),
+  },
+  responses: structuredOkResponses(z.object({ items: z.array(recipeLogSchema.extend({ title: z.string() })) })),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/recipes/import",
+  summary: "Read a recipe from a web page without saving it",
+  description: "found: schema (schema.org Recipe), page (read from the markup) or basic (title and photo only). "
+    + "existing is the id of a recipe already saved from that link. Send html when the site refuses the server.",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(Import) },
+  responses: {
+    ...structuredOkResponses(z.object({
+      recipe: recipeDraftSchema,
+      found: z.enum(["schema", "page", "basic"]),
+      existing: z.string().nullable(),
+    })),
+    422: openApiResponse(structuredErrorSchema, "That link isn't a web page"),
+    502: openApiResponse(structuredErrorSchema, "Couldn't fetch the page"),
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/recipes/photo",
+  summary: "Store a recipe photo (up to 15 MB) and return its link",
+  security: authSecurity,
+  request: {
+    body: {
+      description: "JPEG, PNG, WebP, HEIC or GIF image",
+      content: { "image/*": { schema: imageUploadSchema } },
+    },
+  },
+  responses: {
+    201: openApiResponse(z.object({ url: z.string(), key: z.string() }), "Created"),
+    ...structuredErrorResponses,
+    413: openApiResponse(structuredErrorSchema, "Photo too large"),
+    415: openApiResponse(structuredErrorSchema, "Unsupported image type"),
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/recipes/{id}",
+  summary: "Get a recipe with its cooking log",
+  security: authSecurity,
+  request: { params: recipeParams },
+  responses: structuredOkResponses(recipeWithLogSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/recipes",
+  summary: "Create recipe",
+  description: "Ingredients and steps are lines (\"2 cups flour\") or { text, group }. A remote image_url is copied to R2.",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(CreateRecipe) },
+  responses: structuredCreatedResponses(recipeWithLogSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "patch",
+  path: "/v1/recipes/{id}",
+  summary: "Update recipe (only the fields sent change)",
+  security: authSecurity,
+  request: { params: recipeParams, body: openApiJsonRequestBody(UpdateRecipe) },
+  responses: structuredOkResponses(recipeWithLogSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "delete",
+  path: "/v1/recipes/{id}",
+  summary: "Delete recipe (soft; its log stays)",
+  security: authSecurity,
+  request: { params: recipeParams },
+  responses: structuredOkResponses(okSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/recipes/{id}/restore",
+  summary: "Restore a deleted recipe",
+  security: authSecurity,
+  request: { params: recipeParams },
+  responses: structuredOkResponses(recipeWithLogSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/recipes/{id}/log",
+  summary: "Log that you cooked a recipe",
+  description: "cooked_on defaults to today (UTC). Returns the recipe.",
+  security: authSecurity,
+  request: { params: recipeParams, body: { ...openApiJsonRequestBody(LogEntry), required: false } },
+  responses: structuredCreatedResponses(recipeWithLogSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "delete",
+  path: "/v1/recipes/{id}/log/{logId}",
+  summary: "Remove one line from a recipe's log",
+  security: authSecurity,
+  request: { params: z.object({ id: z.string(), logId: z.coerce.number().int() }) },
+  responses: structuredOkResponses(recipeWithLogSchema),
+});
 
 /** GET /v1/recipes?q=&tag=&favorite=1&limit= : every recipe, most recently changed first. */
 app.get("/", async (c) => {

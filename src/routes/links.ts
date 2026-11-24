@@ -5,6 +5,14 @@ import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
 import { DocumentError } from "../services/documents";
 import {
+  authSecurity,
+  openApiJsonRequestBody,
+  openApiRegistry,
+  structuredCreatedResponses,
+  structuredOkResponses,
+} from "../schemas/openapi";
+import { linkReadingSchema, linkSchema } from "../schemas/documents";
+import {
   fetchArticle, getLink, linkTags, listLinks, markRead, presentLink, readingOf, saveLink, saveProgress, setLinkNote, updateLink,
   type LinkListState,
 } from "../services/links";
@@ -51,6 +59,112 @@ function fail(c: Context<{ Bindings: Env }>, error: unknown) {
 }
 
 const invalidJson = (c: Context<{ Bindings: Env }>) => c.json({ error: { code: "invalid", message: "Invalid JSON" } }, 400);
+
+// OpenAPI registrations
+const idParams = z.object({ id: z.string().openapi({ description: "The link's document id" }) });
+const fullLink = linkSchema.required({ body: true });
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/links",
+  summary: "List saved links, newest first",
+  security: authSecurity,
+  request: {
+    query: z.object({
+      state: z.enum(STATES).optional().openapi({ description: "inbox, archived, starred or all (default); unread/read are older names" }),
+      tag: z.string().optional(),
+      limit: z.coerce.number().int().min(1).max(2000).optional().openapi({ description: "Default 500" }),
+    }),
+  },
+  responses: structuredOkResponses(z.object({ links: z.array(linkSchema.omit({ body: true })) })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/links/tags",
+  summary: "List link tags with how many links carry each",
+  security: authSecurity,
+  responses: structuredOkResponses(z.object({
+    items: z.array(z.object({
+      tag: z.string(),
+      count: z.number().int(),
+      inbox: z.number().int().openapi({ description: "How many of those are in the Inbox" }),
+    })),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/links",
+  summary: "Save a link to Read later",
+  description: "Fetches the article once and keeps it as Markdown.",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(SaveLink) },
+  responses: structuredCreatedResponses(fullLink),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/links/{id}",
+  summary: "Get a link with its article",
+  security: authSecurity,
+  request: { params: idParams },
+  responses: structuredOkResponses(fullLink),
+});
+
+openApiRegistry.registerPath({
+  method: "patch",
+  path: "/v1/links/{id}",
+  summary: "Update a link (star, tags, title, state, note)",
+  security: authSecurity,
+  request: { params: idParams, body: openApiJsonRequestBody(UpdateLink) },
+  responses: structuredOkResponses(linkSchema.omit({ body: true })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/links/{id}/progress",
+  summary: "Get reading progress",
+  security: authSecurity,
+  request: { params: idParams },
+  responses: structuredOkResponses(linkReadingSchema),
+});
+
+openApiRegistry.registerPath({
+  method: "put",
+  path: "/v1/links/{id}/progress",
+  summary: "Save reading progress (last write wins by updated_at)",
+  security: authSecurity,
+  request: { params: idParams, body: openApiJsonRequestBody(Progress) },
+  responses: structuredOkResponses(linkReadingSchema.extend({
+    applied: z.boolean().openapi({ description: "Whether this write won" }),
+  })),
+});
+
+for (const [action, summary] of [
+  ["archive", "Archive a link"],
+  ["read", "Archive a link (older name for archive)"],
+  ["unarchive", "Move a link back to the Inbox"],
+  ["unread", "Move a link back to the Inbox (older name for unarchive)"],
+] as const) {
+  openApiRegistry.registerPath({
+    method: "post",
+    path: `/v1/links/{id}/${action}`,
+    summary,
+    security: authSecurity,
+    request: { params: idParams },
+    responses: structuredOkResponses(linkSchema.omit({ body: true })),
+  });
+}
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/links/{id}/refetch",
+  summary: "Fetch the article again",
+  security: authSecurity,
+  request: { params: idParams },
+  responses: structuredOkResponses(fullLink),
+});
 
 /** GET /v1/links?state=inbox|archived|starred|all (unread/read still work)&tag=&limit= */
 app.get("/", async (c) => {

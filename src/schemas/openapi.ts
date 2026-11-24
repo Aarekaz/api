@@ -451,6 +451,57 @@ export const createdResponses = (schema: z.ZodTypeAny, description = "Created") 
   ...errorResponses,
 });
 
+// The newer routes (documents family, journal, recipes, sections, site, …)
+// answer errors as { error: { code, message } }. Auth failures from the
+// middleware still use the plain { error } shape.
+export const structuredErrorSchema = z
+  .object({
+    error: z.object({
+      code: z.string().openapi({ example: "invalid" }),
+      message: z.string(),
+    }),
+  })
+  .openapi("StructuredError");
+
+export const structuredErrorResponses = {
+  400: openApiResponse(structuredErrorSchema, "Bad request"),
+  401: openApiResponse(errorSchema, "Unauthorized"),
+  403: openApiResponse(errorSchema, "Forbidden"),
+  404: openApiResponse(structuredErrorSchema, "Not found"),
+  500: openApiResponse(structuredErrorSchema, "Server error"),
+};
+
+export const structuredOkResponses = (schema: z.ZodTypeAny, description = "OK") => ({
+  200: openApiResponse(schema, description),
+  ...structuredErrorResponses,
+});
+
+export const structuredCreatedResponses = (schema: z.ZodTypeAny, description = "Created") => ({
+  201: openApiResponse(schema, description),
+  ...structuredErrorResponses,
+});
+
+export const notFoundResponse = {
+  404: openApiResponse(errorSchema, "Not found"),
+};
+
+/** POST …/presign: a short-lived token for PUT …/upload-presigned. */
+export const presignResponseSchema = z.object({
+  ok: z.boolean(),
+  key: z.string(),
+  uploadToken: z.string(),
+  uploadUrl: z.string(),
+  expiresIn: z.number().int().openapi({ description: "Seconds until the token expires" }),
+});
+
+export const presignHeadersSchema = z.object({
+  "x-content-type": z.string().optional().openapi({ description: "Content type of the file to be uploaded" }),
+});
+
+export const uploadTokenHeadersSchema = z.object({
+  "x-upload-token": z.string().openapi({ description: "uploadToken from the presign response" }),
+});
+
 // Security configuration
 openApiRegistry.registerComponent("securitySchemes", "bearerAuth", {
   type: "http",

@@ -1,5 +1,7 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import type { Env } from "../types/env";
+import { authSecurity, dateTimeSchema, okResponses, openApiRegistry } from "../schemas/openapi";
 
 // GET /v1/sync/status: when each source last synced, for the apps' Settings.
 const app = new Hono<{ Bindings: Env }>();
@@ -11,6 +13,24 @@ async function value<T>(env: Env, sql: string): Promise<T | null> {
     return null; // A missing table means that source isn't set up; report it as unknown.
   }
 }
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/sync/status",
+  summary: "Get when each data source last synced",
+  security: authSecurity,
+  responses: okResponses(z.object({
+    server_time: dateTimeSchema,
+    sources: z.array(z.object({
+      id: z.enum(["documents", "whoop", "wakatime", "github", "spotify", "backup"]),
+      name: z.string(),
+      last_success_at: z.string().nullable(),
+      status: z.string().openapi({ description: "ok, unknown, pending or error, or the source's own sync status" }),
+      detail: z.string().optional().openapi({ description: "documents only" }),
+      error: z.string().nullable().optional().openapi({ description: "backup only" }),
+    })),
+  })),
+});
 
 app.get("/", async (c) => {
   const env = c.env;
