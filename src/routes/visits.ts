@@ -311,6 +311,17 @@ const savedPlaceInput = z.object({
 
 openApiRegistry.registerPath({
   method: "get",
+  path: "/v1/visits/footprints",
+  summary: "Your footprints for a heat layer: time spent per ~50 m cell, and every ground journey's path",
+  security: authSecurity,
+  responses: okResponses(z.object({
+    spots: z.array(z.array(z.number())).openapi({ description: "[lat, lng, hours]" }),
+    paths: z.array(z.object({ mode: z.string().nullable(), points: z.array(z.number()).openapi({ description: "lat, lng, lat, lng, …" }) })),
+  })),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
   path: "/v1/visits/saved",
   summary: "List the places you defined (a centre, a radius, a name, the months it applies)",
   security: authSecurity,
@@ -621,6 +632,34 @@ export function findTrips(days: AwayDay[]) {
  * three-month window, so moving cities doesn't turn your new life into one long trip.
  * All the heavy lifting is SQL; the Worker only joins the few hundred away-days. ?offset=-300
  */
+/**
+ * Your footprints, for the map's heat layer: where you spent time (visits in
+ * ~50 m cells, weighted by hours) and the ground you covered (every journey's
+ * path but flights, flattened to [lat, lng, lat, lng, …] at ~11 m).
+ */
+app.get("/footprints", async (c) => {
+  const db = c.env.DB;
+  const [spots, paths] = await Promise.all([
+    db.prepare(`SELECT ROUND(latitude * 2000) / 2000 AS lat, ROUND(longitude * 2000) / 2000 AS lng,
+        SUM(MIN(MAX(COALESCE((julianday(departed_at) - julianday(arrived_at)) * 24, 0.25), 0.1), 24)) AS hours
+      FROM visits GROUP BY 1, 2`).all(),
+    db.prepare(`SELECT mode, points_json FROM journeys
+      WHERE points_json IS NOT NULL AND (mode IS NULL OR mode != 'flying')`).all(),
+  ]);
+  const round = (v: number) => Math.round(v * 1e4) / 1e4;
+  cached(c, 6 * 3600);
+  return c.json({
+    spots: (spots.results as Array<{ lat: number; lng: number; hours: number }>)
+      .map((s) => [s.lat, s.lng, Math.round(s.hours * 10) / 10]),
+    paths: (paths.results as Array<{ mode: string | null; points_json: string }>).flatMap((j) => {
+      try {
+        const pts = JSON.parse(j.points_json) as number[][];
+        return pts.length >= 2 ? [{ mode: j.mode, points: pts.flatMap((p) => [round(p[0]), round(p[1])]) }] : [];
+      } catch { return []; }
+    }),
+  });
+});
+
 /** Every flight, oldest first: the arcs of your travels. */
 app.get("/flights", async (c) => {
   const { results } = await c.env.DB.prepare(
