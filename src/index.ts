@@ -58,6 +58,7 @@ import recipesRoute from "./routes/recipes";
 import sectionsRoute from "./routes/sections";
 import siteRoute from "./routes/site";
 import { maybeRunVaultBackup } from "./services/backup";
+import { siteRefresh } from "./middleware/site-refresh";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -156,6 +157,8 @@ app.route("/health", healthRoute);
 
 // Protected v1 routes
 app.use("/v1/*", requireAuth);
+// After writes the website shows, refresh those pages on anuragd.me.
+app.use("/v1/*", siteRefresh);
 app.route("/", whoopIntegrationRoute);
 app.route("/", spotifyIntegrationRoute);
 app.route("/v1/profile", profileRoute);
@@ -205,8 +208,8 @@ app.route("/v1/crowd", crowdRoute); // public — un-gated via AUTH_SKIP_PATHS
 
 // Export Cloudflare Worker handlers
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    return app.fetch(request, env);
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    return app.fetch(request, env, ctx);
   },
   async scheduled(event: ScheduledEvent, env: Env): Promise<void> {
     await handleScheduled(event, env);

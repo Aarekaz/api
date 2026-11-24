@@ -29,6 +29,10 @@ export interface Env {
   VAULT_REPO?: string;
   VAULT_BRANCH?: string;
   API_VERSION: string;
+  // The site's /api/revalidate bearer (same value as the site's REVALIDATE_TOKEN). Unset = no refresh calls.
+  REVALIDATE_TOKEN?: string;
+  // Defaults to https://www.anuragd.me (the bare domain redirects, which would drop the token).
+  SITE_URL?: string;
   R2_PUBLIC_BASE_URL: string;
   API_BASE_URL?: string;
   // year-in-review traffic (optional; skipped without the token)
