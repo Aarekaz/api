@@ -3,6 +3,14 @@ account_id = "313c4e6e881f1e07c880d7230541200a"
 main = "src/index.ts"
 compatibility_date = "2024-08-01"
 
+# Request logs kept in Cloudflare (the JSON logger's lines were thrown away before).
+[observability]
+enabled = true
+
+# Run next to D1: several handlers make 3 to 6 queries in a row.
+[placement]
+mode = "smart"
+
 [vars]
 API_VERSION = "0.4.0"
 R2_PUBLIC_BASE_URL = "https://media.anuragd.me"

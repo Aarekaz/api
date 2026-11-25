@@ -364,6 +364,17 @@ const sleepReadModel = (row: SleepRow): WhoopSleepReadModel => ({
 export class WhoopHealthReadRepository {
   constructor(private readonly db: D1Database) {}
 
+  /** Just who is connected: the list routes need nothing more (the sync progress is for /overview). */
+  async getConnection(): Promise<{ whoopUserId: number } | null> {
+    const row = await this.db.prepare(`
+      SELECT whoop_user_id FROM whoop_connections
+      ORDER BY CASE WHEN status = 'disconnected' THEN 1 ELSE 0 END,
+               connected_at DESC, whoop_user_id DESC
+      LIMIT 1
+    `).first<{ whoop_user_id: number }>();
+    return row ? { whoopUserId: row.whoop_user_id } : null;
+  }
+
   async getReadContext(): Promise<WhoopReadContext | null> {
     const connection = await this.db.prepare(`
       SELECT whoop_user_id, status, last_success_at, last_error_at,

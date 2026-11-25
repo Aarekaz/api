@@ -125,6 +125,7 @@ const WHOOP_INDEXES = [
   "idx_whoop_workouts_deleted",
   "idx_whoop_webhook_events_user_received",
   "idx_whoop_sync_checkpoints_progress",
+  "idx_whoop_sync_checkpoints_run",
   "idx_whoop_sync_runs_user_started",
 ] as const;
 

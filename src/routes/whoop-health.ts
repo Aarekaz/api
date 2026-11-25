@@ -130,7 +130,7 @@ export function createWhoopHealthRoute(dependencies: WhoopHealthDependencies = {
     );
     if (!query) return c.json({ error: "Invalid WHOOP collection query" }, 400);
     const readRepository = readRepositoryFor(c.env);
-    const context = await readRepository.getReadContext();
+    const context = await readRepository.getConnection();
     if (!context) return c.json({ records: [], next_cursor: null });
     const page = await readRepository.listWorkouts(context.whoopUserId, query);
     const nextCursor = page.nextAnchor
@@ -157,7 +157,7 @@ export function createWhoopHealthRoute(dependencies: WhoopHealthDependencies = {
     const query = await collectionQuery(c.req.query(), c.env.WHOOP_TOKEN_ENCRYPTION_KEY, resource);
     if (!query) return c.json({ error: "Invalid WHOOP collection query" }, 400);
     const readRepository = readRepositoryFor(c.env);
-    const context = await readRepository.getReadContext();
+    const context = await readRepository.getConnection();
     if (!context) return c.json({ records: [], next_cursor: null });
     const page = await list(readRepository, context.whoopUserId, query);
     const nextCursor = page.nextAnchor
@@ -194,7 +194,7 @@ export function createWhoopHealthRoute(dependencies: WhoopHealthDependencies = {
       return c.json({ error: "Invalid workout ID" }, 400);
     }
     const readRepository = readRepositoryFor(c.env);
-    const context = await readRepository.getReadContext();
+    const context = await readRepository.getConnection();
     if (!context) return c.json({ error: "WHOOP workout not found" }, 404);
     const workout = await readRepository.getWorkout(context.whoopUserId, workoutId);
     return workout
@@ -204,7 +204,7 @@ export function createWhoopHealthRoute(dependencies: WhoopHealthDependencies = {
 
   app.get("/profile", async (c) => {
     const readRepository = readRepositoryFor(c.env);
-    const context = await readRepository.getReadContext();
+    const context = await readRepository.getConnection();
     if (!context) return c.json({ error: "WHOOP profile not found" }, 404);
     const profile = await readRepository.getProfile(context.whoopUserId);
     if (!profile) return c.json({ error: "WHOOP profile not found" }, 404);

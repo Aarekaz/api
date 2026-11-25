@@ -353,6 +353,14 @@ const SELECT = `SELECT d.*, l.url, l.site, l.excerpt, l.reading_minutes, l.read_
   FROM links l JOIN documents d ON d.id = l.document_id
   LEFT JOIN link_reading r ON r.document_id = l.document_id`;
 
+/** The same, without the article body: lists never show it, and bodies are most of the bytes. */
+const LIST_SELECT = `SELECT d.id, d.kind, d.folder, d.title, d.slug, d.frontmatter_json, d.visibility, d.status, d.post_id,
+  d.source, d.created_at, d.updated_at, d.version, d.deleted_at,
+  l.url, l.site, l.excerpt, l.reading_minutes, l.read_at, l.fetched_at, l.fetch_error,
+  r.progress, r.progress_anchor, r.progress_updated_at, r.progress_device, r.opened_at, r.note, r.note_updated_at
+  FROM links l JOIN documents d ON d.id = l.document_id
+  LEFT JOIN link_reading r ON r.document_id = l.document_id`;
+
 export async function getLink(env: Env, id: string): Promise<LinkRow> {
   const row = await env.DB.prepare(`${SELECT} WHERE d.id = ? AND d.deleted_at IS NULL`).bind(id).first<LinkRow>();
   if (!row) throw new DocumentError("Link not found", 404);
@@ -369,7 +377,7 @@ export async function listLinks(env: Env, state: LinkListState = "all", limit = 
   const tagFilter = tag ? " AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(d.frontmatter_json, '$.tags'), '[]')) t WHERE t.value = ?)" : "";
   const binds: unknown[] = tag ? [tag.trim().toLowerCase()] : [];
   const { results } = await env.DB.prepare(
-    `${SELECT} WHERE d.deleted_at IS NULL${filter}${tagFilter} ORDER BY d.created_at DESC LIMIT ?`,
+    `${LIST_SELECT} WHERE d.deleted_at IS NULL${filter}${tagFilter} ORDER BY d.created_at DESC LIMIT ?`,
   ).bind(...binds, Math.min(Math.max(limit, 1), 2000)).all<LinkRow>();
   return results;
 }

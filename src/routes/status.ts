@@ -34,7 +34,8 @@ openApiRegistry.registerPath({
 // Route handlers
 app.get("/", async (c) => {
   const row = await c.env.DB.prepare(
-    "SELECT * FROM status_snapshots ORDER BY created_at DESC LIMIT 1"
+    // The newest row by its key: one row, not a sort of every snapshot.
+    "SELECT * FROM status_snapshots ORDER BY id DESC LIMIT 1"
   ).all();
   const refreshHealth = await c.env.DB.prepare(
     `SELECT
