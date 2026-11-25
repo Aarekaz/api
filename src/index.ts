@@ -43,6 +43,8 @@ import spotifyIntegrationRoute from "./routes/spotify-integration";
 import musicRoute from "./routes/music";
 import vaultRoute from "./routes/vault";
 import appAuthRoute, { signOutRoute } from "./routes/app-auth";
+import adminRoute from "./routes/admin";
+import { maybeRunD1Backup } from "./services/d1-backup";
 import documentsRoute, { searchRoute, captureRoute } from "./routes/documents";
 import syncStatusRoute from "./routes/sync-status";
 import linksRoute from "./routes/links";
@@ -196,6 +198,7 @@ app.route("/v1/training", trainingRoute);
 app.route("/v1/recipes", recipesRoute);
 app.route("/v1/sections", sectionsRoute);
 app.route("/v1/site", siteRoute);
+app.route("/v1/admin", adminRoute);
 app.route("/v1/crowd", crowdRoute); // public — un-gated via AUTH_SKIP_PATHS
 
 // Export Cloudflare Worker handlers
@@ -210,6 +213,8 @@ export default {
     if (new Date(event.scheduledTime).getUTCMinutes() % 30 < 5) {
       try { await syncMusicPlays(env); } catch (error) { console.error("music history sync failed", error); }
     }
+    // Last: a running D1 backup works for a few seconds of each tick until it's done.
+    await maybeRunD1Backup(env, new Date(event.scheduledTime));
   },
   async queue(batch: MessageBatch<WhoopQueueMessage>, env: Env): Promise<void> {
     return handleWhoopQueue(batch, env);

@@ -44,6 +44,11 @@ The website reads these GETs, and their bodies must stay byte-compatible:
   columns, indexes, views. Never drop or rewrite; old tables stay even when
   their routes are unmounted.
 - `scripts/`: one-off imports, backfills and backups (Node).
+- `services/d1-backup.ts`: the monthly D1 backup (1st of the month, UTC) to
+  the private bucket only, `backups/YYYY-MM-DD/<table>.ndjson.gz` plus
+  `manifest.json`, a few seconds per cron tick until done (state in
+  `migrations/0047_d1_backups.sql`). `POST /v1/admin/backup` starts one,
+  `GET` shows the latest. Backups are never deleted.
 
 ## App routes: replies, errors, pages, caching
 
