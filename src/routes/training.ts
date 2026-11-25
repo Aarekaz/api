@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
-import { fail } from "../lib/http";
+import { fail, list } from "../lib/http";
 import { z } from "zod";
 import {
   authSecurity,
@@ -11,6 +11,7 @@ import {
   okSchema,
   openApiJsonRequestBody,
   openApiRegistry,
+  pageFields,
 } from "../schemas/openapi";
 
 // /v1/training: a simple plan of what to do and when. WHOOP tracks the effort.
@@ -264,6 +265,30 @@ openApiRegistry.registerPath({
   })),
 });
 
+const bestSchema = z.object({
+  exercise: z.string(),
+  day,
+  set_number: z.number().int(),
+  reps: z.number().int().nullable(),
+  weight: z.number().nullable(),
+  unit: z.string().nullable(),
+  kilograms: z.number().openapi({ description: "The weight in kg (lb × 0.45359237), what bests are compared by" }),
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/training/bests",
+  summary: "Get your best set at each exercise",
+  description: "The heaviest set (in kg), and the most reps at that weight; within 0.1 kg counts as the same weight. "
+    + "Equal sets: the first one you did. A move with no weight is its most reps.",
+  security: authSecurity,
+  request: { query: z.object({ before: day.optional().openapi({ description: "Only sets on days before this one" }) }) },
+  responses: structuredOkResponses(z.object({
+    bests: z.array(bestSchema).openapi({ description: "Same as items" }),
+    ...pageFields(bestSchema),
+  })),
+});
+
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/training/history",
@@ -375,6 +400,36 @@ app.get("/day", async (c) => {
        ON l.exercise = s.exercise AND l.day = s.day ORDER BY s.exercise, s.set_number`,
   ).bind(day).all();
   return c.json({ day, sets: sets.results, last: last.results });
+});
+
+/**
+ * Your best set at each exercise, in one query: the rule the app's
+ * TrainingLog.best(of:) applies (Sources/OSCore/TrainingLog.swift). Weights
+ * compare in kg (lb × 0.45359237; no weight is 0). A set counts if it has reps
+ * or weight. The best is the heaviest; within 0.1 kg (plates are 1.25 kg apart)
+ * it's the same weight, and more reps win. Among equal sets the first one you
+ * did stays, as the app keeps the first when nothing beats it.
+ * ?before=YYYY-MM-DD counts only days before it.
+ */
+export const BESTS_SQL = `
+  WITH sets AS (
+    SELECT exercise, day, set_number, reps, weight, unit,
+           COALESCE(weight, 0) * (CASE WHEN LOWER(unit) = 'lb' THEN 0.45359237 ELSE 1 END) AS kilograms,
+           COALESCE(reps, 0) AS n
+      FROM training_sets WHERE (?1 IS NULL OR day < ?1)
+  ), counted AS (
+    SELECT *, MAX(kilograms) OVER (PARTITION BY exercise) AS heaviest FROM sets WHERE n > 0 OR kilograms > 0
+  ), ranked AS (
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY exercise ORDER BY n DESC, day, set_number) AS place
+      FROM counted WHERE kilograms >= heaviest - 0.1
+  )
+  SELECT exercise, day, set_number, reps, weight, unit, kilograms FROM ranked WHERE place = 1 ORDER BY exercise`;
+
+app.get("/bests", async (c) => {
+  const before = c.req.query("before");
+  if (before !== undefined && !isDay(before)) return fail(c, 400, "before must look like 2026-11-24");
+  const { results } = await c.env.DB.prepare(BESTS_SQL).bind(before ?? null).all();
+  return list(c, "bests", results, null);
 });
 
 /**
