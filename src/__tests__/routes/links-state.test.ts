@@ -294,5 +294,39 @@ describe("links: reading stats", () => {
     expect(stats.days[0].minutes).toBeCloseTo(0.5, 1);
     expect(stats.days[1].minutes).toBeCloseTo(0.5, 1);
     expect(stats.totals.saved).toBe(1);
+    // Without ?day= the answer is as it was.
+    expect(stats).not.toHaveProperty("articles");
+    expect(stats).not.toHaveProperty("day");
+  });
+
+  it("lists a day's articles with their minutes, in the order last read", async () => {
+    const { env, send, save } = setup();
+    const first = await save("https://example.com/first");
+    const second = await save("https://example.com/second");
+    const gone = await save("https://example.com/gone");
+    const put = (id: string, body: unknown) => send(`/v1/links/${id}/progress`, "PUT", body);
+    await put(second.id, { progress: 0.4, updated_at: "2026-11-25T08:00:00.000Z", day: "2026-11-25" });
+    await put(first.id, { progress: 0.5, updated_at: "2026-11-25T09:00:00.000Z", day: "2026-11-25" });
+    await put(first.id, { progress: 0.6, updated_at: "2026-11-24T09:00:00.000Z", day: "2026-11-24" });
+    await put(gone.id, { progress: 0.5, updated_at: "2026-11-25T07:00:00.000Z", day: "2026-11-25" });
+    await send(`/v1/links/${second.id}/progress`, "PUT", { progress: 0.9, updated_at: "2026-11-25T10:00:00.000Z", day: "2026-11-25" });
+    type Stats = { day?: string; days: Array<{ day: string; minutes: number; articles: number }>; articles?: Array<{ id: string; title: string | null; minutes: number }> };
+    const read = async (q: string) => (await (await send(`/v1/links/stats?since=2026-11-01${q}`)).json()) as Stats;
+    const before = await read("&day=2026-11-25");
+    expect(before.day).toBe("2026-11-25");
+    expect(before.articles?.map((a) => a.id)).toEqual([gone.id, first.id, second.id]);
+    expect(before.articles?.map((a) => a.title)).toEqual(["On Reading Slowly", "On Reading Slowly", "On Reading Slowly"]);
+    // The day's articles add up to the day's total.
+    const total = before.days.find((d) => d.day === "2026-11-25")!;
+    const sum = (before.articles ?? []).reduce((s, a) => s + a.minutes, 0);
+    expect(sum).toBeCloseTo(total.minutes, 0);
+    expect(before.articles?.[2].minutes).toBeGreaterThan(before.articles?.[1].minutes ?? 0);
+
+    // A deleted article drops out of the list.
+    await env.DB.prepare("UPDATE documents SET deleted_at = ? WHERE id = ?").bind("2026-11-25T11:00:00.000Z", gone.id).run();
+    expect((await read("&day=2026-11-25")).articles?.map((a) => a.id)).toEqual([first.id, second.id]);
+    // A day with nothing read is an empty list; a malformed day is ignored.
+    expect((await read("&day=2026-11-23")).articles).toEqual([]);
+    expect(await read("&day=yesterday")).not.toHaveProperty("articles");
   });
 });

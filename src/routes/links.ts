@@ -52,6 +52,10 @@ const ReadingStats = z.object({
   finished_by_month: z.array(z.object({ month: z.string(), count: z.number() })),
   top_sites: z.array(z.object({ site: z.string(), count: z.number() })),
   totals: z.object({ saved: z.number(), finished: z.number(), reading: z.number(), highlights: z.number() }),
+  day: z.string().optional().openapi({ description: "The day asked for with ?day=, when given" }),
+  articles: z.array(z.object({
+    id: z.string(), title: z.string().nullable(), minutes: z.number(),
+  })).optional().openapi({ description: "With ?day=: minutes per article read that day, in the order last read (the current one last)" }),
 });
 
 const SaveLink = z.object({ url: z.string().min(1).max(4000) });
@@ -140,7 +144,10 @@ openApiRegistry.registerPath({
   path: "/v1/links/stats",
   summary: "Reading stats: minutes and articles per day, finished per month, favourite sites",
   security: authSecurity,
-  request: { query: z.object({ since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().openapi({ description: "First day (default: a year ago)" }) }) },
+  request: { query: z.object({
+    since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().openapi({ description: "First day (default: a year ago)" }),
+    day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().openapi({ description: "Also list the articles read on this day, with their minutes" }),
+  }) },
   responses: structuredOkResponses(ReadingStats),
 });
 
@@ -228,7 +235,8 @@ app.post("/", async (c) => {
 app.get("/stats", async (c) => {
   const since = c.req.query("since");
   const day = since && /^\d{4}-\d{2}-\d{2}$/.test(since) ? since : new Date(Date.now() - 366 * 86_400_000).toISOString().slice(0, 10);
-  return c.json(await readingStats(c.env, day));
+  const on = c.req.query("day");
+  return c.json(await readingStats(c.env, day, on && /^\d{4}-\d{2}-\d{2}$/.test(on) ? on : undefined));
 });
 
 app.get("/:id", async (c) => {

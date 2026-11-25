@@ -441,7 +441,7 @@ export async function saveProgress(env: Env, id: string, input: ProgressInput, n
  * sites. Articles finished before time was tracked count their reading time on
  * the day you finished them, so the history starts full.
  */
-export async function readingStats(env: Env, since: string) {
+export async function readingStats(env: Env, since: string, day?: string) {
   const tracked = await env.DB.prepare(
     `SELECT day, SUM(minutes) AS minutes, COUNT(*) AS articles FROM reading_days WHERE day >= ? GROUP BY day`,
   ).bind(since).all<{ day: string; minutes: number; articles: number }>();
@@ -475,12 +475,32 @@ export async function readingStats(env: Env, since: string) {
      WHERE d.deleted_at IS NULL`,
   ).first<{ saved: number; finished: number; reading: number }>();
   const highlights = await env.DB.prepare(`SELECT COUNT(*) AS n FROM highlights`).first<{ n: number }>();
+  const articles = day ? await readingOnDay(env, day) : undefined;
   return {
     days: [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day)).map((d) => ({ ...d, minutes: Math.round(d.minutes * 10) / 10 })),
     finished_by_month: finished.results ?? [],
     top_sites: sites.results ?? [],
     totals: { saved: totals?.saved ?? 0, finished: totals?.finished ?? 0, reading: totals?.reading ?? 0, highlights: highlights?.n ?? 0 },
+    ...(articles ? { day, articles } : {}),
   };
+}
+
+/**
+ * What you read on one day, article by article, from `reading_days`: the
+ * minutes each one added that day, in the order you last read them (the one
+ * you're on now comes last). Deleted articles are left out; an article whose
+ * document row is gone still counts, untitled.
+ */
+export async function readingOnDay(env: Env, day: string) {
+  const rows = await env.DB.prepare(
+    `SELECT r.document_id AS id, d.title AS title, r.minutes AS minutes
+     FROM reading_days r
+     LEFT JOIN documents d ON d.id = r.document_id
+     LEFT JOIN link_reading lr ON lr.document_id = r.document_id
+     WHERE r.day = ? AND d.deleted_at IS NULL
+     ORDER BY COALESCE(lr.progress_updated_at, '') ASC, r.document_id ASC`,
+  ).bind(day).all<{ id: string; title: string | null; minutes: number }>();
+  return (rows.results ?? []).map((r) => ({ id: r.id, title: r.title ?? null, minutes: Math.round(r.minutes * 10) / 10 }));
 }
 
 export function readingOf(row: LinkRow) {
