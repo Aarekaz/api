@@ -11,7 +11,9 @@ function setup() {
   const db = new DatabaseSync(":memory:");
   db.exec(readFileSync("migrations/0007_location.sql", "utf8"));
   db.exec("ALTER TABLE location_history ADD COLUMN updated_at TEXT");
-  db.exec(readFileSync("migrations/0027_visits.sql", "utf8"));
+  for (const m of ["0027_visits", "0028_place_names", "0029_journeys", "0041_visit_guess", "0042_utc_offset"]) {
+    db.exec(readFileSync(`migrations/${m}.sql`, "utf8"));
+  }
   const statement = (sql: string, args: unknown[] = []) => ({
     bind: (...next: unknown[]) => statement(sql, next),
     async run() {
@@ -27,8 +29,9 @@ function setup() {
   } as unknown as D1Database;
   const root = new Hono<{ Bindings: Env }>();
   root.route("/v1/visits", visitsRoute);
+  const get = (path: string) => root.request(path, {}, { DB } as Env);
   const post = (visits: unknown[]) => root.request("/v1/visits", { method: "POST", body: JSON.stringify({ visits }), headers: { "Content-Type": "application/json" } }, { DB } as Env);
-  return { db, post };
+  return { db, post, get };
 }
 
 const stop = (departed: string | null) => ({
@@ -55,5 +58,30 @@ describe("live visits", () => {
     await post([other]);
     const rows = db.prepare("SELECT source_key, departed_at FROM visits ORDER BY source_key").all() as Array<{ departed_at: string | null }>;
     expect(rows.map((r) => r.departed_at && r.departed_at.slice(11, 19))).toEqual(["16:37:32", null]);
+  });
+});
+
+describe("local days", () => {
+  // 2022-06-10 03:07 UTC is 8:52 am in Kathmandu, but still the 9th in New York.
+  const kathmandu = { latitude: 27.6697, longitude: 85.31, arrived_at: "2022-06-10T03:07:55Z", departed_at: "2022-06-10T04:19:55Z",
+    source: "google-timeline", source_key: "gt:2022-06-10T03:07:55Z:x", utc_offset: 345 };
+
+  it("puts a visit on the day where it happened, not the reader's", async () => {
+    const { post, get } = setup();
+    await post([kathmandu]);
+    const day = await (await get("/v1/visits/day?date=2022-06-10&offset=-240")).json() as { visits: unknown[]; utc_offset: number };
+    expect(day.visits).toHaveLength(1);
+    expect(day.utc_offset).toBe(345);
+    const before = await (await get("/v1/visits/day?date=2022-06-09&offset=-240")).json() as { visits: unknown[] };
+    expect(before.visits).toHaveLength(0);
+    const days = await (await get("/v1/visits/days?year=2022&offset=-240")).json() as { days: Array<{ day: string }> };
+    expect(days.days.map((d) => d.day)).toEqual(["2022-06-10"]);
+  });
+
+  it("falls back to the reader's offset when a visit has none", async () => {
+    const { post, get } = setup();
+    await post([{ ...kathmandu, utc_offset: undefined, source_key: "k2" }]);
+    const days = await (await get("/v1/visits/days?year=2022&offset=-240")).json() as { days: Array<{ day: string }> };
+    expect(days.days.map((d) => d.day)).toEqual(["2022-06-09"]);
   });
 });

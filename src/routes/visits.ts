@@ -18,14 +18,21 @@ const app = new Hono<{ Bindings: Env }>();
 interface VisitInput {
   latitude?: unknown; longitude?: unknown; arrived_at?: unknown; departed_at?: unknown;
   place?: unknown; address?: unknown; city?: unknown; country?: unknown; source?: unknown; source_key?: unknown;
+  utc_offset?: unknown;
 }
 
 const str = (v: unknown, max = 300) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
 const isDate = (v: unknown) => typeof v === "string" && !Number.isNaN(Date.parse(v));
+/** Minutes from UTC where it happened (-840…840), or null. */
+const offsetIn = (v: unknown) => {
+  const n = Number(v);
+  return v !== null && v !== undefined && v !== "" && Number.isInteger(n) && Math.abs(n) <= 840 ? n : null;
+};
 
 export function cleanVisit(v: VisitInput): null | {
   latitude: number; longitude: number; arrived_at: string; departed_at: string | null; place: string | null;
   address: string | null; city: string | null; country: string | null; source: string; source_key: string;
+  utc_offset: number | null;
 } {
   const lat = Number(v.latitude), lng = Number(v.longitude);
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
@@ -37,7 +44,8 @@ export function cleanVisit(v: VisitInput): null | {
   // Without a key, a visit is identified by its source, arrival and rough position.
   const key = str(v.source_key, 200) ?? `${source}:${arrived}:${lat.toFixed(3)},${lng.toFixed(3)}`;
   return { latitude: lat, longitude: lng, arrived_at: arrived, departed_at: departed, place: str(v.place),
-    address: str(v.address), city: str(v.city, 120), country: str(v.country, 120), source, source_key: key };
+    address: str(v.address), city: str(v.city, 120), country: str(v.country, 120), source, source_key: key,
+    utc_offset: offsetIn(v.utc_offset) };
 }
 
 // OpenAPI registrations. Posted visits and journeys are cleaned, not
@@ -62,6 +70,7 @@ const visitSchema = z.object({
   country: z.string().nullable(),
   source: z.string(),
   source_key: z.string(),
+  utc_offset: z.number().int().nullable().openapi({ description: "Minutes from UTC where it happened (Kathmandu 345); null if unknown" }),
   created_at: z.string(),
 });
 const visitWithNameSchema = visitSchema.extend({
@@ -93,6 +102,7 @@ const journeySchema = z.object({
   points_json: z.string().nullable().openapi({ description: "JSON array of [lat, lng(, t)] points" }),
   source: z.string(),
   source_key: z.string(),
+  utc_offset: z.number().int().nullable().openapi({ description: "Minutes from UTC where it happened (Kathmandu 345); null if unknown" }),
   created_at: z.string(),
 });
 
@@ -138,6 +148,7 @@ openApiRegistry.registerPath({
         country: z.string().max(120).nullable().optional(),
         source: z.string().max(40).openapi({ description: "\"visit\" for live visits from the phone" }),
         source_key: z.string().max(200).nullable().optional(),
+        utc_offset: z.number().int().min(-840).max(840).nullable().optional().openapi({ description: "Minutes from UTC where it happened" }),
       })).min(1).max(500),
     })),
   },
@@ -425,6 +436,7 @@ openApiRegistry.registerPath({
           .openapi({ description: "[lat, lng] or [lat, lng, t] points" }),
         source: z.string().max(40),
         source_key: z.string().max(200).nullable().optional(),
+        utc_offset: z.number().int().min(-840).max(840).nullable().optional().openapi({ description: "Minutes from UTC where it happened" }),
       })).min(1).max(500),
     })),
   },
@@ -452,11 +464,11 @@ app.post("/", async (c) => {
   const statements = clean.map((v) => c.env.DB.prepare(
     // A repeat is ignored, except that a stop sent first on arrival gets its
     // departure filled in when the phone sends it again on leaving.
-    `INSERT INTO visits (latitude, longitude, arrived_at, departed_at, place, address, city, country, source, source_key, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(source_key) DO UPDATE SET departed_at = excluded.departed_at
+    `INSERT INTO visits (latitude, longitude, arrived_at, departed_at, place, address, city, country, source, source_key, created_at, utc_offset)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_key) DO UPDATE SET departed_at = excluded.departed_at, utc_offset = COALESCE(visits.utc_offset, excluded.utc_offset)
      WHERE visits.departed_at IS NULL AND excluded.departed_at IS NOT NULL AND excluded.departed_at > visits.arrived_at`,
-  ).bind(v.latitude, v.longitude, v.arrived_at, v.departed_at, v.place, v.address, v.city, v.country, v.source, v.source_key, now));
+  ).bind(v.latitude, v.longitude, v.arrived_at, v.departed_at, v.place, v.address, v.city, v.country, v.source, v.source_key, now, v.utc_offset));
   let added = 0;
   for (let i = 0; i < statements.length; i += 50) {
     const results = await c.env.DB.batch(statements.slice(i, i + 50));
@@ -483,7 +495,12 @@ const offsetOf = (v: string | undefined) => {
   const n = Math.round(Number(v));
   return Number.isFinite(n) && Math.abs(n) <= 14 * 60 ? n : 0;
 };
-const modifier = (minutes: number) => `${minutes >= 0 ? "+" : ""}${minutes} minutes`;
+/**
+ * SQL for a row's own local time: its stored utc_offset (where it happened), or
+ * the reader's offset (`param`) when unknown. `col` is the UTC column.
+ */
+const local = (col: string, param: string, prefix = "") =>
+  `datetime(${prefix}${col}, printf('%+d minutes', COALESCE(${prefix}utc_offset, ${param})))`;
 const cached = (c: { header: (k: string, v: string) => void }, seconds: number) =>
   c.header("Cache-Control", `private, max-age=${seconds}`);
 
@@ -521,7 +538,7 @@ app.get("/places", async (c) => {
 /** Visits per year, for the map's year scrubber. */
 app.get("/years", async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT substr(arrived_at, 1, 4) AS year, COUNT(*) AS visits, COUNT(DISTINCT ${KEY}) AS places
+    `SELECT substr(${local("arrived_at", "0")}, 1, 4) AS year, COUNT(*) AS visits, COUNT(DISTINCT ${KEY}) AS places
      FROM visits GROUP BY year ORDER BY year`,
   ).all();
   cached(c, 300);
@@ -530,11 +547,10 @@ app.get("/years", async (c) => {
 
 /** Visits per month, for the map's timeline. ?offset= minutes from UTC for local months. */
 app.get("/months", async (c) => {
-  const shift = modifier(offsetOf(c.req.query("offset")));
   const { results } = await c.env.DB.prepare(
-    `SELECT substr(datetime(arrived_at, ?), 1, 7) AS month, COUNT(*) AS visits, COUNT(DISTINCT ${KEY}) AS places
+    `SELECT substr(${local("arrived_at", "?1")}, 1, 7) AS month, COUNT(*) AS visits, COUNT(DISTINCT ${KEY}) AS places
      FROM visits GROUP BY month ORDER BY month`,
-  ).bind(shift).all();
+  ).bind(offsetOf(c.req.query("offset"))).all();
   cached(c, 300);
   return c.json({ months: results });
 });
@@ -558,8 +574,8 @@ app.get("/on-this-day", async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT v.*, ${KEY.replace(/latitude|longitude/g, (m) => "v." + m)} AS key, n.name AS place_name, n.city AS place_city
      FROM visits AS v LEFT JOIN place_names AS n ON n.key = ${KEY.replace(/latitude|longitude/g, (m) => "v." + m)}
-     WHERE strftime('%m-%d', v.arrived_at, ?) = ? ORDER BY v.arrived_at`,
-  ).bind(modifier(offset), md).all();
+     WHERE strftime('%m-%d', ${local("arrived_at", "?1", "v.")}) = ?2 ORDER BY v.arrived_at`,
+  ).bind(offset, md).all();
   return c.json({ visits: results });
 });
 
@@ -573,9 +589,9 @@ app.get("/days", async (c) => {
   const to = ok ? `${Number(year) + 1}-01-02` : "9999";
   const { results } = await c.env.DB.prepare(
     `SELECT day, COUNT(*) AS visits, COUNT(DISTINCT key) AS places FROM
-       (SELECT strftime('%Y-%m-%d', arrived_at, ?1) AS day, ${KEY} AS key FROM visits WHERE arrived_at >= ?2 AND arrived_at < ?3)
+       (SELECT date(${local("arrived_at", "?1")}) AS day, ${KEY} AS key FROM visits WHERE arrived_at >= ?2 AND arrived_at < ?3)
      GROUP BY day ORDER BY day`,
-  ).bind(modifier(offset), from, to).all();
+  ).bind(offset, from, to).all();
   const rows = (results as Array<{ day: string }>).filter((r) => !ok || r.day.startsWith(year!));
   cached(c, 300);
   return c.json({ days: rows });
@@ -586,18 +602,27 @@ app.get("/day", async (c) => {
   const date = c.req.query("date") ?? "";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: "date must look like 2024-05-01" }, 400);
   const offset = offsetOf(c.req.query("offset"));
-  const start = new Date(Date.parse(`${date}T00:00:00Z`) - offset * 60_000).toISOString();
-  const end = new Date(Date.parse(start) + 86_400_000).toISOString();
+  // The day is the local day where you were: each row is read in its own offset.
+  // A UTC window two days wide finds the candidates (any offset is within ±14 h).
+  const near = [new Date(Date.parse(`${date}T00:00:00Z`) - 2 * 86_400_000).toISOString(),
+    new Date(Date.parse(`${date}T00:00:00Z`) + 2 * 86_400_000).toISOString()];
   const visits = await c.env.DB.prepare(
     `SELECT v.*, ${KEY.replace(/latitude|longitude/g, (m) => "v." + m)} AS key, n.name AS place_name, n.city AS place_city
      FROM visits AS v LEFT JOIN place_names AS n ON n.key = ${KEY.replace(/latitude|longitude/g, (m) => "v." + m)}
-     WHERE (v.arrived_at >= ?1 AND v.arrived_at < ?2) OR (v.arrived_at < ?1 AND v.departed_at > ?1)
+     WHERE v.arrived_at >= ?3 AND v.arrived_at < ?4
+       AND (date(${local("arrived_at", "?1", "v.")}) = ?2
+         OR (date(${local("arrived_at", "?1", "v.")}) < ?2 AND v.departed_at IS NOT NULL AND date(${local("departed_at", "?1", "v.")}) >= ?2))
      ORDER BY v.arrived_at`,
-  ).bind(start, end).all();
+  ).bind(offset, date, ...near).all();
   const journeys = await c.env.DB.prepare(
-    "SELECT * FROM journeys WHERE started_at >= ? AND started_at < ? ORDER BY started_at",
-  ).bind(start, end).all();
-  return c.json({ date, start, end, visits: visits.results, journeys: journeys.results });
+    `SELECT * FROM journeys WHERE started_at >= ?3 AND started_at < ?4 AND date(${local("started_at", "?1")}) = ?2 ORDER BY started_at`,
+  ).bind(offset, date, ...near).all();
+  // The day's own offset (where most of it happened), for the app's clock.
+  const rows = visits.results as Array<{ utc_offset: number | null }>;
+  const dayOffset = rows.find((r) => r.utc_offset != null)?.utc_offset ?? offset;
+  const start = new Date(Date.parse(`${date}T00:00:00Z`) - dayOffset * 60_000).toISOString();
+  const end = new Date(Date.parse(start) + 86_400_000).toISOString();
+  return c.json({ date, start, end, utc_offset: dayOffset, visits: visits.results, journeys: journeys.results });
 });
 
 export interface AwayDay {
@@ -683,16 +708,16 @@ app.get("/chapters", async (c) => {
   const db = c.env.DB;
   const [rows, visits, fresh, modes, saved] = await Promise.all([
     db.prepare(`
-      WITH v AS (SELECT ${KEY} AS key, latitude AS lat, longitude AS lng, substr(arrived_at, 1, 7) AS mo,
+      WITH v AS (SELECT ${KEY} AS key, latitude AS lat, longitude AS lng, substr(${local("arrived_at", "0")}, 1, 7) AS mo,
         MIN(MAX((julianday(departed_at) - julianday(arrived_at)) * 24, 0), 24) AS h
         FROM visits WHERE departed_at IS NOT NULL),
       mk AS (SELECT mo, key, SUM(h) AS hours, COUNT(*) AS n, AVG(lat) AS lat, AVG(lng) AS lng FROM v GROUP BY mo, key),
       r AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY mo ORDER BY hours DESC) AS rk FROM mk)
       SELECT r.mo, r.key, r.hours, r.n, r.lat, r.lng, n.name, n.city, n.country
       FROM r LEFT JOIN place_names AS n ON n.key = r.key WHERE rk <= 12 ORDER BY r.mo, rk`).all(),
-    db.prepare(`SELECT substr(arrived_at, 1, 7) AS mo, COUNT(*) AS n FROM visits GROUP BY mo`).all(),
-    db.prepare(`SELECT substr(first, 1, 7) AS mo, COUNT(*) AS n FROM (SELECT ${KEY} AS key, MIN(arrived_at) AS first FROM visits GROUP BY key) GROUP BY mo`).all(),
-    db.prepare(`SELECT substr(started_at, 1, 7) AS mo, mode, SUM(distance_m) AS m FROM journeys
+    db.prepare(`SELECT substr(${local("arrived_at", "0")}, 1, 7) AS mo, COUNT(*) AS n FROM visits GROUP BY mo`).all(),
+    db.prepare(`SELECT substr(first, 1, 7) AS mo, COUNT(*) AS n FROM (SELECT ${KEY} AS key, MIN(${local("arrived_at", "0")}) AS first FROM visits GROUP BY key) GROUP BY mo`).all(),
+    db.prepare(`SELECT substr(${local("started_at", "0")}, 1, 7) AS mo, mode, SUM(distance_m) AS m FROM journeys
       WHERE distance_m IS NOT NULL AND mode NOT IN ('path', 'unknown') GROUP BY mo, mode`).all(),
     db.prepare("SELECT * FROM saved_places").all(),
   ]);
@@ -708,8 +733,8 @@ app.get("/trips", async (c) => {
   const keyV = KEY.replace(/latitude|longitude/g, (m) => "v." + m);
   const { results } = await c.env.DB.prepare(`
     WITH v AS (
-      SELECT v.latitude AS lat, v.longitude AS lng, ${keyV} AS key, substr(v.arrived_at, 1, 7) AS mo,
-        strftime('%Y-%m-%d', v.arrived_at, ?1) AS day, COALESCE(n.city, v.city) AS city, COALESCE(n.country, v.country) AS country
+      SELECT v.latitude AS lat, v.longitude AS lng, ${keyV} AS key, substr(${local("arrived_at", "?1", "v.")}, 1, 7) AS mo,
+        date(${local("arrived_at", "?1", "v.")}) AS day, COALESCE(n.city, v.city) AS city, COALESCE(n.country, v.country) AS country
       FROM visits AS v LEFT JOIN place_names AS n ON n.key = ${keyV}),
     mk AS (SELECT mo, key, COUNT(*) AS n, AVG(lat) AS lat, AVG(lng) AS lng FROM v GROUP BY mo, key),
     months AS (SELECT DISTINCT mo FROM v),
@@ -725,7 +750,7 @@ app.get("/trips", async (c) => {
       group_concat(DISTINCT v.key) AS keys_csv, group_concat(v.city, '|') AS cities, group_concat(v.country, '|') AS countries
     FROM v JOIN home AS h ON h.mo = v.mo
     WHERE abs(v.lat - h.lat) > 0.9 OR abs(v.lng - h.lng) > 1.1
-    GROUP BY v.day`).bind(modifier(offsetOf(c.req.query("offset")))).all();
+    GROUP BY v.day`).bind(offsetOf(c.req.query("offset"))).all();
   // Keys contain commas themselves, so pick them out by shape.
   const days = (results as unknown as Array<AwayDay & { keys_csv: string | null }>).map((d) => ({
     ...d, keys: ((d.keys_csv ?? "").match(/-?\d+\.\d{3},-?\d+\.\d{3}/g) ?? []).join("|"),
@@ -816,7 +841,7 @@ app.post("/names", async (c) => {
 
 interface JourneyInput {
   started_at?: unknown; ended_at?: unknown; start_lat?: unknown; start_lng?: unknown; end_lat?: unknown; end_lng?: unknown;
-  distance_m?: unknown; mode?: unknown; points?: unknown; source?: unknown; source_key?: unknown;
+  distance_m?: unknown; mode?: unknown; points?: unknown; source?: unknown; source_key?: unknown; utc_offset?: unknown;
 }
 const num = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 
@@ -834,7 +859,7 @@ export function cleanJourney(j: JourneyInput) {
     started_at: started, ended_at: isDate(j.ended_at) ? new Date(j.ended_at as string).toISOString() : null,
     start_lat: num(j.start_lat), start_lng: num(j.start_lng), end_lat: num(j.end_lat), end_lng: num(j.end_lng),
     distance_m: num(j.distance_m), mode, points_json: points && points.length ? JSON.stringify(points) : null,
-    source, source_key: str(j.source_key, 200) ?? `${source}:${started}:${mode ?? ""}`,
+    source, source_key: str(j.source_key, 200) ?? `${source}:${started}:${mode ?? ""}`, utc_offset: offsetIn(j.utc_offset),
   };
 }
 
@@ -846,9 +871,9 @@ app.post("/journeys", async (c) => {
   const clean = list.map(cleanJourney).filter((j): j is NonNullable<ReturnType<typeof cleanJourney>> => j !== null);
   const now = new Date().toISOString();
   const statements = clean.map((j) => c.env.DB.prepare(
-    `INSERT OR IGNORE INTO journeys (started_at, ended_at, start_lat, start_lng, end_lat, end_lng, distance_m, mode, points_json, source, source_key, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).bind(j.started_at, j.ended_at, j.start_lat, j.start_lng, j.end_lat, j.end_lng, j.distance_m, j.mode, j.points_json, j.source, j.source_key, now));
+    `INSERT OR IGNORE INTO journeys (started_at, ended_at, start_lat, start_lng, end_lat, end_lng, distance_m, mode, points_json, source, source_key, created_at, utc_offset)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(j.started_at, j.ended_at, j.start_lat, j.start_lng, j.end_lat, j.end_lng, j.distance_m, j.mode, j.points_json, j.source, j.source_key, now, j.utc_offset));
   let added = 0;
   for (let i = 0; i < statements.length; i += 50) {
     const results = await c.env.DB.batch(statements.slice(i, i + 50));
