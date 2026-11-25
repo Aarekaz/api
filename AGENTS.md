@@ -33,7 +33,8 @@ The website reads these GETs, and their bodies must stay byte-compatible:
   service and shapes the reply. Each file also registers its OpenAPI paths
   (`openApiRegistry.registerPath`), served at `/openapi.json` and `/docs`.
 - `src/services/*.ts`: SQL and outside calls. `places.ts` holds every
-  `/v1/visits` query; `documents.ts`, `links.ts`, `highlights.ts`,
+  `/v1/visits` query; `links/` (extract, nonarticles, urls, store, fetch,
+  state, stats; import from `services/links`), `documents.ts`, `highlights.ts`,
   `sections.ts`, `whoop/`, `spotify/` likewise.
 - `src/lib/http.ts`: replies for the app's routes (below).
 - `src/services/data-versions.ts`: per-kind data versions for ETags.
