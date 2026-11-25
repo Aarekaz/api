@@ -177,15 +177,15 @@ describe("/v1/sections", () => {
     expect(JSON.stringify(db.prepare("SELECT * FROM documents WHERE id = ?").get(draft.id))).toBe(docBefore);
   });
 
-  it("leaves the documents list shape as it was (plus items and next_cursor)", async () => {
+  it("leaves the documents in the list as they were (under items)", async () => {
     const { send, note } = setup();
     await note("Kept", "Library");
     await send("/v1/sections", "PATCH", { path: "Library", name: "Shelf" });
-    const list = (await (await send("/v1/documents")).json()) as { documents: Record<string, unknown>[]; server_time: string };
-    expect(Object.keys(list).sort()).toEqual(["documents", "items", "next_cursor", "server_time"]);
-    expect(Object.keys(list.documents[0]).sort()).toEqual(
+    const list = (await (await send("/v1/documents")).json()) as { items: Record<string, unknown>[]; server_time: string };
+    expect(Object.keys(list).sort()).toEqual(["items", "next_cursor", "server_time"]);
+    expect(Object.keys(list.items[0]).sort()).toEqual(
       ["created_at", "folder", "id", "kind", "post_id", "slug", "source", "status", "title", "updated_at", "version", "visibility"],
     );
-    expect(list.documents[0].folder).toBe("Shelf");
+    expect(list.items[0].folder).toBe("Shelf");
   });
 });

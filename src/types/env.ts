@@ -35,6 +35,8 @@ export interface Env {
   VAULT_REPO?: string;
   VAULT_BRANCH?: string;
   API_VERSION: string;
+  /** "on": app lists also send their old named key beside `items` (deprecated; lib/http.ts list). */
+  LEGACY_LIST_KEYS?: string;
   // The site's /api/revalidate bearer (same value as the site's REVALIDATE_TOKEN). Unset = no refresh calls.
   REVALIDATE_TOKEN?: string;
   // Defaults to https://www.anuragd.me (the bare domain redirects, which would drop the token).

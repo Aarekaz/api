@@ -110,12 +110,12 @@ describe("documents routes", () => {
     const env = { DB: d1() } as Env;
     const root = app();
     for (const title of ["One", "Two", "Three"]) await root.request("/v1/documents", json({ kind: "note", title, body: `# ${title}\n` }), env);
-    type Page = { documents: Array<{ title: string }>; items: Array<{ title: string }>; next_cursor: string | null; server_time: string };
+    type Page = { documents?: unknown; items: Array<{ title: string }>; next_cursor: string | null; server_time: string };
     const seen: string[] = [];
     let cursor: string | null = null;
     do {
       const res: Page = await (await root.request(`/v1/documents?limit=2${cursor ? `&cursor=${cursor}` : ""}`, {}, env)).json() as Page;
-      expect(res.documents).toEqual(res.items);
+      expect(res.documents).toBeUndefined(); // the old key goes (LEGACY_LIST_KEYS off)
       expect(res.server_time).toBeTruthy();
       seen.push(...res.items.map((d) => d.title));
       cursor = res.next_cursor;
@@ -200,10 +200,10 @@ describe("documents routes", () => {
     const root = app();
     const a = await (await root.request("/v1/documents", json({ title: "A" }), env)).json() as { id: string };
     await root.request(`/v1/documents/${a.id}`, { method: "DELETE" }, env);
-    const list = await (await root.request("/v1/documents", {}, env)).json() as { documents: unknown[] };
-    expect(list.documents).toHaveLength(0);
-    const withDeleted = await (await root.request("/v1/documents?include_deleted=1", {}, env)).json() as { documents: Array<{ deleted_at?: string }> };
-    expect(withDeleted.documents[0].deleted_at).toBeTruthy();
+    const list = await (await root.request("/v1/documents", {}, env)).json() as { items: unknown[] };
+    expect(list.items).toHaveLength(0);
+    const withDeleted = await (await root.request("/v1/documents?include_deleted=1", {}, env)).json() as { items: Array<{ deleted_at?: string }> };
+    expect(withDeleted.items[0].deleted_at).toBeTruthy();
   });
 
   it("reports sync status even when some sources aren't set up", async () => {
@@ -295,10 +295,10 @@ describe("read later", () => {
     expect(again.id).toBe(link.id);
 
     await root.request(`/v1/links/${link.id}/read`, { method: "POST" }, env);
-    const unread = await (await root.request("/v1/links?state=unread", {}, env)).json() as { links: unknown[] };
-    const read = await (await root.request("/v1/links?state=read", {}, env)).json() as { links: unknown[] };
-    expect(unread.links).toHaveLength(0);
-    expect(read.links).toHaveLength(1);
+    const unread = await (await root.request("/v1/links?state=unread", {}, env)).json() as { items: unknown[] };
+    const read = await (await root.request("/v1/links?state=read", {}, env)).json() as { items: unknown[] };
+    expect(unread.items).toHaveLength(0);
+    expect(read.items).toHaveLength(1);
 
     const found = await (await root.request("/v1/search?q=schemas", {}, env)).json() as { results: Array<{ kind: string }> };
     expect(found.results[0].kind).toBe("link");
@@ -350,12 +350,12 @@ describe("highlights and link state", () => {
     const edited = await (await root.request(`/v1/highlights/${h.id}`, { ...json({ note: "changed" }), method: "PATCH" }, env)).json() as { note: string };
     expect(edited.note).toBe("changed");
 
-    const forDoc = await (await root.request(`/v1/highlights?document_id=${link.id}`, {}, env)).json() as { highlights: unknown[] };
-    expect(forDoc.highlights).toHaveLength(1);
+    const forDoc = await (await root.request(`/v1/highlights?document_id=${link.id}`, {}, env)).json() as { items: unknown[] };
+    expect(forDoc.items).toHaveLength(1);
 
     await root.request(`/v1/highlights/${h.id}`, { method: "DELETE" }, env);
-    const after = await (await root.request("/v1/highlights", {}, env)).json() as { highlights: unknown[] };
-    expect(after.highlights).toHaveLength(0);
+    const after = await (await root.request("/v1/highlights", {}, env)).json() as { items: unknown[] };
+    expect(after.items).toHaveLength(0);
 
     const missing = await root.request("/v1/highlights", json({ document_id: "nope", text: "x" }), env);
     expect(missing.status).toBe(404);
@@ -374,8 +374,8 @@ describe("highlights and link state", () => {
     expect(starred.title).toBe("Schemas");
     expect(starred.image_url).toBe("https://example.com/img/lead.jpg");   // frontmatter kept
 
-    const list = await (await root.request("/v1/links?state=starred", {}, env)).json() as { links: unknown[] };
-    expect(list.links).toHaveLength(1);
+    const list = await (await root.request("/v1/links?state=starred", {}, env)).json() as { items: unknown[] };
+    expect(list.items).toHaveLength(1);
 
     const unstarred = await (await patch({ starred: false })).json() as { starred_at: string | null; tags: string[] };
     expect(unstarred).toMatchObject({ starred_at: null, tags: ["ai", "agents"] });
@@ -401,8 +401,8 @@ describe("visits", () => {
     const again = await (await root.request("/v1/visits", json(batch), env)).json() as { added: number };
     expect(again.added).toBe(0);
 
-    const list = await (await root.request("/v1/visits", {}, env)).json() as { visits: Array<{ place: string | null }>; sources: unknown[] };
-    expect(list.visits.map((v) => v.place)).toEqual(["Home", null, "Blue Bottle"]);
+    const list = await (await root.request("/v1/visits", {}, env)).json() as { items: Array<{ place: string | null }>; sources: unknown[] };
+    expect(list.items.map((v) => v.place)).toEqual(["Home", null, "Blue Bottle"]);
     expect(list.sources).toHaveLength(3);
 
     const latest = await env.DB.prepare("SELECT label, source FROM location_history").all<{ label: string; source: string }>();
@@ -501,8 +501,8 @@ describe("music history", () => {
     expect(await savePlays(env.DB, plays)).toBe(0);
     const root = new Hono<{ Bindings: Env }>();
     root.route("/v1/music", createMusicRoute());
-    const history = await (await root.request("/v1/music/history?limit=1", {}, env)).json() as { plays: unknown[]; total: { n: number } };
-    expect(history.plays).toHaveLength(1);
+    const history = await (await root.request("/v1/music/history?limit=1", {}, env)).json() as { items: unknown[]; total: { n: number } };
+    expect(history.items).toHaveLength(1);
     expect(history.total.n).toBe(2);
     vi.setSystemTime(new Date("2026-11-24T00:00:00Z"));
     const top = await (await root.request("/v1/music/top?days=7", {}, env)).json() as { plays: number; minutes: number; tracks: Array<{ plays: number }> };

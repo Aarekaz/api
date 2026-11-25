@@ -18,7 +18,7 @@ function setup(sets: Set[]) {
 
 type Best = Set & { kilograms: number };
 const bests = async (get: (p: string) => Response | Promise<Response>, path = "/v1/training/bests") =>
-  (await (await get(path)).json()) as { bests: Best[]; items: Best[]; next_cursor: null };
+  (await (await get(path)).json()) as { bests?: Best[]; items: Best[]; next_cursor: null };
 
 /** TrainingLog.best(of:) from the app (Sources/OSCore/TrainingLog.swift), line for line. */
 function appBest(sets: Set[]) {
@@ -48,8 +48,8 @@ describe("GET /v1/training/bests", () => {
       set("2026-11-08", "Squat", 2, 12, 80),
     ]);
     const body = await bests(get);
-    expect(body.bests).toEqual([{ exercise: "Squat", day: "2026-11-08", set_number: 1, reps: 4, weight: 105, unit: "kg", kilograms: 105 }]);
-    expect(body.items).toEqual(body.bests);
+    expect(body.items).toEqual([{ exercise: "Squat", day: "2026-11-08", set_number: 1, reps: 4, weight: 105, unit: "kg", kilograms: 105 }]);
+    expect(body.bests).toBeUndefined();
     expect(body.next_cursor).toBeNull();
   });
 
@@ -61,8 +61,8 @@ describe("GET /v1/training/bests", () => {
       set("2026-11-04", "Row", 1, 8, 130, "LB"),     // 58.97 kg
     ]);
     const body = await bests(get);
-    expect(body.bests.map((b) => [b.exercise, b.day, b.weight, b.unit])).toEqual([["Bench", "2026-11-02", 225, "lb"], ["Row", "2026-11-03", 60, "kg"]]);
-    expect(body.bests[0].kilograms).toBeCloseTo(102.0583, 3);
+    expect(body.items.map((b) => [b.exercise, b.day, b.weight, b.unit])).toEqual([["Bench", "2026-11-02", 225, "lb"], ["Row", "2026-11-03", 60, "kg"]]);
+    expect(body.items[0].kilograms).toBeCloseTo(102.0583, 3);
   });
 
   it("counts within 0.1 kg as the same weight, keeps the first of equal sets, and a move with no weight by its reps", async () => {
@@ -77,14 +77,14 @@ describe("GET /v1/training/bests", () => {
       set("2026-11-01", "Nothing", 2, 0, 0, "kg"),
     ]);
     const body = await bests(get);
-    expect(body.bests.map((b) => [b.exercise, b.day, b.reps])).toEqual([["Curl", "2026-11-03", 11], ["Plank", "2026-11-02", 60]]);
+    expect(body.items.map((b) => [b.exercise, b.day, b.reps])).toEqual([["Curl", "2026-11-03", 11], ["Plank", "2026-11-02", 60]]);
   });
 
   it("?before= counts only the days before it", async () => {
     const { get } = setup([set("2026-11-01", "Squat", 1, 5, 100), set("2026-11-24", "Squat", 1, 5, 110), set("2026-11-25", "Squat", 1, 5, 120)]);
-    expect((await bests(get, "/v1/training/bests?before=2026-11-24")).bests.map((b) => b.weight)).toEqual([100]);
-    expect((await bests(get, "/v1/training/bests?before=2026-11-25")).bests.map((b) => b.weight)).toEqual([110]);
-    expect((await bests(get, "/v1/training/bests?before=2026-11-01")).bests).toEqual([]);
+    expect((await bests(get, "/v1/training/bests?before=2026-11-24")).items.map((b) => b.weight)).toEqual([100]);
+    expect((await bests(get, "/v1/training/bests?before=2026-11-25")).items.map((b) => b.weight)).toEqual([110]);
+    expect((await bests(get, "/v1/training/bests?before=2026-11-01")).items).toEqual([]);
     const bad = await get("/v1/training/bests?before=yesterday");
     expect(bad.status).toBe(400);
     expect(await bad.json()).toEqual({ error: { code: "invalid", message: "before must look like 2026-11-24" } });
@@ -114,7 +114,7 @@ describe("GET /v1/training/bests", () => {
       const mine = sets.filter((s) => s.exercise === exercise && s.day < before)
         .sort((a, b) => a.day.localeCompare(b.day) || a.set_number - b.set_number);
       const want = appBest(mine)!;
-      const got = body.bests.find((b) => b.exercise === exercise)!;
+      const got = body.items.find((b) => b.exercise === exercise)!;
       expect([got.day, got.set_number]).toEqual([want.set.day, want.set.set_number]);
     }
   });

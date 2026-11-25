@@ -193,13 +193,13 @@ describe("conditional GETs", () => {
 describe("pages and errors", () => {
   const at = (i: number) => ({ ...stop(`2026-11-2${i}T12:00:00Z`), arrived_at: `2026-11-2${i}T10:00:00Z`, source_key: `v${i}` });
 
-  it("pages visits newest first with next_cursor, keeping the old key", async () => {
+  it("pages visits newest first with next_cursor, items only", async () => {
     const { post, get } = setup();
     await post([at(1), at(2), at(3)]);
-    type Page = { visits: Array<{ source_key: string }>; items: Array<{ source_key: string }>; next_cursor: string | null; sources: unknown[] };
+    type Page = { visits?: unknown; items: Array<{ source_key: string }>; next_cursor: string | null; sources: unknown[] };
     const one = await (await get("/v1/visits?limit=2")).json() as Page;
     expect(one.items.map((v) => v.source_key)).toEqual(["v3", "v2"]);
-    expect(one.visits).toEqual(one.items);
+    expect(one.visits).toBeUndefined();
     expect(one.sources).toHaveLength(1);
     expect(one.next_cursor).toBeTruthy();
     const two = await (await get(`/v1/visits?limit=2&cursor=${one.next_cursor}`)).json() as Page;
@@ -210,10 +210,10 @@ describe("pages and errors", () => {
   it("pages journeys oldest first", async () => {
     const { send, get } = setup();
     await send("/v1/visits/journeys", "POST", { journeys: [1, 2, 3].map((i) => ({ started_at: `2026-11-2${i}T10:00:00Z`, mode: "walking", source: "phone" })) });
-    type Page = { journeys: Array<{ started_at: string }>; items: Array<{ started_at: string }>; next_cursor: string | null };
+    type Page = { journeys?: unknown; items: Array<{ started_at: string }>; next_cursor: string | null };
     const one = await (await get("/v1/visits/journeys?start=2026-11-01&end=2026-12-01&limit=2")).json() as Page;
     expect(one.items.map((j) => j.started_at.slice(0, 10))).toEqual(["2026-11-21", "2026-11-22"]);
-    expect(one.journeys).toEqual(one.items);
+    expect(one.journeys).toBeUndefined();
     const two = await (await get(`/v1/visits/journeys?start=2026-11-01&end=2026-12-01&limit=2&cursor=${one.next_cursor}`)).json() as Page;
     expect(two.items.map((j) => j.started_at.slice(0, 10))).toEqual(["2026-11-23"]);
     expect(two.next_cursor).toBeNull();
@@ -364,5 +364,25 @@ describe("days come from local_date", () => {
     const reads = seen.filter((sql) => /local_date (=|BETWEEN|>=|IN)/.test(sql));
     expect(reads.length).toBe(4);
     for (const sql of reads) expect(plan(sql)).toMatch(/USING INDEX (visits|journeys)_local_date \(local_date/);
+  });
+});
+
+describe("old list keys while LEGACY_LIST_KEYS is on", () => {
+  it("visits and journeys carry the same items under their old names", async () => {
+    const { DB } = testD1({
+      migrations: ["0007_location", "0027_visits", "0028_place_names", "0029_journeys", "0032_place_categories", "0041_visit_guess",
+        "0042_utc_offset", "0043_recorded_departure", "0044_visit_corrections", "0046_data_versions", "0048_local_date"],
+      sql: `INSERT INTO visits (latitude, longitude, arrived_at, source, source_key, created_at) VALUES (1, 1, '2026-11-24T10:00:00Z', 'visit', 'a', 'x');
+            INSERT INTO journeys (started_at, mode, source, source_key, created_at) VALUES ('2026-11-24T11:00:00Z', 'walking', 'phone', 'j', 'x');`,
+    });
+    const root = new Hono<{ Bindings: Env }>();
+    root.route("/v1/visits", visitsRoute);
+    const env = { DB, LEGACY_LIST_KEYS: "on" } as Env;
+    const visits = await (await root.request("/v1/visits", {}, env)).json() as { visits: unknown[]; items: unknown[] };
+    expect(visits.items).toHaveLength(1);
+    expect(visits.visits).toEqual(visits.items);
+    const journeys = await (await root.request("/v1/visits/journeys?start=2026-11-01", {}, env)).json() as { journeys: unknown[]; items: unknown[] };
+    expect(journeys.items).toHaveLength(1);
+    expect(journeys.journeys).toEqual(journeys.items);
   });
 });

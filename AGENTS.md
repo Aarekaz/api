@@ -65,9 +65,10 @@ journal, sections, recipes, training, music history) use `src/lib/http.ts`:
   follow the status (`invalid`, `not_found`, `conflict`, `too_large`,
   `server`, …) unless a service names its own (`exists`). Extra top-level
   fields are allowed: a stale document save is a 409 with `latest`.
-- Lists: `{ <name>: [...], items: [...], next_cursor }`. The old named key
-  carries the same items until the apps have moved to `items`; remove it a
-  release later. Fetch `limit + 1` rows ordered by a sort column plus `id`,
+- Lists: `{ items: [...], next_cursor }` via `list()`. The old named key
+  (`links`, `documents`, `visits`, …) is sent beside `items` only while the
+  `LEGACY_LIST_KEYS` var is "on" (wrangler.toml, one release; then removed:
+  `docs/adr/0005-legacy-list-keys.md`). Fetch `limit + 1` rows ordered by a sort column plus `id`,
   then `page(rows, limit, (row) => [row.sort, row.id])`; read the cursor back
   with `cursorFrom(c, 2)` (a bad cursor is a 400). `limitFrom(c, default, max)`.
 - Places caching: every GET under `/v1/visits` carries a weak ETag built from

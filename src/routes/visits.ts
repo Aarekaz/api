@@ -111,7 +111,7 @@ openApiRegistry.registerPath({
     }),
   },
   responses: structuredOkResponses(z.object({
-    visits: z.array(visitSchema).openapi({ description: "Same as items (kept for older apps)" }),
+    visits: z.array(visitSchema).optional().openapi({ deprecated: true, description: "Deprecated: same as items, sent only while LEGACY_LIST_KEYS is on" }),
     sources: z.array(z.object({ source: z.string(), n: z.number().int(), first: z.string() })),
     items: z.array(visitSchema),
     next_cursor: z.string().nullable().openapi({ description: "Pass as ?cursor= for the next page; null on the last" }),
@@ -440,7 +440,7 @@ openApiRegistry.registerPath({
   request: { query: z.object({ start: z.string().optional(), end: z.string().optional(), limit: z.coerce.number().int().optional(),
     cursor: z.string().optional().openapi({ description: "next_cursor from the page before" }) }) },
   responses: structuredOkResponses(z.object({
-    journeys: z.array(z.record(z.string(), z.unknown())).openapi({ description: "Same as items (kept for older apps)" }),
+    journeys: z.array(z.record(z.string(), z.unknown())).optional().openapi({ deprecated: true, description: "Deprecated: same as items, sent only while LEGACY_LIST_KEYS is on" }),
     items: z.array(z.record(z.string(), z.unknown())),
     next_cursor: z.string().nullable(),
   })),

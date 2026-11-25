@@ -91,7 +91,7 @@ openApiRegistry.registerPath({
     }),
   },
   responses: structuredOkResponses(z.object({
-    plays: z.array(musicPlaySchema).openapi({ description: "Same as items (kept for older apps)" }),
+    plays: z.array(musicPlaySchema).optional().openapi({ deprecated: true, description: "Deprecated: same as items, sent only while LEGACY_LIST_KEYS is on" }),
     ...pageFields(musicPlaySchema),
     total: z.object({
       n: z.number().int().openapi({ description: "Plays kept in all" }),

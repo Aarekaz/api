@@ -84,7 +84,7 @@ openApiRegistry.registerPath({
     }),
   },
   responses: structuredOkResponses(z.object({
-    links: z.array(linkSchema.omit({ body: true })).openapi({ description: "Same as items (kept for older apps)" }),
+    links: z.array(linkSchema.omit({ body: true })).optional().openapi({ deprecated: true, description: "Deprecated: same as items, sent only while LEGACY_LIST_KEYS is on" }),
     ...pageFields(linkSchema.omit({ body: true })),
   })),
 });

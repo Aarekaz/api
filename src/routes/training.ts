@@ -284,7 +284,7 @@ openApiRegistry.registerPath({
   security: authSecurity,
   request: { query: z.object({ before: day.optional().openapi({ description: "Only sets on days before this one" }) }) },
   responses: structuredOkResponses(z.object({
-    bests: z.array(bestSchema).openapi({ description: "Same as items" }),
+    bests: z.array(bestSchema).optional().openapi({ deprecated: true, description: "Deprecated: same as items, sent only while LEGACY_LIST_KEYS is on" }),
     ...pageFields(bestSchema),
   })),
 });

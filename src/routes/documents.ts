@@ -70,7 +70,7 @@ openApiRegistry.registerPath({
     }),
   },
   responses: structuredOkResponses(z.object({
-    documents: z.array(listedDocument).openapi({ description: "Same as items (kept for older apps)" }),
+    documents: z.array(listedDocument).optional().openapi({ deprecated: true, description: "Deprecated: same as items, sent only while LEGACY_LIST_KEYS is on" }),
     server_time: z.string(),
     ...pageFields(listedDocument),
   })),

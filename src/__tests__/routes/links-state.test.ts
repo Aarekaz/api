@@ -81,12 +81,12 @@ describe("links: inbox and archive", () => {
     expect(read.fetched_at).toBeTruthy();
   });
 
-  it("pages the list with next_cursor, keeping links", async () => {
+  it("pages the list with next_cursor, items only", async () => {
     const { send, save } = setup();
     for (const n of [1, 2, 3]) { await save(`https://example.com/${n}`); await new Promise((r) => setTimeout(r, 2)); }
-    type Page = { links: Link[]; items: Link[]; next_cursor: string | null };
+    type Page = { links?: Link[]; items: Link[]; next_cursor: string | null };
     const one = await (await send("/v1/links?limit=2")).json() as Page;
-    expect(one.links).toEqual(one.items);
+    expect(one.links).toBeUndefined();
     expect(one.items).toHaveLength(2);
     const two = await (await send(`/v1/links?limit=2&cursor=${one.next_cursor}`)).json() as Page;
     expect(two.items).toHaveLength(1);
@@ -106,10 +106,10 @@ describe("links: inbox and archive", () => {
     const again = await (await send(`/v1/links/${link.id}/read`, "POST")).json() as Link;
     expect(again.read_at).toBe(archived.read_at);
 
-    const inbox = await (await send("/v1/links?state=inbox")).json() as { links: Link[] };
-    const archive = await (await send("/v1/links?state=archived")).json() as { links: Link[] };
-    expect(inbox.links).toHaveLength(0);
-    expect(archive.links.map((l) => l.id)).toEqual([link.id]);
+    const inbox = await (await send("/v1/links?state=inbox")).json() as { items: Link[] };
+    const archive = await (await send("/v1/links?state=archived")).json() as { items: Link[] };
+    expect(inbox.items).toHaveLength(0);
+    expect(archive.items.map((l) => l.id)).toEqual([link.id]);
 
     const back = await (await send(`/v1/links/${link.id}`, "PATCH", { state: "inbox" })).json() as Link;
     expect(back).toMatchObject({ state: "inbox", read_at: null, archived_at: null });
@@ -158,7 +158,7 @@ describe("links: reading progress", () => {
 
     const got = await (await send(`/v1/links/${link.id}/progress`)).json() as Record<string, unknown>;
     expect(got).toMatchObject({ progress: 0.1, progress_anchor: "b0:0" });
-    const listed = (await (await send("/v1/links")).json() as { links: Link[] }).links[0];
+    const listed = (await (await send("/v1/links")).json() as { items: Link[] }).items[0];
     expect(listed).toMatchObject({ progress: 0.1, progress_anchor: "b0:0", progress_updated_at: "2026-11-01T12:00:00.000Z" });
   });
 
@@ -215,10 +215,10 @@ describe("links: notes and tags", () => {
     await send(`/v1/links/${b.id}`, "PATCH", { tags: ["design"] });
     await send(`/v1/links/${b.id}/archive`, "POST");
 
-    const design = await (await send("/v1/links?tag=design")).json() as { links: Link[] };
-    expect(design.links.map((l) => l.id).sort()).toEqual([a.id, b.id].sort());
-    const inboxDesign = await (await send("/v1/links?state=inbox&tag=Design")).json() as { links: Link[] };
-    expect(inboxDesign.links.map((l) => l.id)).toEqual([a.id]);
+    const design = await (await send("/v1/links?tag=design")).json() as { items: Link[] };
+    expect(design.items.map((l) => l.id).sort()).toEqual([a.id, b.id].sort());
+    const inboxDesign = await (await send("/v1/links?state=inbox&tag=Design")).json() as { items: Link[] };
+    expect(inboxDesign.items.map((l) => l.id)).toEqual([a.id]);
 
     const tags = await (await send("/v1/links/tags")).json() as { items: Array<{ tag: string; count: number; inbox: number }> };
     expect(tags.items).toEqual([{ tag: "design", count: 2, inbox: 1 }, { tag: "agents", count: 1, inbox: 1 }]);

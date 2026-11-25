@@ -70,8 +70,15 @@ describe("lib/http", () => {
     expect(page(rows, 3, (r) => [r.id])).toEqual({ items: rows, next_cursor: null });
   });
 
-  it("keeps the named key beside items", async () => {
-    expect((await json("/list")).body).toEqual({ links: [1, 2], total: 2, items: [1, 2], next_cursor: "abc" });
+  it("lists items and next_cursor, without the old named key", async () => {
+    expect((await json("/list")).body).toEqual({ total: 2, items: [1, 2], next_cursor: "abc" });
+    const off = await app.request("/list", {}, { LEGACY_LIST_KEYS: "off" });
+    expect(await off.json()).toEqual({ total: 2, items: [1, 2], next_cursor: "abc" });
+  });
+
+  it("keeps the named key beside items while LEGACY_LIST_KEYS is on", async () => {
+    const res = await app.request("/list", {}, { LEGACY_LIST_KEYS: "on" });
+    expect(await res.json()).toEqual({ links: [1, 2], total: 2, items: [1, 2], next_cursor: "abc" });
   });
 
   it("answers 304 to a matching If-None-Match, weak or strong", async () => {
