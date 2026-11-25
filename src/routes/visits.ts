@@ -41,6 +41,8 @@ export function cleanVisit(v: VisitInput): null | {
   if (!source) return null;
   const arrived = new Date(v.arrived_at as string).toISOString();
   const departed = isDate(v.departed_at) ? new Date(v.departed_at as string).toISOString() : null;
+  // A stay that ends before it starts is a report the phone got wrong (seen after a relaunch): skip it.
+  if (departed && departed < arrived) return null;
   // Without a key, a visit is identified by its source, arrival and rough position.
   const key = str(v.source_key, 200) ?? `${source}:${arrived}:${lat.toFixed(3)},${lng.toFixed(3)}`;
   return { latitude: lat, longitude: lng, arrived_at: arrived, departed_at: departed, place: str(v.place),
@@ -353,6 +355,18 @@ openApiRegistry.registerPath({
 
 openApiRegistry.registerPath({
   method: "patch",
+  path: "/v1/visits/journeys/{id}",
+  summary: "Correct how you travelled on a trip (a bus, not a car)",
+  security: authSecurity,
+  request: {
+    params: z.object({ id: z.string() }),
+    body: openApiJsonRequestBody(z.object({ mode: z.string() })),
+  },
+  responses: okResponses(z.record(z.string(), z.unknown())),
+});
+
+openApiRegistry.registerPath({
+  method: "patch",
   path: "/v1/visits/{id}",
   summary: "Correct a visit: hide it (it wasn't a visit), add a note, or move it to where you really were",
   security: authSecurity,
@@ -517,6 +531,20 @@ app.post("/", async (c) => {
  * your corrections. Hidden visits leave every view but stay in the table; a
  * moved visit keeps its old spot in guess_latitude/guess_longitude.
  */
+/** How you can say you travelled. Google Timeline's words, which the rest of the data already uses. */
+export const TRAVEL_MODES = ["walking", "running", "cycling", "in passenger vehicle", "in bus", "in subway", "in train", "in tram", "in ferry", "flying"] as const;
+
+/** PATCH /v1/visits/journeys/:id { mode }: you know how you travelled better than the motion sensor (a bus isn't a car). */
+app.patch("/journeys/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id)) return c.json({ error: "Invalid id" }, 400);
+  const body = (await parseJson(c.req.raw)) as { mode?: unknown } | null;
+  const mode = typeof body?.mode === "string" ? body.mode : "";
+  if (!(TRAVEL_MODES as readonly string[]).includes(mode)) return c.json({ error: `mode must be one of: ${TRAVEL_MODES.join(", ")}` }, 400);
+  const row = await c.env.DB.prepare("UPDATE journeys SET mode = ? WHERE id = ? RETURNING *").bind(mode, id).first();
+  return row ? c.json(row) : c.json({ error: "Not found" }, 404);
+});
+
 app.patch("/:id", async (c) => {
   const id = Number(c.req.param("id"));
   if (!Number.isInteger(id)) return c.json({ error: "Invalid id" }, 400);
@@ -669,11 +697,22 @@ app.get("/day", async (c) => {
     `SELECT * FROM journeys WHERE started_at >= ?3 AND started_at < ?4 AND date(${local("started_at", "?1")}) = ?2 ORDER BY started_at`,
   ).bind(offset, date, ...near).all();
   // The day's own offset (where most of it happened), for the app's clock.
-  const rows = visits.results as Array<{ utc_offset: number | null }>;
+  const rows = visits.results as Array<{ id: number; utc_offset: number | null; arrived_at: string }>;
   const dayOffset = rows.find((r) => r.utc_offset != null)?.utc_offset ?? offset;
   const start = new Date(Date.parse(`${date}T00:00:00Z`) - dayOffset * 60_000).toISOString();
   const end = new Date(Date.parse(start) + 86_400_000).toISOString();
-  return c.json({ date, start, end, utc_offset: dayOffset, visits: visits.results, journeys: journeys.results });
+  // Where you woke up: the last stay that began before the day, when nothing came between
+  // it and midnight (a night at home whose departure the phone never sent).
+  const before = await c.env.DB.prepare(
+    `SELECT v.*, ${KEY.replace(/latitude|longitude/g, (m) => "v." + m)} AS key, n.name AS place_name, n.city AS place_city
+     FROM shown_visits AS v LEFT JOIN place_names AS n ON n.key = ${KEY.replace(/latitude|longitude/g, (m) => "v." + m)}
+     WHERE v.arrived_at < ?1 AND v.arrived_at > ?2 AND v.source != 'photos' ORDER BY v.arrived_at DESC LIMIT 1`,
+  ).bind(start, new Date(Date.parse(start) - 3 * 86_400_000).toISOString()).first<{ id: number; departed_at: string | null }>();
+  const list = visits.results as unknown[];
+  if (before && !rows.some((r) => r.id === before.id) && (before.departed_at == null || before.departed_at > start)) {
+    list.unshift({ ...before, woke_here: true });
+  }
+  return c.json({ date, start, end, utc_offset: dayOffset, visits: list, journeys: journeys.results });
 });
 
 export interface AwayDay {

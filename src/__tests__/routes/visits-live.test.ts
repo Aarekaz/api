@@ -103,3 +103,35 @@ describe("corrections", () => {
     expect((await send(`/v1/visits/${second.id}`, "PATCH", {})).status).toBe(400);
   });
 });
+
+describe("what the phone gets wrong", () => {
+  it("skips a stay that ends before it starts", async () => {
+    const { db, post } = setup();
+    await post([{ ...stop("2026-11-24T16:16:27Z"), arrived_at: "2026-11-24T16:20:52Z", source_key: "backwards" }]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM visits").get()).toEqual({ n: 0 });
+  });
+
+  it("lets you say how you really travelled", async () => {
+    const { db, send } = setup();
+    db.exec(`INSERT INTO journeys (started_at, ended_at, distance_m, mode, source, source_key, created_at)
+             VALUES ('2026-11-24T16:37:32Z', '2026-11-24T16:44:01Z', 1002, 'in passenger vehicle', 'phone', 'phone:1', '2026-11-24')`);
+    const id = (db.prepare("SELECT id FROM journeys").get() as { id: number }).id;
+    const fixed = await (await send(`/v1/visits/journeys/${id}`, "PATCH", { mode: "in bus" })).json() as { mode: string };
+    expect(fixed.mode).toBe("in bus");
+    expect((await send(`/v1/visits/journeys/${id}`, "PATCH", { mode: "teleport" })).status).toBe(400);
+  });
+});
+
+describe("where you woke up", () => {
+  it("starts a day with last night's stay, even one the phone never closed", async () => {
+    const { post, get } = setup();
+    await post([
+      { latitude: 38.8602, longitude: -77.0534, arrived_at: "2026-11-24T00:48:00Z", departed_at: null, place: "Home", source: "visit", source_key: "night" },
+      { ...stop("2026-11-24T16:37:00Z"), source_key: "day" },
+    ]);
+    const day = await (await get("/v1/visits/day?date=2026-11-24&offset=-300")).json() as { visits: Array<{ place: string | null; woke_here?: boolean }> };
+    expect(day.visits.length).toBe(2);
+    expect(day.visits[0].woke_here).toBe(true);
+    expect(day.visits[0].place).toBe("Home");
+  });
+});
