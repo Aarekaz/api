@@ -32,7 +32,8 @@ export const WHOOP_OPERATIONAL_RETENTION = {
   syncRunMilliseconds: 3 * 24 * 60 * 60 * 1_000,
   processedWebhookMilliseconds: 30 * 24 * 60 * 60 * 1_000,
   abandonedWorkMilliseconds: 24 * 60 * 60 * 1_000,
-  deleteLimit: 100,
+  // Enough to work off a backlog (a retention cut from 30 days to 3) within hours.
+  deleteLimit: 500,
 } as const;
 
 export type TombstonePolicy = "preserve" | "reconcile";
@@ -919,76 +920,53 @@ export class WhoopRepository {
     updatedAt: string,
   ): Promise<boolean> {
     const timestamp = canonicalTimestamp(updatedAt)!;
+    // One pass over the run's few checkpoints. The unary + keeps SQLite off the
+    // primary key, whose (whoop_user_id, connection_id) prefix is every checkpoint
+    // the user has; idx_whoop_sync_checkpoints_run finds just this run's.
     const result = await this.db.prepare(`
       UPDATE whoop_sync_runs
-      SET page_count = COALESCE((
-            SELECT SUM(page_count) FROM whoop_sync_checkpoints
-            WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
-              AND sync_run_id = ? AND mode = 'reconcile'
-          ), 0),
-          record_count = COALESCE((
-            SELECT SUM(record_count) FROM whoop_sync_checkpoints
-            WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
-              AND sync_run_id = ? AND mode = 'reconcile'
-          ), 0),
-          completed_target_count = COALESCE((
-            SELECT SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END)
-            FROM whoop_sync_checkpoints
-            WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
-              AND sync_run_id = ? AND mode = 'reconcile'
-          ), 0),
+      SET page_count = progress.pages,
+          record_count = progress.records,
+          completed_target_count = progress.complete_count,
           status = CASE
-            WHEN (SELECT COUNT(*) FROM whoop_sync_checkpoints
-                  WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
-                    AND sync_run_id = ? AND mode = 'reconcile' AND status = 'error') > 0 THEN 'error'
-            WHEN (SELECT COUNT(*) FROM whoop_sync_checkpoints
-                  WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
-                    AND sync_run_id = ? AND mode = 'reconcile' AND status = 'complete') >= expected_target_count
-              THEN 'complete'
-            WHEN (SELECT COUNT(*) FROM whoop_sync_checkpoints
-                  WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
-                    AND sync_run_id = ? AND mode = 'reconcile' AND status = 'retrying') > 0 THEN 'retrying'
-            WHEN (SELECT COUNT(*) FROM whoop_sync_checkpoints
-                  WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
-                    AND sync_run_id = ? AND mode = 'reconcile') > 0 THEN 'running'
+            WHEN progress.error_count > 0 THEN 'error'
+            WHEN progress.complete_count >= whoop_sync_runs.expected_target_count THEN 'complete'
+            WHEN progress.retrying_count > 0 THEN 'retrying'
+            WHEN progress.total > 0 THEN 'running'
             ELSE 'queued'
           END,
           succeeded_at = CASE
-            WHEN (SELECT COUNT(*) FROM whoop_sync_checkpoints
-                  WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
-                    AND sync_run_id = ? AND mode = 'reconcile' AND status = 'complete') >= expected_target_count
-              THEN COALESCE(succeeded_at, ?) ELSE NULL END,
+            WHEN progress.complete_count >= whoop_sync_runs.expected_target_count
+              THEN COALESCE(whoop_sync_runs.succeeded_at, ?5) ELSE NULL END,
           failed_at = CASE
-            WHEN (SELECT COUNT(*) FROM whoop_sync_checkpoints
-                  WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
-                    AND sync_run_id = ? AND mode = 'reconcile' AND status = 'error') > 0
-              THEN COALESCE(failed_at, ?) ELSE NULL END,
-          last_error = (
-            SELECT last_error FROM whoop_sync_checkpoints
-            WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
-              AND sync_run_id = ? AND mode = 'reconcile' AND last_error IS NOT NULL
-            ORDER BY updated_at DESC LIMIT 1
-          )
-      WHERE run_id = ? AND whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+            WHEN progress.error_count > 0 THEN COALESCE(whoop_sync_runs.failed_at, ?5) ELSE NULL END,
+          last_error = progress.latest_error
+      FROM (
+        SELECT COALESCE(SUM(page_count), 0) AS pages,
+               COALESCE(SUM(record_count), 0) AS records,
+               COUNT(*) AS total,
+               COUNT(CASE WHEN status = 'complete' THEN 1 END) AS complete_count,
+               COUNT(CASE WHEN status = 'error' THEN 1 END) AS error_count,
+               COUNT(CASE WHEN status = 'retrying' THEN 1 END) AS retrying_count,
+               (
+                 SELECT last_error FROM whoop_sync_checkpoints
+                 WHERE sync_run_id = ?1 AND mode = 'reconcile'
+                   AND +whoop_user_id = ?2 AND +connection_id = ?3 AND reconcile_generation = ?4
+                   AND last_error IS NOT NULL
+                 ORDER BY updated_at DESC LIMIT 1
+               ) AS latest_error
+        FROM whoop_sync_checkpoints
+        WHERE sync_run_id = ?1 AND mode = 'reconcile'
+          AND +whoop_user_id = ?2 AND +connection_id = ?3 AND reconcile_generation = ?4
+      ) AS progress
+      WHERE whoop_sync_runs.run_id = ?1 AND whoop_sync_runs.whoop_user_id = ?2
+        AND whoop_sync_runs.connection_id = ?3 AND whoop_sync_runs.reconcile_generation = ?4
         AND EXISTS (
           SELECT 1 FROM whoop_connections
-          WHERE whoop_user_id = ? AND connection_id = ? AND reconcile_generation = ?
+          WHERE whoop_user_id = ?2 AND connection_id = ?3 AND reconcile_generation = ?4
             AND status IN ('active', 'backfilling')
         )
-    `).bind(
-      whoopUserId, connectionId, reconcileGeneration, runId,
-      whoopUserId, connectionId, reconcileGeneration, runId,
-      whoopUserId, connectionId, reconcileGeneration, runId,
-      whoopUserId, connectionId, reconcileGeneration, runId,
-      whoopUserId, connectionId, reconcileGeneration, runId,
-      whoopUserId, connectionId, reconcileGeneration, runId,
-      whoopUserId, connectionId, reconcileGeneration, runId,
-      whoopUserId, connectionId, reconcileGeneration, runId, timestamp,
-      whoopUserId, connectionId, reconcileGeneration, runId, timestamp,
-      whoopUserId, connectionId, reconcileGeneration, runId,
-      runId, whoopUserId, connectionId, reconcileGeneration,
-      whoopUserId, connectionId, reconcileGeneration,
-    ).run();
+    `).bind(runId, whoopUserId, connectionId, reconcileGeneration, timestamp).run();
     return changedRows(result) === 1;
   }
 
@@ -1701,6 +1679,11 @@ export class WhoopRepository {
     const webhookCutoff = cutoff(WHOOP_OPERATIONAL_RETENTION.processedWebhookMilliseconds);
     const abandonedWorkCutoff = cutoff(WHOOP_OPERATIONAL_RETENTION.abandonedWorkMilliseconds);
     const limit = WHOOP_OPERATIONAL_RETENTION.deleteLimit;
+    // "Is there a newer one" is asked of every old row, so it must be a seek: the
+    // created_at >= / started_at >= bound lets SQLite range over
+    // idx_whoop_sync_checkpoints_latest and idx_whoop_sync_runs_user_started.
+    // Written as one OR it walked the whole resource for each row, which is
+    // quadratic and, at 51k checkpoints, past D1's CPU limit.
     const results = await this.db.batch([
       this.db.prepare(`
         DELETE FROM whoop_oauth_states WHERE rowid IN (
@@ -1723,8 +1706,8 @@ export class WhoopRepository {
                   AND newer.mode = checkpoint.mode
                   AND newer.target_id = checkpoint.target_id
                   AND newer.status IN ('complete', 'error')
-                  AND (newer.created_at > checkpoint.created_at
-                    OR (newer.created_at = checkpoint.created_at AND newer.sync_run_id > checkpoint.sync_run_id))
+                  AND newer.created_at >= checkpoint.created_at
+                  AND (newer.created_at > checkpoint.created_at OR newer.sync_run_id > checkpoint.sync_run_id)
               )))
             OR
             (checkpoint.status IN ('queued', 'running', 'retrying') AND checkpoint.updated_at < ?
@@ -1750,8 +1733,8 @@ export class WhoopRepository {
                 WHERE newer.whoop_user_id = run.whoop_user_id
                   AND newer.connection_id = run.connection_id
                   AND newer.status IN ('complete', 'error')
-                  AND (newer.started_at > run.started_at
-                    OR (newer.started_at = run.started_at AND newer.run_id > run.run_id))
+                  AND newer.started_at >= run.started_at
+                  AND (newer.started_at > run.started_at OR newer.run_id > run.run_id)
               ))
             OR
             (run.status IN ('queued', 'running', 'retrying') AND run.started_at < ?

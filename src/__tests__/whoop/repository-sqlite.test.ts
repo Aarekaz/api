@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { WhoopRepository, type CheckpointInput } from "../../services/whoop/repository";
+import { WHOOP_OPERATIONAL_RETENTION, WhoopRepository, type CheckpointInput } from "../../services/whoop/repository";
 import { CONNECTION_ID, KEY, NOW, RECOVERY, SLEEP, WORKOUT } from "./fixtures";
 
 type SqliteStatement = {
@@ -1066,6 +1066,7 @@ describe("WHOOP repository on SQLite", () => {
   });
 
   it("prunes terminal history through repeated bounded sweeps within its projection partition", async () => {
+    const limit = WHOOP_OPERATIONAL_RETENTION.deleteLimit;
     const old = "2026-06-01T00:00:00.000Z";
     const newest = "2026-08-19T12:00:00.000Z";
     const insertCheckpoint = database.prepare(`
@@ -1074,7 +1075,7 @@ describe("WHOOP repository on SQLite", () => {
         sync_run_id, target_id, status, page_count, record_count, created_at, updated_at
       ) VALUES (42, ?, ?, 'reconcile', ?, ?, '', 'complete', 0, 0, ?, ?)
     `);
-    for (let index = 0; index < 102; index += 1) {
+    for (let index = 0; index < limit + 2; index += 1) {
       insertCheckpoint.run(
         CONNECTION_ID, "sleep", 1, `old-checkpoint-${index.toString().padStart(3, "0")}`, old, old,
       );
@@ -1089,15 +1090,15 @@ describe("WHOOP repository on SQLite", () => {
         expected_target_count, completed_target_count, page_count, record_count, started_at
       ) VALUES (?, 42, ?, ?, 'scheduled', 'complete', 6, 6, 0, 0, ?)
     `);
-    for (let index = 0; index < 102; index += 1) {
+    for (let index = 0; index < limit + 2; index += 1) {
       insertRun.run(`old-run-${index.toString().padStart(3, "0")}`, CONNECTION_ID, 1, old);
     }
     insertRun.run("newest-run", CONNECTION_ID, 2, newest);
     insertRun.run("different-lifecycle", "old-connection", 1, old);
 
     await expect(repository.pruneOperationalData(NOW)).resolves.toEqual(expect.objectContaining({
-      checkpoints: 100,
-      runs: 100,
+      checkpoints: limit,
+      runs: limit,
     }));
     await expect(repository.pruneOperationalData(NOW)).resolves.toEqual(expect.objectContaining({
       checkpoints: 2,
@@ -1116,5 +1117,35 @@ describe("WHOOP repository on SQLite", () => {
       ]);
     expect(database.prepare("SELECT run_id FROM whoop_sync_runs ORDER BY run_id").all())
       .toEqual([{ run_id: "different-lifecycle" }, { run_id: "newest-run" }]);
+  });
+
+  it("prunes and totals a run with index seeks, never a walk over every checkpoint", async () => {
+    // @ts-expect-error The Worker typecheck intentionally excludes Node test-runtime declarations.
+    const { readFile } = await import("node:fs/promises");
+    for (const name of ["0045_hot_indexes", "0049_whoop_prune_index"]) {
+      const sql = await readFile(`migrations/${name}.sql`, "utf8");
+      database.exec(sql.split("\n").filter((line: string) => !line.includes(" visits(")).join("\n"));
+    }
+    const statements: Array<{ sql: string; bindings: readonly unknown[] }> = [];
+    d1.beforeExecute = async (_operation, sql, bindings) => { statements.push({ sql, bindings }); };
+    await repository.pruneOperationalData(NOW);
+    await repository.refreshSyncRun("run", 42, CONNECTION_ID, 1, NOW);
+    const plan = (needle: string) => {
+      const statement = statements.find((s) => s.sql.includes(needle))!;
+      return (database.prepare(`EXPLAIN QUERY PLAN ${statement.sql}`).all(...statement.bindings) as Array<{ detail: string }>)
+        .map((row) => row.detail);
+    };
+
+    // The "is there a newer one" check ranges over created_at / started_at.
+    expect(plan("DELETE FROM whoop_sync_checkpoints WHERE rowid IN")).toContainEqual(expect.stringMatching(
+      /^SEARCH newer USING INDEX idx_whoop_sync_checkpoints_latest \(.*target_id=\? AND created_at>\?\)$/,
+    ));
+    expect(plan("DELETE FROM whoop_sync_runs WHERE rowid IN")).toContainEqual(
+      "SEARCH newer USING INDEX idx_whoop_sync_runs_user_started (whoop_user_id=? AND started_at>?)",
+    );
+    // Every read of the checkpoints behind a run's totals goes by its run id.
+    const refresh = plan("UPDATE whoop_sync_runs\n      SET page_count = progress.pages").filter((d) => d.includes("whoop_sync_checkpoints"));
+    expect(refresh.length).toBeGreaterThan(0);
+    expect(refresh.every((d) => d.startsWith("SEARCH whoop_sync_checkpoints USING INDEX idx_whoop_sync_checkpoints_run (sync_run_id=? AND mode=?"))).toBe(true);
   });
 });
