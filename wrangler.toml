@@ -18,7 +18,7 @@ API_VERSION = "0.4.0"
 # /highlights, /music/history, /training/bests) also send their old named key beside
 # `items`, for app builds up to 0.20.1. Set "off" (or remove) once every device
 # runs a build that reads `items`; then delete this and the code (docs/adr/0005).
-LEGACY_LIST_KEYS = "on"
+LEGACY_LIST_KEYS = "off"
 R2_PUBLIC_BASE_URL = "https://media.anuragd.me"
 API_BASE_URL = "https://api.anuragd.me"
 GITHUB_WORK_USERNAME = "anurag-wa"
