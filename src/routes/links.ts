@@ -177,6 +177,15 @@ for (const [action, summary] of [
 
 openApiRegistry.registerPath({
   method: "post",
+  path: "/v1/links/{id}/page",
+  summary: "Read the article from a page the device fetched (for sites that block servers)",
+  security: authSecurity,
+  request: { params: idParams },
+  responses: structuredOkResponses(fullLink),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
   path: "/v1/links/{id}/refetch",
   summary: "Fetch the article again",
   security: authSecurity,
@@ -281,6 +290,18 @@ for (const [path, archived] of [["archive", true], ["read", true], ["unarchive",
     }
   });
 }
+
+/** POST /v1/links/:id/page {html, url}: the page as the device fetched it, for sites that turn the server away. */
+app.post("/:id/page", async (c) => {
+  const body = await c.req.json().catch(() => null) as { html?: unknown; url?: unknown } | null;
+  if (!body || typeof body.html !== "string" || body.html.length < 200) return c.json({ error: "html is required" }, 400);
+  try {
+    const url = typeof body.url === "string" ? body.url : undefined;
+    return c.json(presentLink(await fetchArticle(c.env, c.req.param("id"), new Date(), { html: body.html, url }), true));
+  } catch (error) {
+    return fail(c, error);
+  }
+});
 
 app.post("/:id/refetch", async (c) => {
   try {

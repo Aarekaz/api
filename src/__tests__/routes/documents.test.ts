@@ -305,6 +305,18 @@ describe("read later", () => {
     expect(link.fetch_error).toBe("The site answered 403");
   });
 
+  it("reads a page the device fetched when the site turned the server away", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("slow down", { status: 429 })));
+    const env = { DB: d1() } as Env;
+    const link = await (await app().request("/v1/links", json({ url: "https://someone.substack.com/p/a" }), env)).json() as { id: string; fetch_error: string };
+    expect(link.fetch_error).toBe("The site answered 429");
+    const read = await (await app().request(`/v1/links/${link.id}/page`, json({ html: PAGE, url: "https://someone.substack.com/p/a" }), env))
+      .json() as { title: string; fetch_error: string | null; body: string };
+    expect(read.title).toBe("Why Agents Need Schemas");
+    expect(read.fetch_error).toBeNull();
+    expect(read.body).toContain("real");
+  });
+
   it("captures a bare URL as a link, not a Dump line", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(PAGE, { headers: { "content-type": "text/html" } })));
     const env = { DB: d1() } as Env;

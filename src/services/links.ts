@@ -35,7 +35,19 @@ function attr(tag: string, name: string): string | undefined {
 
 /** Profile pictures and tiny thumbnails: X's avatars, Substack's 40-pixel crops, "X avatar for @…". */
 export function isAvatar(src: string, alt = ""): boolean {
-  return /\/profile_images\/|[,!\/]w_\d{1,2},h_\d{1,2}[,\/]|\/avatars?\//i.test(src) || /^(x |twitter )?avatar\b|^avatar for /i.test(alt);
+  return /\/profile_images\/|[,!\/]w_\d{1,2},h_\d{1,2}[,\/]|\/avatars?\/|gravatar\.com\/avatar|googleusercontent\.com\/a\/|=s\d{2}-c\b|\/i\/logo\//i.test(src)
+    || /^(x |twitter )?avatar\b|^avatar for |avatar$|\blogo$|^footer\b/i.test(alt)
+    // A template the page never filled in ("$store.lightbox.src", "{{image}}").
+    || /\$store\.|\{\{|%7B%7B/i.test(src);
+}
+
+/** A block that's only links to social networks ("- [LinkedIn](…)", "YouTube · Instagram · TikTok"). */
+function isSocialLinks(block: string): boolean {
+  const links = [...block.matchAll(/\[([^\]]+)\]\([^)]*\)/g)].map((m) => m[1].trim().toLowerCase().replace(/[,.]$/, ""));
+  if (links.length === 0) return false;
+  const rest = block.replace(/\[([^\]]+)\]\([^)]*\)/g, "").replace(/[-*·•|,\s]/g, "");
+  const networks = /^(linkedin|x|twitter|youtube|instagram|tiktok|facebook|github|threads|bluesky|mastodon|email|rss|substack|spotify|apple podcasts|reddit|discord)$/;
+  return rest.length === 0 && links.every((l) => networks.test(l));
 }
 
 /** An image as Markdown, or "" for tracking pixels, avatars and inline data. */
@@ -62,16 +74,46 @@ export function isBoilerplate(line: string): boolean {
     || /^thanks for reading\b/i.test(text)
     || /^get \d+% off\b/i.test(text)
     || /copy shortlink|manage subscriptions|view post in reader|report this content/i.test(text)
-    || /^(share|like|comment|restack|sign up|sign in|log in|discussion about this post)$/i.test(text);
+    || /^(share|like|comment|restack|sign up|sign in|log in|discussion about this post|related|leave a comment|get my newsletter|newsletter)$/i.test(text)
+    || /^share on (facebook|x|twitter|linkedin|reddit|threads|bluesky|email)\b|opens in new window|have a wordpress\.com account|already on my mailing list|reader-supported publication|^the rich text element allows you/i.test(text);
 }
 
 /** Stored Markdown with avatars and newsletter furniture taken out (for text saved before the rules existed). */
-export function cleanMarkdown(markdown: string): string {
-  return markdown.split("\n\n").filter((block) => {
-    const image = block.trim().match(/^!\[([^\]]*)\]\((\S+)\)$/);
-    if (image) return !isAvatar(image[2], image[1]);
-    return !isBoilerplate(block.trim());
-  }).join("\n\n");
+export function cleanMarkdown(markdown: string, url?: string): string {
+  const seen = new Set<string>();
+  let path: string | null = null;
+  try { path = url ? new URL(url).pathname.replace(/\/$/, "") : null; } catch { /* keep null */ }
+  const blocks = markdown.split("\n\n").map((b) => b.trim()).filter((block) => {
+    if (!block) return false;
+    const image = block.match(/^!\[([^\]]*)\]\((\S+)\)$/);
+    if (image) {
+      if (isAvatar(image[2], image[1])) return false;
+    } else if (isBoilerplate(block) || isSocialLinks(block)) return false;
+    // A heading that is only a link to another page is a "related posts" card, not a section.
+    const linkHeading = block.match(/^## \[[^\]]+\]\(([^)]+)\)$/);
+    if (linkHeading && !linkHeading[1].includes("#")) {
+      try { if (new URL(linkHeading[1]).pathname.replace(/\/$/, "") !== path) return false; } catch { return false; }
+    }
+    // Pages that render the story twice (a mobile and a desktop copy) or repeat a card: keep the first.
+    if (block.length >= 40 && !block.startsWith("```")) {
+      if (seen.has(block)) return false;
+      seen.add(block);
+    }
+    return true;
+  });
+  // A run of three or more pictures at the very end is a row of thumbnails or logos, not the story.
+  let end = blocks.length;
+  while (end > 0 && /^!\[/.test(blocks[end - 1])) end--;
+  if (blocks.length - end >= 3) blocks.splice(end);
+  return unwrapRedirects(blocks.join("\n\n"));
+}
+
+/** Links that go through a tracker first (Google Docs' google.com/url?q=…, Facebook's l.php?u=…) point at where they go. */
+export function unwrapRedirects(markdown: string): string {
+  return markdown.replace(/\]\((https?:\/\/(?:www\.)?(?:google\.com\/url\?q=|l\.facebook\.com\/l\.php\?u=)([^)&\s]+)[^)\s]*)\)/g,
+    (whole, _url: string, target: string) => {
+      try { const real = decodeURIComponent(target); return /^https?:\/\//.test(real) ? `](${real})` : whole; } catch { return whole; }
+    });
 }
 
 /** A data table as Markdown ("| a | b |"), or null for a layout table (one column, nested, or long cells). */
@@ -150,7 +192,7 @@ export function trimToArticle(lines: string[]) {
   const first = lines.findIndex(isProse);
   if (first < 0) return;
   let last = lines.length - 1;
-  while (last > first && !isProse(lines[last]) && !/^(- |> |```|!\[|\| )/.test(lines[last])) last--;
+  while (last > first && !isProse(lines[last]) && !/^(- |\d+\. |> |```|!\[|\| )/.test(lines[last])) last--;
   let start = first;
   while (start > 0 && start > first - 2 && /^(## |!\[)/.test(lines[start - 1])) start--;
   lines.splice(last + 1);
@@ -183,37 +225,45 @@ export function extractArticle(html: string, url: string): Article {
     tables.push(md);
     return `<mdtable>${tables.length - 1}</mdtable>`;
   });
+  // Numbered lists keep their numbers: each <li> directly in an <ol> carries its place.
+  const withNumbers = withTables.replace(/<ol\b([^>]*)>([\s\S]*?)<\/ol>/gi, (_, attrs: string, inner: string) => {
+    let n = Number(attr(`<ol ${attrs}>`, "start") ?? "1") - 1;
+    if (!Number.isFinite(n)) n = 0;
+    return inner.replace(/<li\b/gi, () => `<li data-n="${++n}"`);
+  });
   // Images become their own paragraphs, so the reader can show them in place.
-  const withImages = withTables.replace(/<img\b[^>]*>/gi, (tag) => {
+  const withImages = withNumbers.replace(/<img\b[^>]*>/gi, (tag) => {
     const md = imageMarkdown(tag, url);
     return md ? `<p>${md}</p>` : "";
   });
 
   const lines: string[] = [];
-  for (const m of withImages.matchAll(/<(h[1-6]|p|li|blockquote|pre|mdtable)\b[^>]*>([\s\S]*?)<\/\1>/gi)) {
+  for (const m of withImages.matchAll(/<(h[1-6]|p|li|blockquote|pre|mdtable)\b([^>]*)>([\s\S]*?)<\/\1>/gi)) {
     const tag = m[1].toLowerCase();
-    if (tag === "mdtable") { lines.push(tables[Number(m[2])]); continue; }
+    const number = tag === "li" ? attr(`<li ${m[2]}>`, "data-n") : undefined;
+    const bullet = number ? `${number}. ` : "- ";
+    if (tag === "mdtable") { lines.push(tables[Number(m[3])]); continue; }
     if (tag === "pre") {
-      const code = decodeEntities(m[2].replace(/<[^>]+>/g, "")).trimEnd();
+      const code = decodeEntities(m[3].replace(/<[^>]+>/g, "")).trimEnd();
       if (code.trim()) lines.push("```\n" + code + "\n```");
       continue;
     }
     // An image wrapped in a paragraph that already holds text splits into both.
-    const inner = m[2].replace(/<p>(!\[[^\]]*\]\([^)]+\))<\/p>/g, "\n$1\n");
+    const inner = m[3].replace(/<p>(!\[[^\]]*\]\([^)]+\))<\/p>/g, "\n$1\n");
     if (inner.includes("![")) {
       for (const part of inner.split("\n")) {
         const image = part.match(/^!\[[^\]]*\]\([^)]+\)$/);
         if (image) { lines.push(image[0]); continue; }
         const piece = inline(part, url);
-        if (piece.length >= 2) lines.push(tag[0] === "h" ? `## ${piece}` : tag === "li" ? `- ${piece}` : tag === "blockquote" ? `> ${piece}` : piece);
+        if (piece.length >= 2) lines.push(tag[0] === "h" ? `## ${piece}` : tag === "li" ? `${bullet}${piece}` : tag === "blockquote" ? `> ${piece}` : piece);
       }
       continue;
     }
     // Code keeps its words as they are; everything else keeps bold, italics and links.
-    const text = inline(m[2], url);
+    const text = inline(m[3], url);
     if (text.length < 2) continue;
     if (tag[0] === "h") lines.push(`## ${text}`);
-    else if (tag === "li") lines.push(`- ${text}`);
+    else if (tag === "li") lines.push(`${bullet}${text}`);
     else if (tag === "blockquote") lines.push(`> ${text}`);
     else lines.push(text);
   }
@@ -221,9 +271,12 @@ export function extractArticle(html: string, url: string): Article {
   trimToArticle(lines);
   // Drop a leading heading that only repeats the title.
   if (title && lines[0]?.replace(/^## /, "").replace(/\*/g, "") === title) lines.shift();
-  const markdown = lines.join("\n\n").slice(0, 200_000);
+  // Long reads are long (a 147-minute essay is ~600k characters); documents hold up to 1M.
+  const markdown = cleanMarkdown(lines.join("\n\n"), url).slice(0, 950_000);
   const words = markdown.replace(/!\[[^\]]*\]\([^)]+\)/g, "").split(/\s+/).filter(Boolean).length;
-  const image = absolute(meta.get("og:image") || meta.get("twitter:image"), url);
+  const lead = absolute(meta.get("og:image") || meta.get("twitter:image"), url);
+  // A profile picture isn't a cover (X gives the author's face as the page's picture).
+  const image = lead && !isAvatar(lead) ? lead : null;
   const iconTag = (html.match(/<link\b[^>]*rel\s*=\s*["'][^"']*(apple-touch-icon|icon)[^"']*["'][^>]*>/gi) ?? [])
     .sort((a, b) => Number(/apple-touch-icon/i.test(b)) - Number(/apple-touch-icon/i.test(a)))[0];
   let icon = iconTag ? absolute(attr(iconTag, "href"), url) : null;
@@ -259,11 +312,16 @@ export interface LinkRow extends DocumentRow {
 export type LinkKind = "article" | "video" | "pdf" | "post";
 
 /** What kind of page a link is, so the apps can open it the right way. */
+/** An arXiv paper's id from an arXiv or alphaXiv link (/abs/ or /pdf/): the paper is its PDF, not the abstract page. */
+export function arxivId(url: string): string | null {
+  return url.match(/(?:arxiv|alphaxiv)\.org\/(?:abs|pdf|overview)\/([\w.\/-]+?)(?:v\d+)?(?:\.pdf)?(?:[?#].*)?$/i)?.[1] ?? null;
+}
+
 export function linkKind(url: string, fetchError: string | null = null): LinkKind {
   let host = "", path = "";
   try { const u = new URL(url); host = u.hostname.replace(/^(www|m|mobile)\./, "").toLowerCase(); path = u.pathname.toLowerCase(); } catch { /* article */ }
   if (/^(youtube\.com|youtu\.be|vimeo\.com|tiktok\.com|twitch\.tv|loom\.com)$/.test(host)) return "video";
-  if (path.endsWith(".pdf") || /application\/pdf/i.test(fetchError ?? "")) return "pdf";
+  if (path.endsWith(".pdf") || /application\/pdf/i.test(fetchError ?? "") || arxivId(url)) return "pdf";
   if (/^(x\.com|twitter\.com|threads\.net|bsky\.app|instagram\.com)$/.test(host)) return "post";
   return "article";
 }
@@ -486,7 +544,79 @@ interface FxPost {
   author?: { name?: string; screen_name?: string };
   media?: { photos?: Array<{ url: string }>; videos?: Array<{ url?: string; thumbnail_url?: string }> };
   quote?: FxPost | null;
-  article?: { title?: string } | null;
+  article?: XArticle | null;
+}
+
+/** An X Article as FixTweet gives it: Draft.js blocks, an entity list (links, pictures, posts), the pictures. */
+export interface XArticle {
+  title?: string;
+  cover_media?: { media_info?: { original_img_url?: string } };
+  content?: {
+    blocks: Array<{ type: string; text: string; inlineStyleRanges?: Array<{ offset: number; length: number; style: string }>;
+      entityRanges?: Array<{ offset: number; length: number; key: number | string }> }>;
+    entityMap?: Array<{ key: string; value: { type: string; data: Record<string, unknown> } }> | Record<string, { type: string; data: Record<string, unknown> }>;
+  };
+  media_entities?: Array<{ media_id?: string; media_info?: { original_img_url?: string } }>;
+}
+
+/** An X Article as the reader's Markdown: headings, lists, quotes, code, bold/italic, links and pictures in place. */
+export function xArticleMarkdown(article: XArticle): string {
+  const blocks = article.content?.blocks ?? [];
+  const map = article.content?.entityMap ?? [];
+  const entity = (key: number | string) => Array.isArray(map) ? map.find((e) => String(e.key) === String(key))?.value : map[String(key)];
+  const pictures = new Map((article.media_entities ?? []).map((m) => [m.media_id, m.media_info?.original_img_url]));
+  const styled = (b: (typeof blocks)[number]) => {
+    // Cut the text at every place a style or link starts or ends, then wrap each piece.
+    const cuts = new Set([0, b.text.length]);
+    for (const r of [...(b.inlineStyleRanges ?? []), ...(b.entityRanges ?? [])]) { cuts.add(r.offset); cuts.add(r.offset + r.length); }
+    const points = [...cuts].sort((x, y) => x - y);
+    let out = "";
+    for (let i = 0; i < points.length - 1; i++) {
+      const [from, to] = [points[i], points[i + 1]];
+      let piece = b.text.slice(from, to);
+      if (!piece.trim()) { out += piece; continue; }
+      const within = (r: { offset: number; length: number }) => r.offset <= from && r.offset + r.length >= to;
+      const styles = (b.inlineStyleRanges ?? []).filter(within).map((r) => r.style.toLowerCase());
+      const lead = piece.match(/^\s*/)![0], trail = piece.match(/\s*$/)![0];
+      piece = piece.trim();
+      if (styles.includes("code")) piece = `\`${piece}\``;
+      if (styles.includes("bold")) piece = `**${piece}**`;
+      if (styles.includes("italic")) piece = `*${piece}*`;
+      const link = (b.entityRanges ?? []).filter(within).map((r) => entity(r.key)).find((e) => e?.type === "LINK");
+      const url = link?.data?.url;
+      if (typeof url === "string") piece = `[${piece.replace(/[\[\]]/g, "")}](${url})`;
+      out += lead + piece + trail;
+    }
+    return out.trim();
+  };
+  const out: string[] = [];
+  let n = 0;
+  for (const b of blocks) {
+    if (b.type !== "ordered-list-item") n = 0;
+    if (b.type === "atomic") {
+      for (const r of b.entityRanges ?? []) {
+        const e = entity(r.key);
+        if (e?.type === "MEDIA") {
+          for (const item of (e.data.mediaItems as Array<{ mediaId?: string }> | undefined) ?? []) {
+            const src = pictures.get(item.mediaId);
+            if (src) out.push(`![](${src})`);
+          }
+        } else if (e?.type === "TWEET" && e.data.tweetId) {
+          out.push(`> [A post on X](https://x.com/i/status/${e.data.tweetId})`);
+        }
+      }
+      continue;
+    }
+    if (b.type === "code-block") { if (b.text.trim()) out.push("```\n" + b.text + "\n```"); continue; }
+    const text = styled(b);
+    if (!text) continue;
+    if (/^header-/.test(b.type)) out.push(`## ${text.replace(/\*\*/g, "")}`);
+    else if (b.type === "unordered-list-item") out.push(`- ${text}`);
+    else if (b.type === "ordered-list-item") out.push(`${++n}. ${text}`);
+    else if (b.type === "blockquote") out.push(`> ${text}`);
+    else out.push(text);
+  }
+  return out.join("\n\n");
 }
 
 function linkBareUrls(text: string): string {
@@ -549,7 +679,14 @@ async function describeNonArticle(link: LinkRow): Promise<{ title: string; site?
       return { title: titleFromText(fx.text) || `${fx.author?.name ?? "A post"} on X`, site: fx.author?.name, body,
         excerpt: fx.text.slice(0, 280), whole: true };
     }
-    // A long-form X Article: the page brought the words; its own title is better than "Name on X".
+    // A long-form X Article: built from its own blocks (X's web page can change under us any day).
+    if (fx?.article?.content?.blocks?.length) {
+      const body = xArticleMarkdown(fx.article);
+      if (body.length > 200) {
+        return { title: fx.article.title || titleFromText(body), site: fx.author?.name, body, whole: true,
+          image: fx.article.cover_media?.media_info?.original_img_url, excerpt: body.replace(/[#*>\[\]]|\(https?:[^)]*\)/g, "").slice(0, 280) };
+      }
+    }
     if (fx?.article?.title) return { title: fx.article.title, site: fx.author?.name };
     const o = await oembed("https://publish.twitter.com/oembed", link.url);
     if (!o?.html) return null;
@@ -564,7 +701,7 @@ async function describeNonArticle(link: LinkRow): Promise<{ title: string; site?
     return o?.title ? { title: o.title, site: o.author_name, image: o.thumbnail_url } : null;
   }
   if (kind === "pdf") {
-    const arxiv = link.url.match(/arxiv\.org\/pdf\/([\w.\/-]+?)(?:\.pdf)?$/i)?.[1];
+    const arxiv = arxivId(link.url);
     if (arxiv) {
       try {
         const r = await fetch(`https://arxiv.org/abs/${arxiv}`, { signal: AbortSignal.timeout(8_000) });
@@ -584,7 +721,7 @@ async function enrich(env: Env, id: string): Promise<void> {
   const extra = await describeNonArticle(link);
   if (!extra) {
     // Even when the site refused this time, what's stored loses its avatars and subscribe lines.
-    const cleaned = cleanMarkdown(link.body ?? "");
+    const cleaned = cleanMarkdown(link.body ?? "", link.url);
     if (cleaned !== (link.body ?? "")) {
       await env.DB.prepare("UPDATE documents SET body = ?, version = version + 1 WHERE id = ?").bind(cleaned, id).run();
     }
@@ -597,37 +734,68 @@ async function enrich(env: Env, id: string): Promise<void> {
   const title = alreadyWhole && extra.body ? link.title : extra.title;
   const newBody = cleanMarkdown(extra.whole && extra.body ? extra.body
     : extra.body && !alreadyWhole ? `${extra.body}\n\n${body}`.trim() : body);
-  const image = extra.image && !fm.image ? { image: extra.image } : {};
+  const image = extra.image && (!fm.image || isAvatar(String(fm.image))) ? { image: extra.image } : {};
   await env.DB.batch([
     env.DB.prepare("UPDATE documents SET title = ?, body = ?, frontmatter_json = ?, version = version + 1 WHERE id = ?")
-      .bind(title.slice(0, 300), newBody, JSON.stringify({ ...fm, ...image }), id),
+      .bind(title.slice(0, 300), newBody, JSON.stringify(withoutAvatarCover({ ...fm, ...image })), id),
     env.DB.prepare("UPDATE links SET site = COALESCE(?, site), excerpt = COALESCE(?, excerpt) WHERE document_id = ?")
       .bind(extra.site ?? null, alreadyWhole ? null : extra.excerpt ?? null, id),
   ]);
 }
 
-export async function fetchArticle(env: Env, id: string, now = new Date()): Promise<LinkRow> {
+/** A cover saved before avatars were told apart from pictures comes off. */
+function withoutAvatarCover(fm: Record<string, unknown>): Record<string, unknown> {
+  if (typeof fm.image === "string" && isAvatar(fm.image)) { const { image: _, ...rest } = fm; return rest; }
+  return fm;
+}
+
+/** Too little text to be the article: a bot check, a login wall, or a page built in the browser. */
+export const THIN_PAGE = "Too little text came back (the site may block servers)";
+
+/** Cloudflare's, Substack's and others' "are you a person" pages. */
+export function isBotCheck(text: string): boolean {
+  return /just a moment|enable javascript and cookies|checking (if the site connection is secure|your browser)|verify (you are|you're) (a )?human|access denied|are you a robot|attention required/i.test(text);
+}
+
+/**
+ * Fetches the article and stores its text. `page` is the page as a device fetched it, for
+ * sites that turn servers away (Substack answers Cloudflare with 429): the same reading
+ * and cleaning, just without the server's own request.
+ */
+export async function fetchArticle(env: Env, id: string, now = new Date(), page?: { html: string; url?: string }): Promise<LinkRow> {
   const link = await getLink(env, id);
   const stamp = now.toISOString();
   try {
-    const response = await fetch(link.url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; anurag-os-reader/1.0)", Accept: "text/html,application/xhtml+xml" },
-      redirect: "follow",
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok) throw new Error(`The site answered ${response.status}`);
-    const type = response.headers.get("content-type") ?? "";
-    if (!/html|xml/i.test(type)) throw new Error(`Not a web page (${type.split(";")[0] || "unknown type"})`);
-    let html = (await response.text()).slice(0, 3_000_000);
-    let pageUrl = response.url || link.url;
+    let html: string, pageUrl: string;
+    if (page) {
+      html = page.html.slice(0, 3_000_000);
+      pageUrl = page.url && /^https?:\/\//.test(page.url) ? page.url : link.url;
+    } else {
+      const response = await fetch(link.url, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; anurag-os-reader/1.0)", Accept: "text/html,application/xhtml+xml" },
+        redirect: "follow",
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) throw new Error(`The site answered ${response.status}`);
+      const type = response.headers.get("content-type") ?? "";
+      if (!/html|xml/i.test(type)) throw new Error(`Not a web page (${type.split(";")[0] || "unknown type"})`);
+      html = (await response.text()).slice(0, 3_000_000);
+      pageUrl = response.url || link.url;
+    }
     // A share or preview link (Substack's /p/<uuid>) is a different page from the post: follow its canonical address.
     const canonical = canonicalUrl(html, pageUrl);
     if (canonical && new URL(canonical).pathname !== new URL(pageUrl).pathname && /\/p\/[0-9a-f-]{36}\b/i.test(pageUrl)) {
       const again = await fetch(canonical, { headers: { "User-Agent": "Mozilla/5.0 (compatible; anurag-os-reader/1.0)", Accept: "text/html" },
-        redirect: "follow", signal: AbortSignal.timeout(10_000) });
-      if (again.ok) { html = (await again.text()).slice(0, 3_000_000); pageUrl = again.url || canonical; }
+        redirect: "follow", signal: AbortSignal.timeout(10_000) }).catch(() => null);
+      if (again?.ok) { html = (await again.text()).slice(0, 3_000_000); pageUrl = again.url || canonical; }
     }
     const fresh = extractArticle(html, pageUrl);
+    // An article that came back nearly empty, or as a bot check, failed whatever the status said:
+    // keep what's there, mark it, and a device fetches it from its own connection.
+    const isArticle = linkKind(link.url) === "article";
+    // A bot check isn't the page at all: leave the title and text as they were.
+    if (isArticle && fresh.words < 200 && isBotCheck(fresh.markdown + " " + (fresh.title ?? ""))) throw new Error(THIN_PAGE);
+    const thin = isArticle && fresh.words < 15;
     // Never trade good text for worse: some sites (X especially) serve a stripped page now and then.
     const had = (link.body ?? "").length;
     const worse = had > 600 && fresh.markdown.length < had * 0.5;
@@ -637,11 +805,11 @@ export async function fetchArticle(env: Env, id: string, now = new Date()): Prom
     await env.DB.batch([
       env.DB.prepare("UPDATE documents SET title = ?, body = ?, frontmatter_json = ?, updated_at = ?, version = version + 1 WHERE id = ?")
         .bind(title, article.markdown,
-          JSON.stringify({ ...(link.frontmatter_json ? JSON.parse(link.frontmatter_json) : {}), url: link.url,
-            ...(article.image ? { image: article.image } : {}), ...(article.icon ? { icon: article.icon } : {}) }),
+          JSON.stringify(withoutAvatarCover({ ...(link.frontmatter_json ? JSON.parse(link.frontmatter_json) : {}), url: link.url,
+            ...(article.image ? { image: article.image } : {}), ...(article.icon ? { icon: article.icon } : {}) })),
           stamp, id),
-      env.DB.prepare("UPDATE links SET site = ?, excerpt = ?, reading_minutes = ?, fetched_at = ?, fetch_error = NULL WHERE document_id = ?")
-        .bind(article.site, article.excerpt, Math.max(1, Math.round(article.words / 230)), stamp, id),
+      env.DB.prepare("UPDATE links SET site = ?, excerpt = ?, reading_minutes = ?, fetched_at = ?, fetch_error = ? WHERE document_id = ?")
+        .bind(article.site, article.excerpt, Math.max(1, Math.round(article.words / 230)), stamp, thin && !worse ? THIN_PAGE : null, id),
     ]);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
