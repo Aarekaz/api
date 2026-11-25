@@ -31,8 +31,12 @@ const placeKey = z.string().regex(/^-?\d+\.\d{3},-?\d+\.\d{3}$/).openapi({
   description: "Grid cell of about 110 m: printf('%.3f,%.3f', lat, lng)",
   example: "38.898,-77.037",
 });
+// Deprecated: days and months come from each row's local_date (where it
+// happened). The offset is still accepted, and only places a row that has no
+// local_date (docs/adr/0001-local-date-reads.md).
 const offset = z.coerce.number().int().min(-840).max(840).optional().openapi({
-  description: "Local minutes from UTC (default 0)",
+  description: "Deprecated. Local minutes from UTC, used only for a row without local_date (default 0)",
+  param: { deprecated: true },
 });
 
 const visitSchema = z.object({
@@ -476,7 +480,7 @@ openApiRegistry.registerPath({
 // default; only a visit stored with a future arrival could appear without a
 // write, which the phone and the imports don't send.)
 
-const SHAPE = 2; // bump when a reply's shape changes without a data change
+const SHAPE = 3; // bump when a reply's shape changes without a data change
 app.use("*", async (c, next) => {
   if (c.req.method !== "GET" && c.req.method !== "HEAD") return next();
   const url = new URL(c.req.url);

@@ -280,3 +280,89 @@ describe("local_date at ingest", () => {
     expect(page.items.map((j) => j.local_date)).toEqual(["2026-11-24", "2026-11-25"]);
   });
 });
+
+describe("days come from local_date", () => {
+  // Rows written straight into the table, so local_date can say something the
+  // UTC time and offset alone wouldn't (proving the reads go by the column).
+  const insert = (db: ReturnType<typeof setup>["db"], v: { arrived_at: string; departed_at?: string | null; utc_offset?: number | null; local_date: string | null; key: string }) =>
+    db.prepare(`INSERT INTO visits (latitude, longitude, arrived_at, departed_at, source, source_key, created_at, utc_offset, local_date)
+      VALUES (40.7, -74, ?, ?, 'visit', ?, '2026-01-01', ?, ?)`).run(v.arrived_at, v.departed_at ?? null, v.key, v.utc_offset ?? null, v.local_date);
+  type Day = { visits: Array<{ source_key: string }>; journeys: Array<{ source_key: string }> };
+
+  it("groups days, months, years and on-this-day by local_date, whatever ?offset= says", async () => {
+    const { db, get } = setup();
+    insert(db, { arrived_at: "2022-06-10T03:07:55Z", utc_offset: 345, local_date: "2022-06-11", key: "a" });
+    for (const offset of ["", "&offset=-240", "&offset=600"]) {
+      const days = await (await get(`/v1/visits/days?year=2022${offset}`)).json() as { days: Array<{ day: string }> };
+      expect(days.days.map((d) => d.day)).toEqual(["2022-06-11"]);
+      const day = await (await get(`/v1/visits/day?date=2022-06-11${offset}`)).json() as Day;
+      expect(day.visits.map((v) => v.source_key)).toEqual(["a"]);
+      const otd = await (await get(`/v1/visits/on-this-day?md=06-11${offset}`)).json() as Day;
+      expect(otd.visits.map((v) => v.source_key)).toEqual(["a"]);
+    }
+    const months = await (await get("/v1/visits/months?offset=-240")).json() as { months: Array<{ month: string }> };
+    expect(months.months.map((m) => m.month)).toEqual(["2022-06"]);
+  });
+
+  it("puts a visit on its local year, for the years and the places in a year", async () => {
+    const { db, get } = setup();
+    // 03:00 UTC on 1 Jan 2023 is 10 pm on New Year's Eve in New York.
+    insert(db, { arrived_at: "2023-01-01T03:00:00Z", local_date: "2022-12-31", key: "nye" });
+    const years = await (await get("/v1/visits/years")).json() as { years: Array<{ year: string }> };
+    expect(years.years.map((y) => y.year)).toEqual(["2022"]);
+    const in2022 = await (await get("/v1/visits/places?year=2022")).json() as { places: unknown[] };
+    const in2023 = await (await get("/v1/visits/places?year=2023")).json() as { places: unknown[] };
+    expect([in2022.places.length, in2023.places.length]).toEqual([1, 0]);
+  });
+
+  it("keeps a stay that began the night before and ran into the day", async () => {
+    const { db, get } = setup();
+    insert(db, { arrived_at: "2026-11-24T02:00:00Z", departed_at: "2026-11-24T13:00:00Z", utc_offset: -300, local_date: "2026-11-23", key: "night" });
+    insert(db, { arrived_at: "2026-11-24T15:00:00Z", departed_at: "2026-11-24T16:00:00Z", utc_offset: -300, local_date: "2026-11-24", key: "day" });
+    const day = await (await get("/v1/visits/day?date=2026-11-24")).json() as Day;
+    expect(day.visits.map((v) => v.source_key)).toEqual(["night", "day"]);
+    const before = await (await get("/v1/visits/day?date=2026-11-23")).json() as Day;
+    expect(before.visits.map((v) => v.source_key)).toEqual(["night"]);
+  });
+
+  it("finds a day's journeys by local_date", async () => {
+    const { db, get } = setup();
+    db.exec(`INSERT INTO journeys (started_at, mode, source, source_key, created_at, utc_offset, local_date) VALUES
+      ('2026-11-25T03:00:00Z', 'walking', 'phone', 'j1', '2026-01-01', NULL, '2026-11-24'),
+      ('2026-11-25T03:00:00Z', 'flying', 'phone', 'j2', '2026-01-01', 345, '2026-11-25')`);
+    const day = await (await get("/v1/visits/day?date=2026-11-24&offset=345")).json() as Day;
+    expect(day.journeys.map((j) => j.source_key)).toEqual(["j1"]);
+  });
+
+  it("reads a row without local_date the old way: its own offset, else the reader's", async () => {
+    const { db, get } = setup();
+    insert(db, { arrived_at: "2022-06-10T03:07:55Z", utc_offset: 345, local_date: null, key: "own" });
+    insert(db, { arrived_at: "2022-07-10T03:07:55Z", utc_offset: null, local_date: null, key: "reader" });
+    db.exec(`INSERT INTO journeys (started_at, mode, source, source_key, created_at) VALUES ('2022-07-10T03:00:00Z', 'walking', 'phone', 'j', '2026-01-01')`);
+    const east = await (await get("/v1/visits/days?year=2022&offset=-240")).json() as { days: Array<{ day: string }> };
+    expect(east.days.map((d) => d.day)).toEqual(["2022-06-10", "2022-07-09"]);
+    const day = await (await get("/v1/visits/day?date=2022-07-09&offset=-240")).json() as Day;
+    expect(day.visits.map((v) => v.source_key)).toEqual(["reader"]);
+    expect(day.journeys.map((j) => j.source_key)).toEqual(["j"]);
+    const otd = await (await get("/v1/visits/on-this-day?md=06-10&offset=-240")).json() as Day;
+    expect(otd.visits.map((v) => v.source_key)).toEqual(["own"]);
+  });
+
+  it("seeks the local_date index for a day, a year's days and on-this-day", async () => {
+    const { db, DB } = testD1({
+      migrations: ["0007_location", "0027_visits", "0028_place_names", "0029_journeys", "0032_place_categories", "0041_visit_guess",
+        "0042_utc_offset", "0043_recorded_departure", "0044_visit_corrections", "0048_local_date"],
+    });
+    const seen: string[] = [];
+    const spy = { prepare: (sql: string) => { seen.push(sql); return DB.prepare(sql); }, batch: DB.batch.bind(DB) } as unknown as D1Database;
+    const env = { DB: spy } as Env;
+    const places = await import("../../services/places");
+    await places.visitDay(env, "2026-11-24", 0);
+    await places.visitDays(env, "2026", 0);
+    await places.onThisDay(env, "11-24", 0);
+    const plan = (sql: string) => (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>).map((r) => r.detail).join("\n");
+    const reads = seen.filter((sql) => /local_date (=|BETWEEN|>=|IN)/.test(sql));
+    expect(reads.length).toBe(4);
+    for (const sql of reads) expect(plan(sql)).toMatch(/USING INDEX (visits|journeys)_local_date \(local_date/);
+  });
+});

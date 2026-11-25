@@ -77,6 +77,10 @@ journal, sections, recipes, training, music history) use `src/lib/http.ts`:
   Without the table the reads fall back to the old `max-age` hints. When a
   reply's shape changes without a data change, bump `SHAPE` in routes/visits.ts.
   Rows written straight into D1 (wrangler, scripts) don't bump the version.
+- Places days: every day, month and year read groups by `local_date` (written
+  at ingest, indexed); `?offset=` is deprecated and only places a row without
+  one (`docs/adr/0001-local-date-reads.md`). Rows written straight into D1 must
+  set `local_date`.
 - Work that can finish after the reply goes in `later(c)` (waitUntil); a saved
   link's page is fetched that way, so `POST /v1/links` returns at once with
   `fetched_at: null` and no `body`.

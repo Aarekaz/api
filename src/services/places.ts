@@ -129,7 +129,12 @@ export const PLACE_KEY = /^-?\d+\.\d{3},-?\d+\.\d{3}$/;
 const KEY = "printf('%.3f,%.3f', latitude, longitude)";
 const KEY_V = KEY.replace(/latitude|longitude/g, (m) => "v." + m);
 
-/** The reader's offset from ?offset= (minutes from UTC), 0 when missing or out of range. */
+/**
+ * The reader's offset from ?offset= (minutes from UTC), 0 when missing or out of range.
+ * Deprecated: days and months come from each row's local_date. The offset only
+ * places a row that has no local_date yet (one written before the column and
+ * missed by scripts/backfill-local-date.mjs); docs/adr/0001-local-date-reads.md.
+ */
 export const offsetOf = (v: string | undefined) => {
   const n = Math.round(Number(v));
   return Number.isFinite(n) && Math.abs(n) <= 14 * 60 ? n : 0;
@@ -140,6 +145,16 @@ export const offsetOf = (v: string | undefined) => {
  */
 const local = (col: string, param: string, prefix = "") =>
   `datetime(${prefix}${col}, printf('%+d minutes', COALESCE(${prefix}utc_offset, ${param})))`;
+
+/**
+ * A row's local date: local_date, written at ingest (its own utc_offset, else
+ * New York). A row without one, which the backfill should leave none of, is
+ * read the old way: its own offset, else the reader's.
+ */
+const dayOf = (col: string, param: string, prefix = "") => `COALESCE(${prefix}local_date, date(${local(col, param, prefix)}))`;
+
+/** `days` before or after a YYYY-MM-DD date. */
+const shiftDate = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 
 const WITH_NAME = `SELECT v.*, ${KEY_V} AS key, n.name AS place_name, n.city AS place_city
      FROM shown_visits AS v LEFT JOIN place_names AS n ON n.key = ${KEY_V}`;
@@ -226,7 +241,12 @@ export async function correctVisit(env: Env, id: number, change: VisitCorrection
 export async function listPlaces(env: Env, window: { year?: string; from?: string; to?: string }) {
   const where: string[] = [];
   const args: unknown[] = [];
-  if (window.year) { where.push("arrived_at >= ? AND arrived_at < ?"); args.push(`${window.year}-01-01`, `${Number(window.year) + 1}-01-01`); }
+  // A year is the local year, like /years: by local_date, or for a row without one, its UTC arrival.
+  if (window.year) {
+    where.push("(local_date >= ? AND local_date < ? OR local_date IS NULL AND arrived_at >= ? AND arrived_at < ?)");
+    const from = `${window.year}-01-01`, to = `${Number(window.year) + 1}-01-01`;
+    args.push(from, to, from, to);
+  }
   if (window.from) { where.push("arrived_at >= ?"); args.push(window.from); }
   if (window.to) { where.push("arrived_at < ?"); args.push(window.to); }
   const { results } = await env.DB.prepare(`
@@ -254,7 +274,7 @@ export async function listPlaces(env: Env, window: { year?: string; from?: strin
 /** Visits and places per year (in each visit's own local time). */
 export async function visitYears(env: Env) {
   const { results } = await env.DB.prepare(
-    `SELECT substr(${local("arrived_at", "0")}, 1, 4) AS year, COUNT(*) AS visits, COUNT(DISTINCT ${KEY}) AS places
+    `SELECT substr(${dayOf("arrived_at", "0")}, 1, 4) AS year, COUNT(*) AS visits, COUNT(DISTINCT ${KEY}) AS places
      FROM shown_visits GROUP BY year ORDER BY year`,
   ).all();
   return results;
@@ -263,7 +283,7 @@ export async function visitYears(env: Env) {
 /** Visits and places per month. */
 export async function visitMonths(env: Env, offset: number) {
   const { results } = await env.DB.prepare(
-    `SELECT substr(${local("arrived_at", "?1")}, 1, 7) AS month, COUNT(*) AS visits, COUNT(DISTINCT ${KEY}) AS places
+    `SELECT substr(${dayOf("arrived_at", "?1")}, 1, 7) AS month, COUNT(*) AS visits, COUNT(DISTINCT ${KEY}) AS places
      FROM shown_visits GROUP BY month ORDER BY month`,
   ).bind(offset).all();
   return results;
@@ -278,11 +298,23 @@ export async function visitsAt(env: Env, key: string) {
   return { name, visits: results };
 }
 
-/** Visits on this month and day (MM-DD) in every year. */
+/**
+ * Visits on this month and day (MM-DD) in every year. The dates are listed
+ * (one per year from the first local_date to the last) so each is an index
+ * seek on local_date rather than a scan of every visit.
+ */
 export async function onThisDay(env: Env, md: string, offset: number) {
   const { results } = await env.DB.prepare(
-    `${WITH_NAME}
-     WHERE strftime('%m-%d', ${local("arrived_at", "?1", "v.")}) = ?2 ORDER BY v.arrived_at`,
+    // MIN and MAX in separate subqueries: each alone is one index step, together a scan.
+    `WITH RECURSIVE span AS (SELECT CAST(substr((SELECT MIN(local_date) FROM visits), 1, 4) AS INTEGER) AS lo,
+         CAST(substr((SELECT MAX(local_date) FROM visits), 1, 4) AS INTEGER) AS hi),
+       years(y) AS (SELECT lo FROM span WHERE lo IS NOT NULL UNION ALL SELECT y + 1 FROM years, span WHERE y < span.hi)
+     ${WITH_NAME}
+     WHERE v.local_date IN (SELECT printf('%04d-%s', y, ?2) FROM years)
+     UNION ALL
+     ${WITH_NAME}
+     WHERE v.local_date IS NULL AND strftime('%m-%d', ${local("arrived_at", "?1", "v.")}) = ?2
+     ORDER BY arrived_at`,
   ).bind(offset, md).all();
   return results;
 }
@@ -294,27 +326,39 @@ export async function visitDays(env: Env, year: string | null, offset: number) {
   const to = year ? `${Number(year) + 1}-01-02` : "9999";
   const { results } = await env.DB.prepare(
     `SELECT day, COUNT(*) AS visits, COUNT(DISTINCT key) AS places FROM
-       (SELECT date(${local("arrived_at", "?1")}) AS day, ${KEY} AS key FROM shown_visits WHERE arrived_at >= ?2 AND arrived_at < ?3)
+       (SELECT local_date AS day, ${KEY} AS key FROM shown_visits WHERE local_date >= ?4 AND local_date < ?5
+        UNION ALL
+        SELECT date(${local("arrived_at", "?1")}) AS day, ${KEY} AS key FROM shown_visits
+          WHERE local_date IS NULL AND arrived_at >= ?2 AND arrived_at < ?3)
      GROUP BY day ORDER BY day`,
-  ).bind(offset, from, to).all<{ day: string }>();
+  ).bind(offset, from, to, year ? `${year}-01-01` : "0000", year ? `${Number(year) + 1}-01-01` : "9999").all<{ day: string }>();
   return results.filter((r) => !year || r.day.startsWith(year));
 }
 
 /** One local day: its visits (with where you woke up) and the journeys between them, in order. */
 export async function visitDay(env: Env, date: string, offset: number) {
-  // The day is the local day where you were: each row is read in its own offset.
-  // A UTC window two days wide finds the candidates (any offset is within ±14 h).
+  // The day is the local day where you were: local_date, plus stays that began
+  // up to two days before and ran into it (their departure read in the row's
+  // own offset). A row without local_date is found the old way, by a UTC window
+  // two days wide (any offset is within ±14 h) read in its offset or the reader's.
   const near = [new Date(Date.parse(`${date}T00:00:00Z`) - 2 * 86_400_000).toISOString(),
     new Date(Date.parse(`${date}T00:00:00Z`) + 2 * 86_400_000).toISOString()];
   const visits = await env.DB.prepare(
     `${WITH_NAME}
-     WHERE v.arrived_at >= ?3 AND v.arrived_at < ?4
+     WHERE v.local_date BETWEEN ?5 AND ?2
+       AND (v.local_date = ?2 OR (v.departed_at IS NOT NULL AND date(${local("departed_at", "?1", "v.")}) >= ?2))
+     UNION ALL
+     ${WITH_NAME}
+     WHERE v.local_date IS NULL AND v.arrived_at >= ?3 AND v.arrived_at < ?4
        AND (date(${local("arrived_at", "?1", "v.")}) = ?2
          OR (date(${local("arrived_at", "?1", "v.")}) < ?2 AND v.departed_at IS NOT NULL AND date(${local("departed_at", "?1", "v.")}) >= ?2))
-     ORDER BY v.arrived_at`,
-  ).bind(offset, date, ...near).all();
+     ORDER BY arrived_at`,
+  ).bind(offset, date, ...near, shiftDate(date, -2)).all();
   const journeys = await env.DB.prepare(
-    `SELECT * FROM journeys WHERE started_at >= ?3 AND started_at < ?4 AND date(${local("started_at", "?1")}) = ?2 ORDER BY started_at`,
+    `SELECT * FROM journeys WHERE local_date = ?2
+     UNION ALL
+     SELECT * FROM journeys WHERE local_date IS NULL AND started_at >= ?3 AND started_at < ?4 AND date(${local("started_at", "?1")}) = ?2
+     ORDER BY started_at`,
   ).bind(offset, date, ...near).all();
   // The day's own offset (where most of it happened), for the app's clock.
   const rows = visits.results as Array<{ id: number; utc_offset: number | null; arrived_at: string }>;
@@ -378,8 +422,8 @@ export function findTrips(days: AwayDay[]) {
 export async function listTrips(env: Env, offset: number) {
   const { results } = await env.DB.prepare(`
     WITH v AS (
-      SELECT v.latitude AS lat, v.longitude AS lng, ${KEY_V} AS key, substr(${local("arrived_at", "?1", "v.")}, 1, 7) AS mo,
-        date(${local("arrived_at", "?1", "v.")}) AS day, COALESCE(n.city, v.city) AS city, COALESCE(n.country, v.country) AS country
+      SELECT v.latitude AS lat, v.longitude AS lng, ${KEY_V} AS key, substr(${dayOf("arrived_at", "?1", "v.")}, 1, 7) AS mo,
+        ${dayOf("arrived_at", "?1", "v.")} AS day, COALESCE(n.city, v.city) AS city, COALESCE(n.country, v.country) AS country
       FROM shown_visits AS v LEFT JOIN place_names AS n ON n.key = ${KEY_V}),
     mk AS (SELECT mo, key, COUNT(*) AS n, AVG(lat) AS lat, AVG(lng) AS lng FROM v GROUP BY mo, key),
     months AS (SELECT DISTINCT mo FROM v),
@@ -440,16 +484,16 @@ export async function chapters(env: Env) {
   const db = env.DB;
   const [rows, visits, fresh, modes, saved] = await Promise.all([
     db.prepare(`
-      WITH v AS (SELECT ${KEY} AS key, latitude AS lat, longitude AS lng, substr(${local("arrived_at", "0")}, 1, 7) AS mo,
+      WITH v AS (SELECT ${KEY} AS key, latitude AS lat, longitude AS lng, substr(${dayOf("arrived_at", "0")}, 1, 7) AS mo,
         MIN(MAX((julianday(departed_at) - julianday(arrived_at)) * 24, 0), 24) AS h
         FROM shown_visits WHERE departed_at IS NOT NULL),
       mk AS (SELECT mo, key, SUM(h) AS hours, COUNT(*) AS n, AVG(lat) AS lat, AVG(lng) AS lng FROM v GROUP BY mo, key),
       r AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY mo ORDER BY hours DESC) AS rk FROM mk)
       SELECT r.mo, r.key, r.hours, r.n, r.lat, r.lng, n.name, n.city, n.country
       FROM r LEFT JOIN place_names AS n ON n.key = r.key WHERE rk <= 12 ORDER BY r.mo, rk`).all(),
-    db.prepare(`SELECT substr(${local("arrived_at", "0")}, 1, 7) AS mo, COUNT(*) AS n FROM shown_visits GROUP BY mo`).all(),
-    db.prepare(`SELECT substr(first, 1, 7) AS mo, COUNT(*) AS n FROM (SELECT ${KEY} AS key, MIN(${local("arrived_at", "0")}) AS first FROM shown_visits GROUP BY key) GROUP BY mo`).all(),
-    db.prepare(`SELECT substr(${local("started_at", "0")}, 1, 7) AS mo, mode, SUM(distance_m) AS m FROM journeys
+    db.prepare(`SELECT substr(${dayOf("arrived_at", "0")}, 1, 7) AS mo, COUNT(*) AS n FROM shown_visits GROUP BY mo`).all(),
+    db.prepare(`SELECT substr(first, 1, 7) AS mo, COUNT(*) AS n FROM (SELECT ${KEY} AS key, MIN(${dayOf("arrived_at", "0")}) AS first FROM shown_visits GROUP BY key) GROUP BY mo`).all(),
+    db.prepare(`SELECT substr(${dayOf("started_at", "0")}, 1, 7) AS mo, mode, SUM(distance_m) AS m FROM journeys
       WHERE distance_m IS NOT NULL AND mode NOT IN ('path', 'unknown') GROUP BY mo, mode`).all(),
     db.prepare("SELECT * FROM saved_places").all(),
   ]);
