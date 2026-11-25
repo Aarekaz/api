@@ -63,7 +63,7 @@ function imageMarkdown(tag: string, base: string): string {
  */
 export function isBoilerplate(line: string): boolean {
   const text = line.replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/^(## |- |> )/, "").replace(/[*_]/g, "").trim();
+    .replace(/^(#{1,6} |- |> )/, "").replace(/[*_]/g, "").trim();
   if (text.length > 200) return false;
   return /\b(subscribe|subscribed|paid subscriber)\b/i.test(text)
     || /^thanks for reading\b/i.test(text)
@@ -85,7 +85,7 @@ export function cleanMarkdown(markdown: string, url?: string): string {
       if (isAvatar(image[2], image[1])) return false;
     } else if (isBoilerplate(block) || isSocialLinks(block)) return false;
     // A heading that is only a link to another page is a "related posts" card, not a section.
-    const linkHeading = block.match(/^## \[[^\]]+\]\(([^)]+)\)$/);
+    const linkHeading = block.match(/^#{1,6} \[[^\]]+\]\(([^)]+)\)$/);
     if (linkHeading && !linkHeading[1].includes("#")) {
       try { if (new URL(linkHeading[1]).pathname.replace(/\/$/, "") !== path) return false; } catch { return false; }
     }
@@ -181,14 +181,14 @@ function metaTags(html: string): Map<string, string> {
  * (keeping a heading or image that leads straight into it).
  */
 export function trimToArticle(lines: string[]) {
-  const isProse = (l: string) => !/^(## |- |> |!\[|```|\| )/.test(l)
+  const isProse = (l: string) => !/^(#{1,6} |- |> |!\[|```|\| )/.test(l)
     && l.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[*_`]/g, "").length >= 100;
   const first = lines.findIndex(isProse);
   if (first < 0) return;
   let last = lines.length - 1;
   while (last > first && !isProse(lines[last]) && !/^(- |\d+\. |> |```|!\[|\| )/.test(lines[last])) last--;
   let start = first;
-  while (start > 0 && start > first - 2 && /^(## |!\[)/.test(lines[start - 1])) start--;
+  while (start > 0 && start > first - 2 && /^(#{1,6} |!\[)/.test(lines[start - 1])) start--;
   lines.splice(last + 1);
   lines.splice(0, start);
 }
@@ -250,14 +250,14 @@ export function extractArticle(html: string, url: string): Article {
         const image = part.match(/^!\[[^\]]*\]\([^)]+\)$/);
         if (image) { lines.push(image[0]); continue; }
         const piece = inline(part, url);
-        if (piece.length >= 2) lines.push(tag[0] === "h" ? `## ${piece}` : tag === "li" ? `${bullet}${piece}` : tag === "blockquote" ? `> ${piece}` : piece);
+        if (piece.length >= 2) lines.push(tag[0] === "h" ? `${headingMarks(tag)} ${piece}` : tag === "li" ? `${bullet}${piece}` : tag === "blockquote" ? `> ${piece}` : piece);
       }
       continue;
     }
     // Code keeps its words as they are; everything else keeps bold, italics and links.
     const text = inline(m[3], url);
     if (text.length < 2) continue;
-    if (tag[0] === "h") lines.push(`## ${text}`);
+    if (tag[0] === "h") lines.push(`${headingMarks(tag)} ${text}`);
     else if (tag === "li") lines.push(`${bullet}${text}`);
     else if (tag === "blockquote") lines.push(`> ${text}`);
     else lines.push(text);
@@ -265,7 +265,7 @@ export function extractArticle(html: string, url: string): Article {
   for (let i = lines.length - 1; i >= 0; i--) if (isBoilerplate(lines[i])) lines.splice(i, 1);
   trimToArticle(lines);
   // Drop a leading heading that only repeats the title.
-  if (title && lines[0]?.replace(/^## /, "").replace(/\*/g, "") === title) lines.shift();
+  if (title && lines[0]?.replace(/^#{1,6} /, "").replace(/\*/g, "") === title) lines.shift();
   // Long reads are long (a 147-minute essay is ~600k characters); documents hold up to 1M.
   const markdown = cleanMarkdown(lines.join("\n\n"), url).slice(0, 950_000);
   const words = markdown.replace(/!\[[^\]]*\]\([^)]+\)/g, "").split(/\s+/).filter(Boolean).length;
@@ -294,4 +294,11 @@ export function cleanTitle(title: string): string {
   const x = title.match(/^(.+?) on (?:X|Twitter): ["“](.+)["”]\s*\/\s*(?:X|Twitter)$/s);
   if (x) return x[2].trim();
   return title.trim();
+}
+
+
+/** The page's own heading level as Markdown marks (h2 → "##"), so the reader keeps the outline's hierarchy. */
+function headingMarks(tag: string): string {
+  const level = Number(tag[1]);
+  return "#".repeat(Number.isInteger(level) && level >= 1 && level <= 6 ? level : 2);
 }
