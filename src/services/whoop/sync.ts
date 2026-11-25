@@ -63,6 +63,8 @@ export interface WhoopSyncDependencies {
 
 export interface EnqueueReconciliationDependencies {
   fullHistory?: boolean;
+  /** How far back a scheduled pass looks; 14 days when not given. */
+  windowMilliseconds?: number;
   repository?: ReconciliationPublisherRepository;
   now?: () => Date;
   expectedConnectionId?: string;
@@ -138,7 +140,7 @@ export async function enqueueReconciliation(
   const windowEnd = now.toISOString();
   const windowStart = dependencies.fullHistory
     ? "1970-01-01T00:00:00.000Z"
-    : new Date(now.getTime() - RECONCILIATION_WINDOW_MILLISECONDS).toISOString();
+    : new Date(now.getTime() - (dependencies.windowMilliseconds ?? RECONCILIATION_WINDOW_MILLISECONDS)).toISOString();
   const reconcileRunId = crypto.randomUUID();
   const reconcileGeneration = dependencies.requireActiveConnection
     ? await repository.beginReconciliation(whoopUserId, connection.connectionId, windowEnd, true)

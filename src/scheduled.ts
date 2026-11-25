@@ -22,6 +22,17 @@ const WHOOP_RESOURCES: readonly WhoopResource[] = [
   "profile", "body_measurement", "cycle", "recovery", "sleep", "workout",
 ];
 const WHOOP_REFRESH_WINDOW_MILLISECONDS = 5 * 60 * 1000;
+const DAY_MILLISECONDS = 24 * 60 * 60 * 1000;
+
+/**
+ * Webhooks keep WHOOP current; the reconcile is only the backstop. It runs on the first
+ * tick of each hour over the last 2 days, and once a night (08 UTC, 3–4 AM in New York)
+ * over 14. A sync from Settings still reconciles at once.
+ */
+export function whoopReconcilePlan(now: Date): { windowMilliseconds: number } | null {
+  if (now.getUTCMinutes() >= 5) return null;
+  return { windowMilliseconds: (now.getUTCHours() === 8 ? 14 : 2) * DAY_MILLISECONDS };
+}
 
 type ScheduledWhoopRepository = Pick<WhoopRepository,
   | "getPendingInitialBackfills"
@@ -130,9 +141,12 @@ async function refreshWhoop(env: Env, dependencies: ScheduledDependencies): Prom
       refreshBeforeExpirationMilliseconds: WHOOP_REFRESH_WINDOW_MILLISECONDS,
     },
   );
+  const plan = whoopReconcilePlan(now());
+  if (!plan) return;
   await publishReconciliation(env, connection.whoopUserId, "scheduled", {
     repository,
     now,
+    windowMilliseconds: plan.windowMilliseconds,
     expectedConnectionId: connection.connectionId,
     requireActiveConnection: true,
   });

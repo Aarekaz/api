@@ -219,7 +219,7 @@ describe("WHOOP health read routes", () => {
     expect(detail?.responses).toHaveProperty("404");
     expect(JSON.stringify(detail)).toContain("uuid");
     expect(document.paths).toHaveProperty("/v1/health");
-    expect(document.paths).toHaveProperty("/v1/health/workouts/{id}");
+    expect(document.paths).not.toHaveProperty("/v1/health/{date}");
     expect(serialized).toContain("energy_kcal_estimate");
     expect(serialized).toContain("hrv_rmssd_milliseconds");
     expect(serialized).toContain("stage_durations_seconds");

@@ -70,7 +70,7 @@ describe("OpenAPI coverage", () => {
     ["get", "/v1/vault/tree"],
     ["post", "/v1/app/signout"],
     ["get", "/v1/music/history"],
-    ["get", "/v1/health/{date}"],
+    ["get", "/v1/health"],
     ["post", "/v1/blog-images/presign"],
   ])("documents %s %s behind bearer auth", (method, path) => {
     const operation = document.paths[path]?.[method];

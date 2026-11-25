@@ -4,6 +4,7 @@ import { handleScheduled, runRefreshJob, type ScheduledDependencies } from "../s
 import { enqueueReconciliation as enqueueCanonicalReconciliation } from "../services/whoop/sync";
 import type { WhoopQueueMessage } from "../types/whoop";
 import { CONNECTION_ID, ENV, NOW } from "./whoop/fixtures";
+import { whoopReconcilePlan } from "../scheduled";
 
 const RESOURCES = ["profile", "body_measurement", "cycle", "recovery", "sleep", "workout"] as const;
 const SCHEDULED_EVENT = {} as ScheduledEvent;
@@ -187,6 +188,7 @@ describe("scheduled refresh health", () => {
       {
         repository,
         now: dependencies.now,
+        windowMilliseconds: 2 * 24 * 60 * 60 * 1000,
         expectedConnectionId: CONNECTION_ID,
         requireActiveConnection: true,
       },
@@ -335,5 +337,15 @@ describe("scheduled refresh health", () => {
     expect(calls.filter(({ bindings }) => bindings[0] === "lanyard")).toHaveLength(2);
     expect(calls.filter(({ bindings }) => bindings[0] === "whoop")).toHaveLength(2);
     error.mockRestore();
+  });
+});
+
+describe("WHOOP reconcile cadence", () => {
+  it("reconciles on the hour over two days, nightly over fourteen, and not between", () => {
+    const day = 24 * 60 * 60 * 1000;
+    expect(whoopReconcilePlan(new Date("2026-08-19T12:00:00.000Z"))).toEqual({ windowMilliseconds: 2 * day });
+    expect(whoopReconcilePlan(new Date("2026-08-19T08:03:00.000Z"))).toEqual({ windowMilliseconds: 14 * day });
+    expect(whoopReconcilePlan(new Date("2026-08-19T12:05:00.000Z"))).toBeNull();
+    expect(whoopReconcilePlan(new Date("2026-08-19T12:35:00.000Z"))).toBeNull();
   });
 });

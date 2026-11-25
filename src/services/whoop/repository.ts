@@ -28,8 +28,8 @@ const REFRESH_WAIT_MILLISECONDS = 100;
 export const WHOOP_OPERATIONAL_RETENTION = {
   oauthStateMilliseconds: 24 * 60 * 60 * 1_000,
   reconcileSeenMilliseconds: 24 * 60 * 60 * 1_000,
-  checkpointMilliseconds: 30 * 24 * 60 * 60 * 1_000,
-  syncRunMilliseconds: 30 * 24 * 60 * 60 * 1_000,
+  checkpointMilliseconds: 3 * 24 * 60 * 60 * 1_000,
+  syncRunMilliseconds: 3 * 24 * 60 * 60 * 1_000,
   processedWebhookMilliseconds: 30 * 24 * 60 * 60 * 1_000,
   abandonedWorkMilliseconds: 24 * 60 * 60 * 1_000,
   deleteLimit: 100,
