@@ -32,7 +32,7 @@ function d1(): D1Database {
   db.exec(readFileSync("migrations/0031_training.sql", "utf8"));
   db.exec(readFileSync("migrations/0032_place_categories.sql", "utf8"));
   db.exec(readFileSync("migrations/0036_links_state.sql", "utf8"));
-  for (const m of ["0039_saved_places", "0040_saved_place_notes", "0041_visit_guess", "0042_utc_offset", "0043_recorded_departure"]) {
+  for (const m of ["0039_saved_places", "0040_saved_place_notes", "0041_visit_guess", "0042_utc_offset", "0043_recorded_departure", "0044_visit_corrections"]) {
     db.exec(readFileSync(`migrations/${m}.sql`, "utf8"));
   }
   db.exec(`CREATE TABLE location_history (id INTEGER PRIMARY KEY AUTOINCREMENT, latitude REAL NOT NULL, longitude REAL NOT NULL,

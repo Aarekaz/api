@@ -11,7 +11,7 @@ function setup() {
   const db = new DatabaseSync(":memory:");
   db.exec(readFileSync("migrations/0007_location.sql", "utf8"));
   db.exec("ALTER TABLE location_history ADD COLUMN updated_at TEXT");
-  for (const m of ["0027_visits", "0028_place_names", "0029_journeys", "0041_visit_guess", "0042_utc_offset", "0043_recorded_departure"]) {
+  for (const m of ["0027_visits", "0028_place_names", "0029_journeys", "0041_visit_guess", "0042_utc_offset", "0043_recorded_departure", "0044_visit_corrections"]) {
     db.exec(readFileSync(`migrations/${m}.sql`, "utf8"));
   }
   const statement = (sql: string, args: unknown[] = []) => ({
@@ -30,8 +30,10 @@ function setup() {
   const root = new Hono<{ Bindings: Env }>();
   root.route("/v1/visits", visitsRoute);
   const get = (path: string) => root.request(path, {}, { DB } as Env);
+  const send = (path: string, method: string, body: unknown) =>
+    root.request(path, { method, body: JSON.stringify(body), headers: { "Content-Type": "application/json" } }, { DB } as Env);
   const post = (visits: unknown[]) => root.request("/v1/visits", { method: "POST", body: JSON.stringify({ visits }), headers: { "Content-Type": "application/json" } }, { DB } as Env);
-  return { db, post, get };
+  return { db, post, get, send };
 }
 
 const stop = (departed: string | null) => ({
@@ -83,5 +85,21 @@ describe("local days", () => {
     await post([{ ...kathmandu, utc_offset: undefined, source_key: "k2" }]);
     const days = await (await get("/v1/visits/days?year=2022&offset=-240")).json() as { days: Array<{ day: string }> };
     expect(days.days.map((d) => d.day)).toEqual(["2022-06-09"]);
+  });
+});
+
+describe("corrections", () => {
+  it("hides a visit from every view but keeps the row; moves one keeping its old spot", async () => {
+    const { db, post, get, send } = setup();
+    await post([stop("2026-11-24T16:37:32Z"), { ...stop("2026-11-24T18:00:00Z"), source_key: "b", arrived_at: "2026-11-24T17:00:00Z" }]);
+    const day = async () => (await (await get("/v1/visits/day?date=2026-11-24&offset=-300")).json() as { visits: Array<{ id: number }> }).visits;
+    const [first, second] = await day();
+    expect((await send(`/v1/visits/${first.id}`, "PATCH", { hidden: true, note: "Not a stop" })).status).toBe(200);
+    expect((await day()).map((v) => v.id)).toEqual([second.id]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM visits").get()).toEqual({ n: 2 });
+    const moved = await (await send(`/v1/visits/${second.id}`, "PATCH", { move_to: { latitude: 38.8042, longitude: -77.0473 } })).json() as Record<string, number>;
+    expect(moved.latitude).toBe(38.8042);
+    expect(moved.guess_latitude).toBe(38.806);
+    expect((await send(`/v1/visits/${second.id}`, "PATCH", {})).status).toBe(400);
   });
 });
