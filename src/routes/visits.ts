@@ -48,6 +48,7 @@ const visitSchema = z.object({
   source: z.string(),
   source_key: z.string(),
   utc_offset: z.number().int().nullable().openapi({ description: "Minutes from UTC where it happened (Kathmandu 345); null if unknown" }),
+  local_date: z.string().nullable().optional().openapi({ format: "date", description: "Local date it began where it happened (its utc_offset, else New York); null on rows from before it was kept, until the backfill" }),
   note: z.string().nullable().optional().openapi({ description: "Your note on this visit" }),
   created_at: z.string(),
 });
@@ -81,6 +82,7 @@ const journeySchema = z.object({
   source: z.string(),
   source_key: z.string(),
   utc_offset: z.number().int().nullable().openapi({ description: "Minutes from UTC where it happened (Kathmandu 345); null if unknown" }),
+  local_date: z.string().nullable().optional().openapi({ format: "date", description: "Local date it began where it happened (its utc_offset, else New York); null on rows from before it was kept, until the backfill" }),
   created_at: z.string(),
 });
 
@@ -474,7 +476,7 @@ openApiRegistry.registerPath({
 // default; only a visit stored with a future arrival could appear without a
 // write, which the phone and the imports don't send.)
 
-const SHAPE = 1; // bump when a reply's shape changes without a data change
+const SHAPE = 2; // bump when a reply's shape changes without a data change
 app.use("*", async (c, next) => {
   if (c.req.method !== "GET" && c.req.method !== "HEAD") return next();
   const url = new URL(c.req.url);

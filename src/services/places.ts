@@ -28,8 +28,26 @@ const offsetIn = (v: unknown) => {
 export type CleanVisit = {
   latitude: number; longitude: number; arrived_at: string; departed_at: string | null; place: string | null;
   address: string | null; city: string | null; country: string | null; source: string; source_key: string;
-  utc_offset: number | null;
+  utc_offset: number | null; local_date: string;
 };
+
+/**
+ * Where none is known, a row's time zone is New York's (where the owner lives),
+ * with its summer time; scripts/backfill-local-date.mjs uses the same.
+ */
+export const HOME_TIME_ZONE = "America/New_York";
+const homeDate = new Intl.DateTimeFormat("en-US", { timeZone: HOME_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" });
+
+/**
+ * The local date (YYYY-MM-DD) of a UTC instant where it happened: shifted by
+ * the row's own utc_offset (minutes), or in HOME_TIME_ZONE when it has none.
+ */
+export function localDate(at: string, utcOffset: number | null): string {
+  const ms = Date.parse(at);
+  if (utcOffset !== null) return new Date(ms + utcOffset * 60_000).toISOString().slice(0, 10);
+  const part = (type: string) => homeDate.formatToParts(new Date(ms)).find((p) => p.type === type)!.value;
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
 
 export function cleanVisit(v: VisitInput): CleanVisit | null {
   const lat = Number(v.latitude), lng = Number(v.longitude);
@@ -43,9 +61,10 @@ export function cleanVisit(v: VisitInput): CleanVisit | null {
   if (departed && departed < arrived) return null;
   // Without a key, a visit is identified by its source, arrival and rough position.
   const key = str(v.source_key, 200) ?? `${source}:${arrived}:${lat.toFixed(3)},${lng.toFixed(3)}`;
+  const utcOffset = offsetIn(v.utc_offset);
   return { latitude: lat, longitude: lng, arrived_at: arrived, departed_at: departed, place: str(v.place),
     address: str(v.address), city: str(v.city, 120), country: str(v.country, 120), source, source_key: key,
-    utc_offset: offsetIn(v.utc_offset) };
+    utc_offset: utcOffset, local_date: localDate(arrived, utcOffset) };
 }
 
 export interface JourneyInput {
@@ -64,11 +83,13 @@ export function cleanJourney(j: JourneyInput) {
         .slice(0, 2000).map((p) => p.slice(0, 3).map(Number))
     : null;
   const mode = str(j.mode, 40)?.toLowerCase() ?? null;
+  const utcOffset = offsetIn(j.utc_offset);
   return {
     started_at: started, ended_at: isDate(j.ended_at) ? new Date(j.ended_at as string).toISOString() : null,
     start_lat: num(j.start_lat), start_lng: num(j.start_lng), end_lat: num(j.end_lat), end_lng: num(j.end_lng),
     distance_m: num(j.distance_m), mode, points_json: points && points.length ? JSON.stringify(points) : null,
-    source, source_key: str(j.source_key, 200) ?? `${source}:${started}:${mode ?? ""}`, utc_offset: offsetIn(j.utc_offset),
+    source, source_key: str(j.source_key, 200) ?? `${source}:${started}:${mode ?? ""}`, utc_offset: utcOffset,
+    local_date: localDate(started, utcOffset),
   };
 }
 export type CleanJourney = NonNullable<ReturnType<typeof cleanJourney>>;
@@ -158,11 +179,15 @@ export async function addVisits(env: Env, visits: CleanVisit[], now = new Date()
   const added = await inBatches(env, visits.map((v) => env.DB.prepare(
     // A repeat is ignored, except that a stop sent first on arrival gets its
     // departure filled in when the phone sends it again on leaving.
-    `INSERT INTO visits (latitude, longitude, arrived_at, departed_at, place, address, city, country, source, source_key, created_at, utc_offset)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(source_key) DO UPDATE SET departed_at = excluded.departed_at, utc_offset = COALESCE(visits.utc_offset, excluded.utc_offset)
+    // The local date follows the offset: a stop first sent without one moves to
+    // the day where it happened once the offset arrives.
+    `INSERT INTO visits (latitude, longitude, arrived_at, departed_at, place, address, city, country, source, source_key, created_at, utc_offset, local_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_key) DO UPDATE SET departed_at = excluded.departed_at, utc_offset = COALESCE(visits.utc_offset, excluded.utc_offset),
+       local_date = CASE WHEN visits.utc_offset IS NULL AND excluded.utc_offset IS NOT NULL THEN excluded.local_date
+                         ELSE COALESCE(visits.local_date, excluded.local_date) END
      WHERE visits.departed_at IS NULL AND excluded.departed_at IS NOT NULL AND excluded.departed_at > visits.arrived_at`,
-  ).bind(v.latitude, v.longitude, v.arrived_at, v.departed_at, v.place, v.address, v.city, v.country, v.source, v.source_key, stamp, v.utc_offset)));
+  ).bind(v.latitude, v.longitude, v.arrived_at, v.departed_at, v.place, v.address, v.city, v.country, v.source, v.source_key, stamp, v.utc_offset, v.local_date)));
   if (added > 0) {
     await placesChanged(env);
     // A live visit from the phone also becomes "where I am now" for Today.
@@ -499,9 +524,9 @@ export async function listJourneys(env: Env, q: { start: string; end: string; li
 export async function addJourneys(env: Env, journeys: CleanJourney[], now = new Date()) {
   const stamp = now.toISOString();
   const added = await inBatches(env, journeys.map((j) => env.DB.prepare(
-    `INSERT OR IGNORE INTO journeys (started_at, ended_at, start_lat, start_lng, end_lat, end_lng, distance_m, mode, points_json, source, source_key, created_at, utc_offset)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).bind(j.started_at, j.ended_at, j.start_lat, j.start_lng, j.end_lat, j.end_lng, j.distance_m, j.mode, j.points_json, j.source, j.source_key, stamp, j.utc_offset)));
+    `INSERT OR IGNORE INTO journeys (started_at, ended_at, start_lat, start_lng, end_lat, end_lng, distance_m, mode, points_json, source, source_key, created_at, utc_offset, local_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(j.started_at, j.ended_at, j.start_lat, j.start_lng, j.end_lat, j.end_lng, j.distance_m, j.mode, j.points_json, j.source, j.source_key, stamp, j.utc_offset, j.local_date)));
   if (added > 0) await placesChanged(env);
   return added;
 }

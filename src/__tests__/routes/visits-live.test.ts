@@ -7,7 +7,7 @@ import visitsRoute from "../../routes/visits";
 function setup(options: { versions?: boolean } = {}) {
   const { db, DB } = testD1({
     migrations: ["0007_location", "0027_visits", "0028_place_names", "0029_journeys", "0032_place_categories", "0039_saved_places", "0040_saved_place_notes",
-      "0041_visit_guess", "0042_utc_offset", "0043_recorded_departure", "0044_visit_corrections", "0046_data_versions"],
+      "0041_visit_guess", "0042_utc_offset", "0043_recorded_departure", "0044_visit_corrections", "0046_data_versions", "0048_local_date"],
     sql: "ALTER TABLE location_history ADD COLUMN updated_at TEXT",
   });
   if (options.versions === false) db.exec("DROP TABLE data_versions");
@@ -229,5 +229,54 @@ describe("pages and errors", () => {
     const missing = await send("/v1/visits/999", "PATCH", { note: "x" });
     expect(missing.status).toBe(404);
     expect(await missing.json()).toEqual({ error: { code: "not_found", message: "Not found" } });
+  });
+});
+
+describe("local_date at ingest", () => {
+  const at = (arrived_at: string, extra: Record<string, unknown> = {}) => ({
+    latitude: 40.7, longitude: -74, arrived_at, departed_at: null, source: "visit", source_key: `visit:${arrived_at}`, ...extra,
+  });
+  const dates = (db: ReturnType<typeof setup>["db"], table: string) =>
+    (db.prepare(`SELECT local_date FROM ${table} ORDER BY id`).all() as Array<{ local_date: string | null }>).map((r) => r.local_date);
+
+  it("is the date where it happened: the row's own offset", async () => {
+    const { db, post, get } = setup();
+    // Kathmandu (+5:45): 03:07 UTC on the 10th is 8:52 am, 23:30 UTC on the 9th is 5:15 am on the 10th.
+    // At -4:00, 02:00 UTC on the 10th is 10 pm on the 9th.
+    await post([at("2022-06-10T03:07:55Z", { utc_offset: 345 }), at("2022-06-09T23:30:00Z", { utc_offset: 345 }), at("2022-06-10T02:00:00Z", { utc_offset: -240 })]);
+    expect(dates(db, "visits")).toEqual(["2022-06-10", "2022-06-10", "2022-06-09"]);
+    // Shown in replies (visits are read through the shown_visits view, which picks the column up).
+    const page = await (await get("/v1/visits?start=2022-06-01T00:00:00Z&end=2022-07-01T00:00:00Z")).json() as { items: Array<{ local_date: string }> };
+    expect(page.items.map((v) => v.local_date).sort()).toEqual(["2022-06-09", "2022-06-10", "2022-06-10"]);
+  });
+
+  it("without an offset, New York's date, summer time included", async () => {
+    const { db, post } = setup();
+    await post([
+      at("2026-11-25T03:00:00Z"),   // 10 pm EST on the 24th
+      at("2026-11-25T05:30:00Z"),   // 12:30 am EST on the 25th
+      at("2026-07-01T03:30:00Z"),   // 11:30 pm EDT on 30 June
+      at("2026-07-01T04:30:00Z"),   // 12:30 am EDT on 1 July (EST would still say 30 June)
+    ]);
+    expect(dates(db, "visits")).toEqual(["2026-11-24", "2026-11-25", "2026-06-30", "2026-07-01"]);
+  });
+
+  it("moves to where it happened when a repeat brings the offset", async () => {
+    const { db, post } = setup();
+    await post([at("2026-11-25T03:00:00Z")]);
+    expect(dates(db, "visits")).toEqual(["2026-11-24"]);
+    await post([at("2026-11-25T03:00:00Z", { departed_at: "2026-11-25T04:00:00Z", utc_offset: 345 })]);
+    expect(dates(db, "visits")).toEqual(["2026-11-25"]);
+  });
+
+  it("is written for journeys from when they started", async () => {
+    const { db, send, get } = setup();
+    await send("/v1/visits/journeys", "POST", { journeys: [
+      { started_at: "2026-11-25T03:00:00Z", mode: "walking", source: "phone", source_key: "j1" },
+      { started_at: "2026-11-25T03:00:00Z", mode: "flying", source: "phone", source_key: "j2", utc_offset: 345 },
+    ] });
+    expect(dates(db, "journeys")).toEqual(["2026-11-24", "2026-11-25"]);
+    const page = await (await get("/v1/visits/journeys?start=2026-11-01&end=2026-12-01")).json() as { items: Array<{ local_date: string }> };
+    expect(page.items.map((j) => j.local_date)).toEqual(["2026-11-24", "2026-11-25"]);
   });
 });
