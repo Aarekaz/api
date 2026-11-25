@@ -4,6 +4,8 @@ export interface Env {
   /** Private bucket (no public domain): journal photos. */
   R2_PRIVATE?: R2Bucket;
   API_TOKEN: string;
+  /** Optional read-only token for the website: GETs of the routes it reads only (lib/site-reads.ts). */
+  SITE_TOKEN?: string;
   WHOOP_CLIENT_ID: string;
   WHOOP_CLIENT_SECRET: string;
   WHOOP_TOKEN_ENCRYPTION_KEY: string;

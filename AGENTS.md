@@ -125,6 +125,9 @@ journal, sections, recipes, training, music history) use `src/lib/http.ts`:
   (raise it only after `wrangler dev` starts and a local smoke test passes).
 - Secrets are set with `wrangler secret put` (`API_TOKEN`, WakaTime, GitHub,
   Spotify, WHOOP, analytics). Never commit them; `.dev.vars` is local only.
+- `SITE_TOKEN` (optional): the website's read-only token, GET/HEAD of the
+  routes in `lib/site-reads.ts` only (`docs/adr/0004-site-token.md`). A route
+  the website starts reading goes there too.
 - `/health` requires auth and returns `API_VERSION`.
 
 ## Commits and PRs

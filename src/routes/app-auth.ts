@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
+import { sameSecret } from "../middleware/auth";
 import { authSecurity, errorSchema, okResponses, okSchema, openApiRegistry, openApiResponse } from "../schemas/openapi";
 import {
   appAuthConfigured,
@@ -45,7 +46,7 @@ app.get("/github/callback", async (c) => {
 export const signOutRoute = new Hono<{ Bindings: Env }>();
 signOutRoute.post("/", async (c) => {
   const token = c.req.header("authorization")?.split(" ")[1];
-  if (token && token !== c.env.API_TOKEN) await revokeSession(c.env, token);
+  if (token && !(await sameSecret(token, c.env.API_TOKEN))) await revokeSession(c.env, token);
   return c.json({ ok: true });
 });
 

@@ -1,6 +1,8 @@
 import { Context, Next } from "hono";
 import type { Env } from "../types/env";
 import { isValidSession } from "../services/app-auth";
+import { fail } from "../lib/http";
+import { isSitePath, isSiteRead } from "../lib/site-reads";
 
 // Paths that use their own token validation (e.g. presigned upload), plus the
 // public crowd endpoint, which the living-world site calls anonymously.
@@ -31,19 +33,32 @@ export async function requireAuth(c: Context<{ Bindings: Env }>, next: Next) {
   if (scheme !== "Bearer" || !token) {
     return c.json({ error: "Invalid token" }, 403);
   }
-  // The owner's API token, or a device session from Sign in with GitHub in the apps.
-  if (!sameSecret(token, env.API_TOKEN) && !(await isValidSession(env, token))) {
-    return c.json({ error: "Invalid token" }, 403);
+  // Both comparisons always run, so the time taken doesn't say which token it was.
+  const [owner, site] = await Promise.all([sameSecret(token, env.API_TOKEN), sameSecret(token, env.SITE_TOKEN)]);
+  // The owner's API token: everything.
+  if (owner) return next();
+  // The website's token (optional): only the GETs the website makes.
+  if (site) {
+    if (isSiteRead(c.req.method, c.req.path)) return next();
+    const message = "This token can only read the website's data";
+    // Website routes keep their old error body; every other route has the one shape (lib/http.ts).
+    return isSitePath(c.req.path) ? c.json({ error: message }, 403) : fail(c, 403, message, { code: "forbidden" });
   }
-
-  await next();
+  // A device session from Sign in with GitHub in the apps.
+  if (await isValidSession(env, token)) return next();
+  return c.json({ error: "Invalid token" }, 403);
 }
 
-/** Compares in constant time, so how long a wrong token takes says nothing about the right one. */
-export function sameSecret(given: string, expected: string | undefined): boolean {
+/**
+ * Compares in constant time, so how long a wrong token takes says nothing
+ * about the right one. Both sides are hashed first, so not even the length
+ * shows.
+ */
+export async function sameSecret(given: string, expected: string | undefined): Promise<boolean> {
   if (!expected) return false;
-  const a = new TextEncoder().encode(given), b = new TextEncoder().encode(expected);
-  let diff = a.length ^ b.length;
-  for (let i = 0; i < b.length; i++) diff |= (a[i] ?? 0) ^ b[i];
+  const digest = async (text: string) => new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+  const [a, b] = await Promise.all([digest(given), digest(expected)]);
+  let diff = 0;
+  for (let i = 0; i < b.length; i++) diff |= a[i] ^ b[i];
   return diff === 0;
 }
