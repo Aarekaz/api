@@ -11,7 +11,7 @@ function setup() {
   const db = new DatabaseSync(":memory:");
   db.exec(readFileSync("migrations/0007_location.sql", "utf8"));
   db.exec("ALTER TABLE location_history ADD COLUMN updated_at TEXT");
-  for (const m of ["0027_visits", "0028_place_names", "0029_journeys", "0041_visit_guess", "0042_utc_offset"]) {
+  for (const m of ["0027_visits", "0028_place_names", "0029_journeys", "0041_visit_guess", "0042_utc_offset", "0043_recorded_departure"]) {
     db.exec(readFileSync(`migrations/${m}.sql`, "utf8"));
   }
   const statement = (sql: string, args: unknown[] = []) => ({
