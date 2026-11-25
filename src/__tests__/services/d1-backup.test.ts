@@ -99,7 +99,41 @@ function setup(options: { minPart?: number; bigRows?: number } = {}) {
   return { db, env, r2 };
 }
 
-const small: BackupOptions = { partBytes: 4096, tickRawBytes: 20_000, firstPageRows: 25, maxPageRows: 60, pageBytes: 8_000 };
+const small: BackupOptions = { partBytes: 4096, tickRawBytes: 20_000, firstPageRows: 25, maxPageRows: 60, pageBytes: 8_000, pauseMs: 0 };
+
+/** A clock that only moves when a tick pauses (or a test moves it), and the pauses it saw. */
+function fakeClock(start = "2026-11-25T10:00:00Z") {
+  let t = Date.parse(start);
+  const pauses: number[] = [];
+  return {
+    pauses,
+    now: () => new Date(t),
+    sleep: async (ms: number) => { pauses.push(ms); t += ms; },
+    advance: (ms: number) => { t += ms; },
+  };
+}
+
+/** The LIMIT of every page a backup reads from a table, in order. */
+function spyPages(env: Env) {
+  const limits: number[] = [];
+  const DB = new Proxy(env.DB, {
+    get(target, key) {
+      if (key !== "prepare") return Reflect.get(target, key);
+      return (sql: string) => {
+        const statement = target.prepare(sql);
+        if (!sql.includes("__backup_rowid")) return statement;
+        return new Proxy(statement, {
+          get(s, k) {
+            if (k === "bind") return (...args: unknown[]) => { limits.push(Number(args.at(-1))); return s.bind(...args); };
+            const value = Reflect.get(s, k);
+            return typeof value === "function" ? value.bind(s) : value;
+          },
+        });
+      };
+    },
+  });
+  return { env: { ...env, DB } as Env, limits };
+}
 
 async function runToEnd(env: Env, options: BackupOptions, max = 200) {
   for (let i = 1; i <= max; i++) {
@@ -223,6 +257,49 @@ describe("a backup run", () => {
     expect((await backupStatus(other.env))?.status).toBe("failed");
   });
 
+  it("a tick stops at its time budget, pausing between reads, and the next one carries on", async () => {
+    const { db, env, r2 } = setup({ bigRows: 400 });
+    await startBackup(env, "manual", new Date("2026-11-25T10:00:00Z"));
+    const clock = fakeClock();
+    // Plenty of bytes: only the clock (moved by the pauses) can end the tick.
+    const timed: BackupOptions = { ...small, tickRawBytes: 10_000_000, tickMs: 1_000, pauseMs: 100, now: clock.now, sleep: clock.sleep };
+    await backupTick(env, timed);
+    expect(clock.pauses.length).toBeGreaterThan(3);
+    expect(clock.pauses.every((ms) => ms === 100)).toBe(true);
+    // At most one pause past the budget: ~1 s of pauses means ~10 of them.
+    expect(clock.pauses.length).toBeLessThanOrEqual(11);
+    expect((await backupStatus(env))?.status).toBe("running");
+
+    clock.advance(5 * 60_000);
+    for (let i = 0; i < 200 && (await backupStatus(env))?.status === "running"; i++) {
+      await backupTick(env, timed);
+      clock.advance(5 * 60_000);
+    }
+    expect((await backupStatus(env))?.status).toBe("done");
+    const lines = r2.text("backups/2026-11-25/location_history.ndjson.gz").trim().split("\n").map((l) => JSON.parse(l));
+    const ids = (db.prepare("SELECT id FROM location_history ORDER BY id").all() as Array<{ id: number }>).map((r) => r.id);
+    expect(lines.map((l) => l.id)).toEqual(ids);
+  });
+
+  it("by default reads small pages and about 4 MiB a tick", async () => {
+    // ~1,300 bytes a row: 4 MiB is ~3,200 rows, so 5,000 rows can't go in one tick.
+    const { db, env } = setup({ bigRows: 0 });
+    const insert = db.prepare("INSERT INTO location_history (latitude, longitude, recorded_at, label, source, created_at) VALUES (40, -74, '2026-01-01T00:00:00Z', ?, 'test', '2026-01-01')");
+    for (let i = 0; i < 5_000; i++) insert.run(noise(1_200));
+    await startBackup(env, "manual", new Date("2026-11-25T10:00:00Z"));
+    const clock = fakeClock();
+    const spy = spyPages(env);
+    await backupTick(spy.env, { partBytes: 4096, now: clock.now, sleep: clock.sleep });
+    const table = db.prepare("SELECT status, rows, raw_bytes FROM backup_tables WHERE name = 'location_history'").get() as { status: string; rows: number; raw_bytes: number };
+    expect(table.status).toBe("writing");
+    expect(table.raw_bytes).toBeGreaterThan(3 * 1024 * 1024);
+    expect(table.raw_bytes).toBeLessThan(4 * 1024 * 1024 + 256 * 1024 + 2_000); // the budget and at most one more page
+    expect(Math.max(...spy.limits)).toBeLessThanOrEqual(250);
+    // Each read after the first in the tick waited 100 ms.
+    expect(clock.pauses.length).toBe(spy.limits.length - 1);
+    expect(clock.pauses.every((ms) => ms === 100)).toBe(true);
+  });
+
   it("a tick does nothing while another holds the run", async () => {
     const { db, env } = setup({ bigRows: 5 });
     await startBackup(env, "manual", new Date("2026-11-25T10:00:00Z"));
@@ -233,19 +310,21 @@ describe("a backup run", () => {
 });
 
 describe("the monthly trigger", () => {
-  it("starts on the 1st (UTC), once, and carries on through the next days", async () => {
+  it("starts on the 1st from 08:00 UTC, once, and carries on through the next days", async () => {
     const { db, env, r2 } = setup({ bigRows: 300 });
     const runs = () => db.prepare("SELECT id, status, trigger FROM backup_runs").all();
 
     await maybeRunD1Backup(env, new Date("2026-11-30T23:55:00Z"), small);
+    await maybeRunD1Backup(env, new Date("2026-12-01T00:00:00Z"), small);
+    await maybeRunD1Backup(env, new Date("2026-12-01T07:55:00Z"), small);
     expect(runs()).toEqual([]);
 
-    await maybeRunD1Backup(env, new Date("2026-12-01T00:00:00Z"), small);
+    await maybeRunD1Backup(env, new Date("2026-12-01T08:00:00Z"), small);
     expect(runs()).toEqual([{ id: "2026-12-01", status: "running", trigger: "cron" }]);
 
     // Later ticks keep going (even past the 1st) and never start a second run.
     for (let i = 0; i < 200 && (runs()[0] as { status: string }).status === "running"; i++) {
-      await maybeRunD1Backup(env, new Date(i < 50 ? "2026-12-01T04:00:00Z" : "2026-12-02T00:00:00Z"), small);
+      await maybeRunD1Backup(env, new Date(i < 50 ? "2026-12-01T09:00:00Z" : "2026-12-02T00:00:00Z"), small);
     }
     await maybeRunD1Backup(env, new Date("2026-12-01T23:55:00Z"), small);
     expect(runs()).toEqual([{ id: "2026-12-01", status: "done", trigger: "cron" }]);
@@ -254,12 +333,20 @@ describe("the monthly trigger", () => {
     expect([...r2.objects.keys()].every((k) => k.startsWith("backups/2026-12-01/"))).toBe(true);
 
     await maybeRunD1Backup(env, new Date("2027-01-01T00:00:00Z"), small);
+    expect(runs()).toHaveLength(1);
+    await maybeRunD1Backup(env, new Date("2027-01-01T08:00:00Z"), small);
     expect(runs()).toHaveLength(2);
+  });
+
+  it("starts later on the 1st when the 08:00 tick was missed", async () => {
+    const { db, env } = setup({ bigRows: 5 });
+    await maybeRunD1Backup(env, new Date("2026-12-01T13:35:00Z"), small);
+    expect(db.prepare("SELECT id, trigger FROM backup_runs").all()).toEqual([{ id: "2026-12-01", trigger: "cron" }]);
   });
 
   it("does nothing without the private bucket", async () => {
     const { db, env } = setup({ bigRows: 1 });
-    await maybeRunD1Backup({ ...env, R2_PRIVATE: undefined } as Env, new Date("2026-12-01T00:00:00Z"), small);
+    await maybeRunD1Backup({ ...env, R2_PRIVATE: undefined } as Env, new Date("2026-12-01T08:00:00Z"), small);
     expect(db.prepare("SELECT COUNT(*) AS n FROM backup_runs").get()).toEqual({ n: 0 });
   });
 });

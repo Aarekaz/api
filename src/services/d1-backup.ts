@@ -3,12 +3,14 @@ import { dateOnly } from "../utils/date";
 
 /**
  * The monthly D1 backup, to the private bucket only (R2_PRIVATE; never the
- * public media bucket). On the 1st of each month (UTC) a run copies every table
- * to `backups/YYYY-MM-DD/<table>.ndjson.gz` (one JSON object per row, gzip) and
- * finishes with `manifest.json`. It works a few seconds at a time from the
- * five-minute cron and picks up where it left off (migrations/0047), so no tick
- * runs long. Old backups are never deleted: this file never calls delete on a
- * bucket.
+ * public media bucket). On the 1st of each month, from 08:00 UTC (3–4 AM in New
+ * York), a run copies every table to `backups/YYYY-MM-DD/<table>.ndjson.gz` (one
+ * JSON object per row, gzip) and finishes with `manifest.json`. It works about
+ * two seconds at a time from the five-minute cron and picks up where it left off
+ * (migrations/0047). D1 runs one query at a time per database and resets it when
+ * the work gets heavy, so a tick reads small pages with a short pause between
+ * them, leaving room for everyone else's queries. Old backups are never deleted:
+ * this file never calls delete on a bucket.
  *
  * A tick reads rows in rowid order (keyset paging, so a big table like
  * location_history costs the same per page at the end as at the start), and
@@ -27,7 +29,7 @@ export interface BackupOptions {
   now?: () => Date;
   /** Bytes per multipart part (R2: at least 5 MiB). */
   partBytes?: number;
-  /** How long one tick works before stopping. */
+  /** How long one tick works before stopping, pauses included. */
   tickMs?: number;
   /** Raw (uncompressed) bytes one tick reads before stopping. */
   tickRawBytes?: number;
@@ -37,16 +39,27 @@ export interface BackupOptions {
   maxPageRows?: number;
   /** Raw bytes a page aims for, once a table's row size is known. */
   pageBytes?: number;
+  /** The pause between two reads in a tick. */
+  pauseMs?: number;
+  /** How a pause waits (tests skip it). */
+  sleep?: (ms: number) => Promise<void>;
 }
 
+// About 4 MiB of rows a tick in ~16 pages of at most 256 KiB, each a few
+// milliseconds of D1 time, so a 110 MB database takes a few hours of ticks.
 const DEFAULTS = {
   partBytes: BACKUP_PART_BYTES,
-  tickMs: 10_000,
-  tickRawBytes: 24 * 1024 * 1024,
-  firstPageRows: 100,
-  maxPageRows: 1000,
-  pageBytes: 2 * 1024 * 1024,
+  tickMs: 2_000,
+  tickRawBytes: 4 * 1024 * 1024,
+  firstPageRows: 50,
+  maxPageRows: 250,
+  pageBytes: 256 * 1024,
+  pauseMs: 100,
+  sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
 };
+
+/** The hour (UTC) on the 1st from which the cron starts the month's run. */
+export const BACKUP_START_HOUR_UTC = 8;
 
 export class BackupError extends Error {
   constructor(readonly status: 409 | 503, message: string, readonly code: string) {
@@ -91,8 +104,8 @@ export function planTables(master: MasterRow[]) {
   return { tables, skipped, schema: own.filter((m) => m.sql).map(({ type, name, tbl_name, sql }) => ({ type, name, tbl_name, sql })) };
 }
 
-/** The 1st of the month (UTC) starts a run. */
-export const isBackupDay = (now: Date) => now.getUTCDate() === 1;
+/** The 1st of the month from 08:00 UTC starts a run; a later tick that day still can, if that one failed. */
+export const isBackupStart = (now: Date) => now.getUTCDate() === 1 && now.getUTCHours() >= BACKUP_START_HOUR_UTC;
 
 // MARK: Starting and reading a run
 
@@ -156,7 +169,7 @@ export async function backupTick(env: Env, options: BackupOptions = {}) {
   if (!claim.meta.changes) return backupStatus(env);
 
   try {
-    const budget = { until: start.getTime() + o.tickMs, raw: o.tickRawBytes };
+    const budget: Budget = { until: start.getTime() + o.tickMs, raw: o.tickRawBytes, reads: 0 };
     const spent = () => now().getTime() >= budget.until || budget.raw <= 0;
     const { results: tables } = await env.DB.prepare(
       "SELECT * FROM backup_tables WHERE run_id = ? AND status != 'done' ORDER BY position",
@@ -189,11 +202,11 @@ export async function backupTick(env: Env, options: BackupOptions = {}) {
   return backupStatus(env);
 }
 
-/** The cron's part: start this month's run on the 1st, then move whichever run is going on. */
+/** The cron's part: start this month's run on the 1st (from 08:00 UTC), then move whichever run is going on. */
 export async function maybeRunD1Backup(env: Env, now = new Date(), options: BackupOptions = {}) {
   if (!env.R2_PRIVATE) return;
   try {
-    if (isBackupDay(now)) {
+    if (isBackupStart(now)) {
       const today = await env.DB.prepare("SELECT 1 FROM backup_runs WHERE id = ?").bind(dateOnly(now)).first();
       if (!today) await startBackup(env, "cron", now).catch((error) => {
         if (!(error instanceof BackupError)) throw error; // another run still going: try again next tick
@@ -210,6 +223,13 @@ export async function maybeRunD1Backup(env: Env, now = new Date(), options: Back
 const quoted = (name: string) => `"${name.replace(/"/g, '""')}"`;
 const encoder = new TextEncoder();
 
+type Budget = { until: number; raw: number; reads: number };
+
+/** Every read in a tick but the first waits a moment, so other queries get D1 in between. */
+async function breathe(budget: Budget, o: typeof DEFAULTS) {
+  if (budget.reads++ > 0 && o.pauseMs > 0) await o.sleep(o.pauseMs);
+}
+
 /**
  * Copies the next rows of one table, as many as the budget allows, and saves
  * where it got to. Returns true when the table is done. Parts go up before the
@@ -219,7 +239,7 @@ const encoder = new TextEncoder();
  */
 async function copySome(
   env: Env, bucket: R2Bucket, run: RunRow, t: TableRow,
-  budget: { raw: number }, spent: () => boolean, o: typeof DEFAULTS,
+  budget: Budget, spent: () => boolean, o: typeof DEFAULTS,
 ): Promise<boolean> {
   const gzip = new CompressionStream("gzip");
   const compressed = new Response(gzip.readable).arrayBuffer();
@@ -230,6 +250,9 @@ async function copySome(
   const avg = t.rows > 0 ? t.raw_bytes / t.rows : 0;
   let limit = avg ? pageLimit(avg, o) : o.firstPageRows;
   while (!done) {
+    if (rows > 0 && spent()) break;
+    await breathe(budget, o);
+    // The pause can use up the time left; a table that read nothing yet still reads its page.
     if (rows > 0 && spent()) break;
     let page: Array<Record<string, unknown>>;
     if (t.without_rowid) {
