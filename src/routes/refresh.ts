@@ -29,6 +29,7 @@ app.post("/", async (c) => {
   const today = dateOnly(new Date());
   const lastWeek = dateOnly(addDays(new Date(`${today}T00:00:00Z`), -6));
   const lastMonth = dateOnly(addDays(new Date(`${today}T00:00:00Z`), -29));
+  const lastSixty = dateOnly(addDays(new Date(`${today}T00:00:00Z`), -59));
 
   // Refresh status
   if (c.env.LANYARD_USER_ID) {
@@ -53,9 +54,12 @@ app.post("/", async (c) => {
   // Refresh WakaTime
   if (c.env.WAKATIME_ACCESS_TOKEN || c.env.WAKATIME_API_KEY) {
     try {
-      await refreshWakaTime(c.env, lastWeek, today);
+      // ?wakatime_start=YYYY-MM-DD backfills a gap (up to 60 days back); else the last week.
+      const asked = c.req.query("wakatime_start");
+      const start = asked && /^\d{4}-\d{2}-\d{2}$/.test(asked) && asked >= lastSixty && asked < lastWeek ? asked : lastWeek;
+      await refreshWakaTime(c.env, start, today);
       await markRefreshed(c.env, "wakatime_daily");
-      results.wakatime = { ok: true, start: lastWeek, end: today };
+      results.wakatime = { ok: true, start, end: today };
     } catch (error) {
       results.wakatime = {
         ok: false,
