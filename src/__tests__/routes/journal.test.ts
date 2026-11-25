@@ -59,12 +59,13 @@ function r2() {
 
 function setup() {
   const storage = r2();
-  const env = { DB: d1(), R2_BUCKET: storage.bucket } as Env;
+  const old = r2();
+  const env = { DB: d1(), R2_BUCKET: old.bucket, R2_PRIVATE: storage.bucket } as Env;
   const root = new Hono<{ Bindings: Env }>();
   root.route("/v1/journal", journalRoute);
   const send = (path: string, method = "GET", body?: unknown) =>
     root.request(path, { method, body: body === undefined ? undefined : JSON.stringify(body), headers: { "Content-Type": "application/json" } }, env);
-  return { env, root, send, storage };
+  return { env, root, send, storage, old };
 }
 
 type Entry = {
@@ -180,6 +181,15 @@ describe("/v1/journal", () => {
     expect((await root.request("/v1/journal/photos/..%2Fsecret.jpg", {}, env)).status).toBe(404);
     const text = await root.request("/v1/journal/photos", { method: "POST", body: "hi", headers: { "Content-Type": "text/plain" } }, env);
     expect(text.status).toBe(415);
+  });
+
+  it("still serves photos saved in the public bucket before the private one", async () => {
+    const { root, env, old, storage } = setup();
+    const ref = "journal/01HZZZZZZZZZZZZZZZZZZZZZZZ-older.jpg";
+    await old.bucket.put(ref, new Uint8Array([1, 2, 3]).buffer, { httpMetadata: { contentType: "image/jpeg" } });
+    const back = await root.request(`/v1/journal/photos/${ref.slice(8)}`, {}, env);
+    expect(back.status).toBe(200);
+    expect(storage.objects.size).toBe(0);
   });
 
   it("answers per-day stats with a forgiving streak, in your time zone", async () => {

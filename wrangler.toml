@@ -25,9 +25,16 @@ binding = "DB"
 database_name = "personal_api"
 database_id = "f83dc86f-521f-4880-b54e-e3238baf861f"
 
+# Public media (media.anuragd.me): blog/, photos/, recipes/.
 [[r2_buckets]]
 binding = "R2_BUCKET"
 bucket_name = "api-media"
+
+# Private: never on a public domain, read only through the signed-in API.
+# journal/ (journal photos).
+[[r2_buckets]]
+binding = "R2_PRIVATE"
+bucket_name = "api-private"
 
 [[queues.producers]]
 binding = "WHOOP_SYNC_QUEUE"

@@ -256,9 +256,9 @@ app.post("/photos", async (c) => {
   const data = await c.req.arrayBuffer();
   if (!data.byteLength) return c.json({ error: { code: "invalid", message: "The image is empty" } }, 400);
   if (data.byteLength > MAX_PHOTO) return c.json({ error: { code: "too_large", message: "Photos can be up to 15 MB" } }, 413);
-  // Unguessable, and never linked from anything public.
+  // Unguessable, and kept in the private bucket, which has no public address.
   const ref = `journal/${ulid()}-${crypto.randomUUID()}.${ext}`;
-  await c.env.R2_BUCKET.put(ref, data, { httpMetadata: { contentType: type, cacheControl: "private, max-age=31536000, immutable" } });
+  await (c.env.R2_PRIVATE ?? c.env.R2_BUCKET).put(ref, data, { httpMetadata: { contentType: type, cacheControl: "private, max-age=31536000, immutable" } });
   return c.json({ ref, content_type: type, size: data.byteLength }, 201);
 });
 
@@ -266,7 +266,8 @@ app.post("/photos", async (c) => {
 app.get("/photos/:name", async (c) => {
   const ref = `journal/${c.req.param("name")}`;
   if (!PHOTO_KEY.test(ref)) return c.json({ error: { code: "not_found", message: "No such photo" } }, 404);
-  const object = await c.env.R2_BUCKET.get(ref);
+  // Older photos were saved in the public bucket before the private one existed.
+  const object = (await c.env.R2_PRIVATE?.get(ref)) ?? (await c.env.R2_BUCKET.get(ref));
   if (!object) return c.json({ error: { code: "not_found", message: "No such photo" } }, 404);
   return new Response(object.body, {
     headers: {

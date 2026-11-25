@@ -1,6 +1,8 @@
 export interface Env {
   DB: D1Database;
   R2_BUCKET: R2Bucket;
+  /** Private bucket (no public domain): journal photos. */
+  R2_PRIVATE?: R2Bucket;
   API_TOKEN: string;
   WHOOP_CLIENT_ID: string;
   WHOOP_CLIENT_SECRET: string;
