@@ -299,6 +299,51 @@ describe("links: reading stats", () => {
     expect(stats).not.toHaveProperty("day");
   });
 
+  // Production 500: a backup tick used up the database's CPU, D1 reset it, and
+  // the year-long stats read (the default) failed with it.
+  it("rides out a D1 reset on the default window, and says 503 if it lasts", async () => {
+    const { env, send, save } = setup();
+    const link = await save("https://example.com/slow");
+    await send(`/v1/links/${link.id}/progress`, "PUT", { progress: 0.5, updated_at: "2026-11-20T10:00:00.000Z", day: "2026-11-20" });
+    const real = env.DB;
+    let resets = 0;
+    env.DB = new Proxy(real, {
+      get(target, key) {
+        if (key !== "prepare") return Reflect.get(target, key);
+        return (sql: string) => {
+          if (resets > 0 && /FROM reading_days WHERE day >=/.test(sql)) {
+            resets -= 1;
+            throw new Error("D1_ERROR: D1 DB exceeded its CPU time limit and was reset.");
+          }
+          return target.prepare(sql);
+        };
+      },
+    });
+    vi.useFakeTimers({ now: new Date("2026-11-25T15:21:00.000Z"), toFake: ["Date"] });
+    try {
+      resets = 1;
+      const once = await send("/v1/links/stats");
+      expect(once.status).toBe(200);
+      const body = await once.json() as { days: Array<{ day: string }>; totals: { saved: number } };
+      expect(body.days.map((d) => d.day)).toEqual(["2026-11-20"]);
+      expect(body.totals.saved).toBe(1);
+
+      resets = 10;
+      const stuck = await send("/v1/links/stats?day=2026-11-20");
+      expect(stuck.status).toBe(503);
+      expect(await stuck.json()).toEqual({ error: { code: "unavailable", message: "The database is busy; try again shortly" } });
+
+      // Anything else still fails at once, in the one error shape.
+      resets = 0;
+      env.DB = { prepare: () => { throw new Error("no such table: reading_days"); } } as unknown as D1Database;
+      const broken = await send("/v1/links/stats");
+      expect(broken.status).toBe(500);
+      expect(await broken.json()).toEqual({ error: { code: "server", message: "Links request failed" } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("lists a day's articles with their minutes, in the order last read", async () => {
     const { env, send, save } = setup();
     const first = await save("https://example.com/first");

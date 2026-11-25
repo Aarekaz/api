@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
 import { cursorFrom, failWith, fail as failWithStatus, later, limitFrom, list, page } from "../lib/http";
+import { retryD1Read } from "../lib/d1-retry";
 import { parseJson } from "../utils/json";
 import {
   authSecurity,
@@ -236,7 +237,14 @@ app.get("/stats", async (c) => {
   const since = c.req.query("since");
   const day = since && /^\d{4}-\d{2}-\d{2}$/.test(since) ? since : new Date(Date.now() - 366 * 86_400_000).toISOString().slice(0, 10);
   const on = c.req.query("day");
-  return c.json(await readingStats(c.env, day, on && /^\d{4}-\d{2}-\d{2}$/.test(on) ? on : undefined));
+  const date = on && /^\d{4}-\d{2}-\d{2}$/.test(on) ? on : undefined;
+  try {
+    // D1 resets the whole database when any query (a backup tick, a sync) runs
+    // out of CPU, failing these cheap reads with it; one retry nearly always lands.
+    return c.json(await retryD1Read(() => readingStats(c.env, day, date)));
+  } catch (error) {
+    return fail(c, error);
+  }
 });
 
 app.get("/:id", async (c) => {
