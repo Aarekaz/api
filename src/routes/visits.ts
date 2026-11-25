@@ -442,7 +442,7 @@ app.get("/", async (c) => {
   return c.json({ visits: results, sources: counts.results });
 });
 
-/** POST { visits: [...] } up to 500 at a time. Repeats are ignored. */
+/** POST { visits: [...] } up to 500 at a time. Repeats are ignored, but can fill in a missing departure. */
 app.post("/", async (c) => {
   const body = (await parseJson(c.req.raw)) as { visits?: unknown } | null;
   const list = Array.isArray(body?.visits) ? (body!.visits as VisitInput[]) : null;
@@ -450,8 +450,12 @@ app.post("/", async (c) => {
   const clean = list.map(cleanVisit).filter((v): v is NonNullable<ReturnType<typeof cleanVisit>> => v !== null);
   const now = new Date().toISOString();
   const statements = clean.map((v) => c.env.DB.prepare(
-    `INSERT OR IGNORE INTO visits (latitude, longitude, arrived_at, departed_at, place, address, city, country, source, source_key, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    // A repeat is ignored, except that a stop sent first on arrival gets its
+    // departure filled in when the phone sends it again on leaving.
+    `INSERT INTO visits (latitude, longitude, arrived_at, departed_at, place, address, city, country, source, source_key, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_key) DO UPDATE SET departed_at = excluded.departed_at
+     WHERE visits.departed_at IS NULL AND excluded.departed_at IS NOT NULL AND excluded.departed_at > visits.arrived_at`,
   ).bind(v.latitude, v.longitude, v.arrived_at, v.departed_at, v.place, v.address, v.city, v.country, v.source, v.source_key, now));
   let added = 0;
   for (let i = 0; i < statements.length; i += 50) {
