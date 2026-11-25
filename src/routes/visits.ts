@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { Env } from "../types/env";
 import { z } from "zod";
 import {
@@ -10,6 +10,7 @@ import {
 } from "../schemas/openapi";
 import { cursorFrom, fail, failWith, limitFrom, list, notModified, ok, page, shortHash, body as readBody } from "../lib/http";
 import { dataVersion } from "../services/data-versions";
+import { derived, type DerivedSpec } from "../services/derived-cache";
 import {
   addJourneys, addSaved, addVisits, chapters, cleanJourney, cleanSaved, cleanVisit, correctJourneyMode, correctVisit,
   deleteSaved, flights, footprints, isDate, listJourneys, listPlaces, listSaved, listTrips, listVisits, offsetOf,
@@ -503,6 +504,21 @@ const cached = (c: { req: { raw: Request }; header: (k: string, v: string) => vo
   if (!tagged.has(c.req.raw)) c.header("Cache-Control", `private, max-age=${seconds}`);
 };
 
+/**
+ * Trips, chapters and footprints read every visit, so their answers are kept
+ * in derived_cache until the places data moves (services/derived-cache.ts).
+ * Bump a build's number when its code changes what it returns; SHAPE and
+ * API_VERSION are part of every key too. X-Derived-Cache says how it was found.
+ */
+const BUILDS = { trips: 1, chapters: 1, footprints: 1 } as const;
+async function derivedReply(
+  c: Context<{ Bindings: Env }>, name: keyof typeof BUILDS, params: string, build: DerivedSpec["build"], seconds: number,
+) {
+  const found = await derived(c.env, { name, params, data: "places", shape: `${BUILDS[name]}|${SHAPE}|${c.env.API_VERSION ?? ""}`, build });
+  cached(c, seconds);
+  return c.body(found.body, 200, { "Content-Type": "application/json", "Content-Length": String(found.bytes), "X-Derived-Cache": found.source });
+}
+
 const isoOr = (v: string | undefined, fallback: string) => (isDate(v) ? new Date(v!).toISOString() : fallback);
 const YEAR = /^\d{4}$/;
 const cleanAll = <I, O>(items: I[], clean: (item: I) => O | null) => items.map(clean).filter((v): v is O => v !== null);
@@ -637,11 +653,7 @@ app.get("/day", async (c) => {
 });
 
 /** Footprints for the map's heat layer (see services/places.ts). */
-app.get("/footprints", async (c) => {
-  const body = await footprints(c.env);
-  cached(c, 6 * 3600);
-  return ok(c, body);
-});
+app.get("/footprints", (c) => derivedReply(c, "footprints", "", () => footprints(c.env), 6 * 3600));
 
 /** Every flight, oldest first: the arcs of your travels. */
 app.get("/flights", async (c) => {
@@ -651,18 +663,13 @@ app.get("/flights", async (c) => {
 });
 
 /** Your eras: where home was, where the days went, how you got around. See services/chapters.ts. */
-app.get("/chapters", async (c) => {
-  const body = { chapters: await chapters(c.env) };
-  // Changes to your own places show at once, so the answer isn't cached for an hour.
-  cached(c, 60);
-  return ok(c, body);
-});
+// Changes to your own places show at once, so the old hint was a minute, not an hour.
+app.get("/chapters", (c) => derivedReply(c, "chapters", "", async () => ({ chapters: await chapters(c.env) }), 60));
 
 /** Trips: days roughly 100 km or more from home, grouped. ?offset=-300 */
-app.get("/trips", async (c) => {
-  const body = { trips: await listTrips(c.env, offsetOf(c.req.query("offset"))) };
-  cached(c, 600);
-  return ok(c, body);
+app.get("/trips", (c) => {
+  const offset = offsetOf(c.req.query("offset"));
+  return derivedReply(c, "trips", `offset=${offset}`, async () => ({ trips: await listTrips(c.env, offset) }), 600);
 });
 
 // Places you define: a centre and a radius (see services/chapters.ts applySaved).

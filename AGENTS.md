@@ -77,6 +77,11 @@ journal, sections, recipes, training, music history) use `src/lib/http.ts`:
   Without the table the reads fall back to the old `max-age` hints. When a
   reply's shape changes without a data change, bump `SHAPE` in routes/visits.ts.
   Rows written straight into D1 (wrangler, scripts) don't bump the version.
+- Derived answers: `/trips`, `/chapters` and `/footprints` are kept in
+  `derived_cache` (0050) until the places version moves, single-flight, large
+  ones in R2_PRIVATE (`services/derived-cache.ts`,
+  `docs/adr/0002-derived-cache.md`). Change how one is computed: bump its
+  number in `BUILDS` (routes/visits.ts).
 - Places days: every day, month and year read groups by `local_date` (written
   at ingest, indexed); `?offset=` is deprecated and only places a row without
   one (`docs/adr/0001-local-date-reads.md`). Rows written straight into D1 must

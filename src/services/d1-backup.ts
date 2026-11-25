@@ -99,6 +99,7 @@ export function planTables(master: MasterRow[]) {
     if (virtual.includes(m.name)) skipped.push({ name: m.name, reason: "virtual table; rebuild it from its content table" });
     else if (virtual.some((v) => FTS_SHADOW.some((s) => m.name === `${v}_${s}`))) skipped.push({ name: m.name, reason: "storage of a virtual table" });
     else if (m.name === "backup_carry") skipped.push({ name: m.name, reason: "the backup's own bytes in flight" });
+    else if (m.name === "derived_cache") skipped.push({ name: m.name, reason: "answers computed from other tables; rebuilt on read" });
     else tables.push({ name: m.name, sql: m.sql, without_rowid: /without\s+rowid\s*;?\s*$/i.test(m.sql ?? "") });
   }
   return { tables, skipped, schema: own.filter((m) => m.sql).map(({ type, name, tbl_name, sql }) => ({ type, name, tbl_name, sql })) };
