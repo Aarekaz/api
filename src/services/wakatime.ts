@@ -3,6 +3,20 @@ import type { JsonRecord } from "../types/common";
 import { nowIso, dateOnly, addDays, hourInTimezone } from "../utils/date";
 import { mapJsonField } from "../utils/json";
 
+
+/**
+ * WakaTime stopped accepting API keys outside its editor plugins (403 "API Keys
+ * are only for plugins", since about 1 Nov 2026). Reading summaries and
+ * durations needs a personal OAuth token from https://wakatime.com/oauth, sent
+ * as a Bearer token. The old key stays as a fallback so nothing breaks before
+ * the token secret is set.
+ */
+export function wakaTimeAuth(env: Pick<Env, "WAKATIME_ACCESS_TOKEN" | "WAKATIME_API_KEY">): string | null {
+  if (env.WAKATIME_ACCESS_TOKEN) return `Bearer ${env.WAKATIME_ACCESS_TOKEN}`;
+  if (env.WAKATIME_API_KEY) return `Basic ${btoa(env.WAKATIME_API_KEY)}`;
+  return null;
+}
+
 export async function shouldRefresh(
   env: Env,
   type: string,
@@ -48,12 +62,11 @@ export async function refreshWakaTime(
   start: string,
   end: string
 ): Promise<void> {
-  if (!env.WAKATIME_API_KEY) {
-    throw new Error("WAKATIME_API_KEY not configured");
+  const authHeader = wakaTimeAuth(env);
+  if (!authHeader) {
+    throw new Error("WAKATIME_ACCESS_TOKEN not configured");
   }
-
-  const authHeader = `Basic ${btoa(env.WAKATIME_API_KEY)}`;
-  const url = new URL("https://wakatime.com/api/v1/users/current/summaries");
+  const url = new URL("https://api.wakatime.com/api/v1/users/current/summaries");
   url.searchParams.set("start", start);
   url.searchParams.set("end", end);
 
@@ -166,11 +179,10 @@ export async function refreshWakaTimeHourly(
   start: string,
   end: string
 ): Promise<void> {
-  if (!env.WAKATIME_API_KEY) {
-    throw new Error("WAKATIME_API_KEY not configured");
+  const authHeader = wakaTimeAuth(env);
+  if (!authHeader) {
+    throw new Error("WAKATIME_ACCESS_TOKEN not configured");
   }
-
-  const authHeader = `Basic ${btoa(env.WAKATIME_API_KEY)}`;
   const timezone = env.WAKATIME_TIMEZONE || "UTC";
   const startDate = new Date(`${start}T00:00:00Z`);
   const endDate = new Date(`${end}T00:00:00Z`);
@@ -185,7 +197,7 @@ export async function refreshWakaTimeHourly(
     // entries (each with a `language` field). Without this param the
     // default is slice_by=project and language info is omitted entirely.
     const response = await fetch(
-      `https://wakatime.com/api/v1/users/current/durations?date=${dateStr}&slice_by=language`,
+      `https://api.wakatime.com/api/v1/users/current/durations?date=${dateStr}&slice_by=language`,
       {
         headers: {
           authorization: authHeader,

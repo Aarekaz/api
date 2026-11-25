@@ -15,6 +15,8 @@ export interface Env {
   WHOOP_SYNC_QUEUE: Queue<import("./whoop").WhoopQueueMessage>;
   LANYARD_USER_ID: string;
   WAKATIME_API_KEY: string;
+  /** Personal OAuth token from wakatime.com/oauth; WakaTime's API refuses plugin keys for reads. */
+  WAKATIME_ACCESS_TOKEN?: string;
   WAKATIME_TIMEZONE: string;
   GITHUB_USERNAME: string;
   GITHUB_WORK_USERNAME?: string;

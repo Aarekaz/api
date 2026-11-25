@@ -51,7 +51,7 @@ app.post("/", async (c) => {
   }
 
   // Refresh WakaTime
-  if (c.env.WAKATIME_API_KEY) {
+  if (c.env.WAKATIME_ACCESS_TOKEN || c.env.WAKATIME_API_KEY) {
     try {
       await refreshWakaTime(c.env, lastWeek, today);
       await markRefreshed(c.env, "wakatime_daily");

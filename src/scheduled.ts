@@ -247,7 +247,7 @@ async function refreshLanyard(env: Env): Promise<void> {
 }
 
 async function refreshWakaTimeIfDue(env: Env): Promise<void> {
-  if (!env.WAKATIME_API_KEY) return;
+  if (!env.WAKATIME_ACCESS_TOKEN && !env.WAKATIME_API_KEY) return;
 
   const today = dateOnly(new Date());
   const latest = await env.DB.prepare(
