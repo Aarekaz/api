@@ -2,11 +2,13 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
+import { cursorFrom, failWith, fail as failWithStatus, limitFrom, list, page } from "../lib/http";
 import { parseJson } from "../utils/json";
-import { DocumentError } from "../services/documents";
 import {
   authSecurity,
+  cursorQuery,
   okSchema,
+  pageFields,
   openApiJsonRequestBody,
   openApiRegistry,
   structuredCreatedResponses,
@@ -63,9 +65,13 @@ openApiRegistry.registerPath({
     query: z.object({
       document_id: z.string().optional(),
       limit: z.coerce.number().int().min(1).max(2000).optional().openapi({ description: "Default 500" }),
+      cursor: cursorQuery,
     }),
   },
-  responses: structuredOkResponses(z.object({ highlights: z.array(highlightSchema) })),
+  responses: structuredOkResponses(z.object({
+    highlights: z.array(highlightSchema).openapi({ description: "Same as items (kept for older apps)" }),
+    ...pageFields(highlightSchema),
+  })),
 });
 
 openApiRegistry.registerPath({
@@ -96,25 +102,17 @@ openApiRegistry.registerPath({
   responses: structuredOkResponses(okSchema),
 });
 
-/** One error shape: { error: { code, message } }. */
-function fail(c: Context<{ Bindings: Env }>, error: unknown) {
-  if (error instanceof z.ZodError) {
-    return c.json({ error: { code: "invalid", message: error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ") } }, 400);
-  }
-  if (error instanceof DocumentError) {
-    const code = error.status === 404 ? "not_found" : error.status === 409 ? "conflict" : "invalid";
-    return c.json({ error: { code, message: error.message } }, error.status);
-  }
-  console.error("highlights route failed", error);
-  return c.json({ error: { code: "server", message: "Highlights request failed" } }, 500);
-}
+/** One error shape, { error: { code, message } } (lib/http.ts). */
+const fail = (c: Context<{ Bindings: Env }>, error: unknown) => failWith(c, error, "Highlights request");
 
-const invalidJson = (c: Context<{ Bindings: Env }>) => c.json({ error: { code: "invalid", message: "Invalid JSON" } }, 400);
+const invalidJson = (c: Context<{ Bindings: Env }>) => failWithStatus(c, 400, "Invalid JSON");
 
 app.get("/", async (c) => {
   try {
-    const rows = await listHighlights(c.env, c.req.query("document_id") || undefined, Number(c.req.query("limit")) || undefined);
-    return c.json({ highlights: rows.map(presentHighlight) });
+    const limit = limitFrom(c, 500, 2000);
+    const rows = await listHighlights(c.env, c.req.query("document_id") || undefined, limit, cursorFrom(c, 2) as [string, string] | null);
+    const { items, next_cursor } = page(rows, limit, (row) => [row.created_at, row.id]);
+    return list(c, "highlights", items.map(presentHighlight), next_cursor);
   } catch (error) {
     return fail(c, error);
   }

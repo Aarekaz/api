@@ -53,8 +53,13 @@ export function present(row: DocumentRow, includeBody = true) {
   };
 }
 
+/**
+ * Documents, most recently updated first: `limit + 1` of them, so the caller
+ * can tell another page follows. `after` is the last page's [updated_at, id].
+ */
 export async function listDocuments(env: Env, query: {
   kind?: string; folder?: string; updatedSince?: string; includeBody?: boolean; includeDeleted?: boolean; limit?: number;
+  after?: [string, string] | null;
 }) {
   const where: string[] = [];
   const binds: unknown[] = [];
@@ -62,9 +67,10 @@ export async function listDocuments(env: Env, query: {
   if (query.kind && (KINDS as string[]).includes(query.kind)) { where.push("kind = ?"); binds.push(query.kind); }
   if (query.folder !== undefined) { where.push("folder = ?"); binds.push(query.folder); }
   if (query.updatedSince) { where.push("updated_at > ?"); binds.push(query.updatedSince); }
+  if (query.after) { where.push("(updated_at < ? OR (updated_at = ? AND id < ?))"); binds.push(query.after[0], query.after[0], query.after[1]); }
   const columns = query.includeBody ? "*" : LIST_COLUMNS;
-  const limit = Math.min(Math.max(query.limit ?? 2000, 1), 5000);
-  const sql = `SELECT ${columns}${query.includeDeleted ? ", deleted_at" : ""} FROM documents ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY updated_at DESC LIMIT ${limit}`;
+  const limit = Math.min(Math.max(query.limit ?? 2000, 1), 5000) + 1;
+  const sql = `SELECT ${columns}${query.includeDeleted ? ", deleted_at" : ""} FROM documents ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY updated_at DESC, id DESC LIMIT ${limit}`;
   const { results } = await env.DB.prepare(sql).bind(...binds).all<DocumentRow>();
   return results;
 }
@@ -188,37 +194,58 @@ export function postContent(body: string): string {
   return body.replace(/^#\s+.*\n+/, "");
 }
 
-/** Creates or updates the site's post for a piece of writing. */
-async function syncPost(env: Env, doc: DocumentRow, published: boolean, now: Date): Promise<number> {
+/**
+ * The writes that create or update the site's post for a piece of writing,
+ * and SQL for that post's id (usable in the same batch, before the insert has
+ * an id to hand back). Reads first: whether the post still exists, and
+ * whether the slug is taken.
+ */
+async function postWrites(env: Env, doc: DocumentRow, published: boolean, now: Date) {
   const stamp = now.toISOString();
-  if (doc.post_id) {
-    const existing = await env.DB.prepare("SELECT published_at FROM posts WHERE id = ?").bind(doc.post_id).first<{ published_at: string | null }>();
-    if (existing) {
-      await env.DB.prepare("UPDATE posts SET title = ?, summary = COALESCE(?, summary), content = ?, published_at = ?, updated_at = ? WHERE id = ?")
-        .bind(doc.title, summarize(doc.body), postContent(doc.body),
-          published ? existing.published_at ?? stamp : null, stamp, doc.post_id).run();
-      return doc.post_id;
-    }
+  const live = doc.post_id ? await env.DB.prepare("SELECT id FROM posts WHERE id = ?").bind(doc.post_id).first<{ id: number }>() : null;
+  if (live) {
+    return {
+      statements: [env.DB.prepare(
+        `UPDATE posts SET title = ?, summary = COALESCE(?, summary), content = ?,
+           published_at = CASE WHEN ? THEN COALESCE(published_at, ?) ELSE NULL END, updated_at = ? WHERE id = ?`,
+      ).bind(doc.title, summarize(doc.body), postContent(doc.body), published ? 1 : 0, stamp, stamp, live.id)],
+      postId: { sql: "?", args: [live.id] as unknown[] },
+    };
   }
   let slug = doc.slug;
   const clash = await env.DB.prepare("SELECT id FROM posts WHERE slug = ?").bind(slug).first<{ id: number }>();
   if (clash) slug = `${slug}-${doc.id.slice(-4).toLowerCase()}`;
-  const inserted = await env.DB.prepare(
-    `INSERT INTO posts (slug, title, summary, content, tags_json, published_at, pinned, created_at, updated_at)
-     VALUES (?, ?, ?, ?, NULL, ?, 0, ?, ?) RETURNING id`,
-  ).bind(slug, doc.title, summarize(doc.body), postContent(doc.body), published ? stamp : null, stamp, stamp).first<{ id: number }>();
-  return inserted!.id;
+  return {
+    statements: [env.DB.prepare(
+      `INSERT INTO posts (slug, title, summary, content, tags_json, published_at, pinned, created_at, updated_at)
+       VALUES (?, ?, ?, ?, NULL, ?, 0, ?, ?)`,
+    ).bind(slug, doc.title, summarize(doc.body), postContent(doc.body), published ? stamp : null, stamp, stamp)],
+    postId: { sql: "(SELECT id FROM posts WHERE slug = ?)", args: [slug] as unknown[] },
+  };
 }
 
-/** Publishing puts the writing on anuragd.me through the posts table the site already reads. */
+/** Creates or updates the site's post for a piece of writing. */
+async function syncPost(env: Env, doc: DocumentRow, published: boolean, now: Date): Promise<void> {
+  const { statements } = await postWrites(env, doc, published, now);
+  await env.DB.batch(statements);
+}
+
+/**
+ * Publishing puts the writing on anuragd.me through the posts table the site
+ * already reads. The post and the document change in one batch, so a failure
+ * never leaves a post the document doesn't know about.
+ */
 export async function setPublished(env: Env, id: string, published: boolean, now = new Date()): Promise<DocumentRow> {
   const doc = await getDocument(env, id);
   if (doc.kind !== "writing") throw new DocumentError("Only writing can be published", 400);
   if (!published && !doc.post_id) return doc;
-  const postId = await syncPost(env, doc, published, now);
-  await env.DB.prepare(
-    "UPDATE documents SET status = ?, visibility = ?, post_id = ?, updated_at = ?, version = version + 1 WHERE id = ?",
-  ).bind(published ? "published" : "draft", published ? "public" : "agents", postId, now.toISOString(), id).run();
+  const { statements, postId } = await postWrites(env, doc, published, now);
+  await env.DB.batch([
+    ...statements,
+    env.DB.prepare(
+      `UPDATE documents SET status = ?, visibility = ?, post_id = ${postId.sql}, updated_at = ?, version = version + 1 WHERE id = ?`,
+    ).bind(published ? "published" : "draft", published ? "public" : "agents", ...postId.args, now.toISOString(), id),
+  ]);
   return getDocument(env, id);
 }
 

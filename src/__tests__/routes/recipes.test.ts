@@ -1,7 +1,6 @@
 // @ts-expect-error vitest runs in Node; the Worker tsconfig has no Node types.
 import { readFileSync } from "node:fs";
-// @ts-expect-error same as above (node:sqlite is Node's built-in SQLite).
-import { DatabaseSync } from "node:sqlite";
+import { testD1 } from "../helpers/d1";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import type { Env } from "../../types/env";
@@ -10,18 +9,9 @@ import { cleanIngredients, cleanSteps, extractRecipe, parseDuration, parseIngred
 
 /** A real SQLite database behind the subset of the D1 API the code uses (as in documents.test.ts). */
 function d1(): D1Database {
-  const db = new DatabaseSync(":memory:");
+  const { db, DB } = testD1();
   db.exec(readFileSync("migrations/0034_recipes.sql", "utf8"));
-  const statement = (sql: string, args: unknown[] = []) => ({
-    bind: (...next: unknown[]) => statement(sql, next),
-    async run() {
-      const info = db.prepare(sql).run(...args) as { changes: number; lastInsertRowid: number };
-      return { meta: { changes: Number(info.changes), last_row_id: Number(info.lastInsertRowid) } };
-    },
-    async first<T>() { return (db.prepare(sql).get(...args) as T) ?? null; },
-    async all<T>() { return { results: db.prepare(sql).all(...args) as T[] }; },
-  });
-  return { prepare: (sql: string) => statement(sql) } as unknown as D1Database;
+  return DB;
 }
 
 function app() {

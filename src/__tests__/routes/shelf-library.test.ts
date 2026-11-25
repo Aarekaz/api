@@ -1,7 +1,6 @@
 // @ts-expect-error vitest runs in Node; the Worker tsconfig has no Node types.
 import { readFileSync } from "node:fs";
-// @ts-expect-error same as above (node:sqlite is Node's built-in SQLite).
-import { DatabaseSync } from "node:sqlite";
+import { testD1 } from "../helpers/d1";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import type { Env } from "../../types/env";
@@ -10,7 +9,7 @@ import mediaRoute from "../../routes/media";
 
 /** shelf_items exactly as the live migrations build it, plus 0033's diary. */
 function d1(): D1Database {
-  const db = new DatabaseSync(":memory:");
+  const { db, DB } = testD1();
   db.exec(`CREATE TABLE shelf_items (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, title TEXT, quote TEXT,
     author TEXT, source TEXT, url TEXT, note TEXT, image_url TEXT, drawer TEXT, tags_json TEXT, date_added TEXT);`);
   db.exec("ALTER TABLE shelf_items ADD COLUMN created_at TEXT; ALTER TABLE shelf_items ADD COLUMN updated_at TEXT;");
@@ -18,30 +17,7 @@ function d1(): D1Database {
   db.exec(readFileSync("migrations/0015_add_shelf_state_fields.sql", "utf8"));
   db.exec(readFileSync("migrations/0017_add_shelf_control_fields.sql", "utf8"));
   db.exec(readFileSync("migrations/0033_shelf_log.sql", "utf8"));
-  const statement = (sql: string, args: unknown[] = []) => ({
-    bind: (...next: unknown[]) => statement(sql, next),
-    async run() {
-      const info = db.prepare(sql).run(...args) as { changes: number; lastInsertRowid: number };
-      return { meta: { changes: Number(info.changes), last_row_id: Number(info.lastInsertRowid) } };
-    },
-    async first<T>() { return (db.prepare(sql).get(...args) as T) ?? null; },
-    async all<T>() { return { results: db.prepare(sql).all(...args) as T[] }; },
-  });
-  return {
-    prepare: (sql: string) => statement(sql),
-    async batch(list: Array<{ run: () => Promise<unknown> }>) {
-      db.exec("BEGIN");
-      try {
-        const out = [];
-        for (const s of list) out.push(await s.run());
-        db.exec("COMMIT");
-        return out;
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
-      }
-    },
-  } as unknown as D1Database;
+  return DB;
 }
 
 function setup() {

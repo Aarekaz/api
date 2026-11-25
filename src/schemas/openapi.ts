@@ -481,6 +481,15 @@ export const structuredCreatedResponses = (schema: z.ZodTypeAny, description = "
   ...structuredErrorResponses,
 });
 
+/** `?cursor=` on the app's paged lists (lib/http.ts). */
+export const cursorQuery = z.string().optional().openapi({ description: "next_cursor from the page before" });
+
+/** `items` and `next_cursor`, beside a paged list's older named key (which carries the same items). */
+export const pageFields = (item: z.ZodTypeAny) => ({
+  items: z.array(item),
+  next_cursor: z.string().nullable().openapi({ description: "Pass as ?cursor= for the next page; null on the last page" }),
+});
+
 export const notFoundResponse = {
   404: openApiResponse(errorSchema, "Not found"),
 };

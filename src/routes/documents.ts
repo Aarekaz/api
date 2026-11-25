@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import type { Context } from "hono";
 import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
+import { cursorFrom, fail as failWithMessage, failWith, later, list, page } from "../lib/http";
 import {
   DocumentError,
   captureToInbox,
@@ -19,9 +19,11 @@ import { isSingleUrl, presentLink, saveLink } from "../services/links";
 import { z } from "zod";
 import {
   authSecurity,
-  createdResponses,
-  errorSchema,
-  okResponses,
+  cursorQuery,
+  pageFields,
+  structuredCreatedResponses,
+  structuredErrorSchema,
+  structuredOkResponses,
   okSchema,
   openApiJsonRequestBody,
   openApiRegistry,
@@ -41,8 +43,13 @@ import {
 const app = new Hono<{ Bindings: Env }>();
 
 // OpenAPI registrations
+const listedDocument = documentSummarySchema.extend({
+  body: z.string().optional(),
+  frontmatter: z.record(z.unknown()).optional(),
+  deleted_at: z.string().optional(),
+});
 const idParams = z.object({ id: z.string().openapi({ description: "Document ULID" }) });
-const notFound = { 404: openApiResponse(errorSchema, "Document not found") };
+const notFound = { 404: openApiResponse(structuredErrorSchema, "Document not found") };
 
 openApiRegistry.registerPath({
   method: "get",
@@ -59,15 +66,13 @@ openApiRegistry.registerPath({
       include: z.enum(["body"]).optional(),
       include_deleted: z.enum(["1"]).optional(),
       limit: z.coerce.number().int().min(1).max(5000).optional().openapi({ description: "Default 2000" }),
+      cursor: cursorQuery,
     }),
   },
-  responses: okResponses(z.object({
-    documents: z.array(documentSummarySchema.extend({
-      body: z.string().optional(),
-      frontmatter: z.record(z.unknown()).optional(),
-      deleted_at: z.string().optional(),
-    })),
+  responses: structuredOkResponses(z.object({
+    documents: z.array(listedDocument).openapi({ description: "Same as items (kept for older apps)" }),
     server_time: z.string(),
+    ...pageFields(listedDocument),
   })),
 });
 
@@ -77,7 +82,7 @@ openApiRegistry.registerPath({
   summary: "Get document",
   security: authSecurity,
   request: { params: idParams },
-  responses: { ...okResponses(documentSchema), ...notFound },
+  responses: { ...structuredOkResponses(documentSchema), ...notFound },
 });
 
 openApiRegistry.registerPath({
@@ -86,7 +91,7 @@ openApiRegistry.registerPath({
   summary: "List a document's saved versions (latest 100)",
   security: authSecurity,
   request: { params: idParams },
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     versions: z.array(z.object({
       version: z.number().int(),
       title: z.string(),
@@ -102,7 +107,7 @@ openApiRegistry.registerPath({
   summary: "Create document",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(documentInputSchema.omit({ version: true })) },
-  responses: createdResponses(documentSchema),
+  responses: structuredCreatedResponses(documentSchema),
 });
 
 openApiRegistry.registerPath({
@@ -116,10 +121,10 @@ openApiRegistry.registerPath({
     body: openApiJsonRequestBody(documentInputSchema.extend({ version: z.number().int() })),
   },
   responses: {
-    ...okResponses(documentSchema),
+    ...structuredOkResponses(documentSchema),
     ...notFound,
     409: openApiResponse(
-      errorSchema.extend({ latest: documentSchema.nullable() }),
+      structuredErrorSchema.extend({ latest: documentSchema.nullable() }),
       "The document changed since you loaded it",
     ),
   },
@@ -131,7 +136,7 @@ openApiRegistry.registerPath({
   summary: "Delete document (soft)",
   security: authSecurity,
   request: { params: idParams },
-  responses: { ...okResponses(okSchema), ...notFound },
+  responses: { ...structuredOkResponses(okSchema), ...notFound },
 });
 
 for (const [action, summary] of [
@@ -144,7 +149,7 @@ for (const [action, summary] of [
     summary,
     security: authSecurity,
     request: { params: idParams },
-    responses: { ...okResponses(documentSchema), ...notFound },
+    responses: { ...structuredOkResponses(documentSchema), ...notFound },
   });
 }
 
@@ -159,7 +164,7 @@ openApiRegistry.registerPath({
       limit: z.coerce.number().int().min(1).max(100).optional().openapi({ description: "Default 30" }),
     }),
   },
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     results: z.array(z.object({
       id: z.string(),
       kind: documentKindSchema,
@@ -180,34 +185,34 @@ openApiRegistry.registerPath({
   summary: "Capture text to the Inbox (a bare URL is saved to Read later)",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(z.object({ text: z.string().min(1).max(20000) })) },
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     ok: z.boolean(),
     document: documentSummarySchema.optional().openapi({ description: "The new Inbox note" }),
     link: linkSchema.optional().openapi({ description: "The saved link, when text was a single URL" }),
   })),
 });
 
-function fail(c: Context<{ Bindings: Env }>, error: unknown) {
-  if (error instanceof DocumentError) return c.json({ error: error.message }, error.status);
-  console.error("documents route failed", error);
-  return c.json({ error: "Documents request failed" }, 500);
-}
+// App-only: errors are { error: { code, message } } (lib/http.ts).
+const fail = (c: Parameters<typeof failWith>[0], error: unknown) => failWith(c, error, "Documents request");
+const invalidJson = (c: Parameters<typeof failWith>[0]) => failWithMessage(c, 400, "Invalid JSON");
 
 app.get("/", async (c) => {
   try {
+    const limit = Math.min(Math.max(Number(c.req.query("limit")) || 2000, 1), 5000);
     const rows = await listDocuments(c.env, {
       kind: c.req.query("kind"),
       folder: c.req.query("folder"),
       updatedSince: c.req.query("updated_since"),
       includeBody: c.req.query("include") === "body",
       includeDeleted: c.req.query("include_deleted") === "1",
-      limit: Number(c.req.query("limit")) || undefined,
+      limit,
+      after: cursorFrom(c, 2) as [string, string] | null,
     });
     const includeBody = c.req.query("include") === "body";
-    return c.json({
-      documents: rows.map((row) => ({ ...present(row, includeBody), ...(row.deleted_at ? { deleted_at: row.deleted_at } : {}) })),
-      server_time: new Date().toISOString(),
-    });
+    const { items, next_cursor } = page(rows, limit, (row) => [row.updated_at, row.id]);
+    return list(c, "documents",
+      items.map((row) => ({ ...present(row, includeBody), ...(row.deleted_at ? { deleted_at: row.deleted_at } : {}) })),
+      next_cursor, { server_time: new Date().toISOString() });
   } catch (error) {
     return fail(c, error);
   }
@@ -230,7 +235,7 @@ app.get("/:id/versions", async (c) => {
 
 app.post("/", async (c) => {
   const body = (await parseJson(c.req.raw)) as DocumentInput | null;
-  if (!body) return c.json({ error: "Invalid JSON" }, 400);
+  if (!body) return invalidJson(c);
   try {
     return c.json(present(await createDocument(c.env, body)), 201);
   } catch (error) {
@@ -240,13 +245,13 @@ app.post("/", async (c) => {
 
 app.put("/:id", async (c) => {
   const body = (await parseJson(c.req.raw)) as DocumentInput | null;
-  if (!body) return c.json({ error: "Invalid JSON" }, 400);
+  if (!body) return invalidJson(c);
   try {
     return c.json(present(await saveDocument(c.env, c.req.param("id"), body)));
   } catch (error) {
     if (error instanceof DocumentError && error.status === 409) {
       const latest = await getDocument(c.env, c.req.param("id")).catch(() => null);
-      return c.json({ error: error.message, latest: latest ? present(latest) : null }, 409);
+      return failWithMessage(c, 409, error.message, { code: "conflict", extra: { latest: latest ? present(latest) : null } });
     }
     return fail(c, error);
   }
@@ -294,10 +299,10 @@ export const captureRoute = new Hono<{ Bindings: Env }>();
 captureRoute.post("/", async (c) => {
   const body = (await parseJson(c.req.raw)) as { text?: unknown } | null;
   const text = typeof body?.text === "string" ? body.text.trim() : "";
-  if (!text || text.length > 20000) return c.json({ error: "text is required (up to 20000 characters)" }, 400);
+  if (!text || text.length > 20000) return failWithMessage(c, 400, "text is required (up to 20000 characters)");
   try {
     // A bare URL is something to read later, not a line in the inbox.
-    if (isSingleUrl(text)) return c.json({ ok: true, link: presentLink(await saveLink(c.env, text)) });
+    if (isSingleUrl(text)) return c.json({ ok: true, link: presentLink(await saveLink(c.env, text, new Date(), later(c))) });
     const note = await captureToInbox(c.env, text);
     return c.json({ ok: true, document: present(note, false) });
   } catch (error) {

@@ -2,10 +2,12 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
+import { cursorFrom, failWith, fail as failWithStatus, later, limitFrom, list, page } from "../lib/http";
 import { parseJson } from "../utils/json";
-import { DocumentError } from "../services/documents";
 import {
   authSecurity,
+  cursorQuery,
+  pageFields,
   openApiJsonRequestBody,
   openApiRegistry,
   structuredCreatedResponses,
@@ -54,20 +56,10 @@ const ReadingStats = z.object({
 
 const SaveLink = z.object({ url: z.string().min(1).max(4000) });
 
-/** One error shape: { error: { code, message } }. */
-function fail(c: Context<{ Bindings: Env }>, error: unknown) {
-  if (error instanceof z.ZodError) {
-    return c.json({ error: { code: "invalid", message: error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ") } }, 400);
-  }
-  if (error instanceof DocumentError) {
-    const code = error.status === 404 ? "not_found" : error.status === 409 ? "conflict" : "invalid";
-    return c.json({ error: { code, message: error.message } }, error.status);
-  }
-  console.error("links route failed", error);
-  return c.json({ error: { code: "server", message: "Links request failed" } }, 500);
-}
+/** One error shape, { error: { code, message } } (lib/http.ts). */
+const fail = (c: Context<{ Bindings: Env }>, error: unknown) => failWith(c, error, "Links request");
 
-const invalidJson = (c: Context<{ Bindings: Env }>) => c.json({ error: { code: "invalid", message: "Invalid JSON" } }, 400);
+const invalidJson = (c: Context<{ Bindings: Env }>) => failWithStatus(c, 400, "Invalid JSON");
 
 // OpenAPI registrations
 const idParams = z.object({ id: z.string().openapi({ description: "The link's document id" }) });
@@ -83,9 +75,13 @@ openApiRegistry.registerPath({
       state: z.enum(STATES).optional().openapi({ description: "inbox, archived, starred or all (default); unread/read are older names" }),
       tag: z.string().optional(),
       limit: z.coerce.number().int().min(1).max(2000).optional().openapi({ description: "Default 500" }),
+      cursor: cursorQuery,
     }),
   },
-  responses: structuredOkResponses(z.object({ links: z.array(linkSchema.omit({ body: true })) })),
+  responses: structuredOkResponses(z.object({
+    links: z.array(linkSchema.omit({ body: true })).openapi({ description: "Same as items (kept for older apps)" }),
+    ...pageFields(linkSchema.omit({ body: true })),
+  })),
 });
 
 openApiRegistry.registerPath({
@@ -198,8 +194,10 @@ app.get("/", async (c) => {
   const raw = c.req.query("state");
   const state: LinkListState = (STATES as readonly string[]).includes(raw ?? "") ? raw as LinkListState : "all";
   try {
-    const rows = await listLinks(c.env, state, Number(c.req.query("limit")) || undefined, c.req.query("tag") || undefined);
-    return c.json({ links: rows.map((row) => presentLink(row)) });
+    const limit = limitFrom(c, 500, 2000);
+    const rows = await listLinks(c.env, state, limit, c.req.query("tag") || undefined, cursorFrom(c, 2) as [string, string] | null);
+    const { items, next_cursor } = page(rows, limit, (row) => [row.created_at, row.id]);
+    return list(c, "links", items.map((row) => presentLink(row)), next_cursor);
   } catch (error) {
     return fail(c, error);
   }
@@ -216,10 +214,12 @@ app.get("/tags", async (c) => {
 
 app.post("/", async (c) => {
   const body = await parseJson(c.req.raw);
-  if (body === null) return c.json({ error: { code: "invalid", message: "url is required" } }, 400);
+  if (body === null) return failWithStatus(c, 400, "url is required");
   try {
     const { url } = SaveLink.parse(body);
-    return c.json(presentLink(await saveLink(c.env, url), true), 201);
+    // The page is read after the reply (fetched_at null until then), so saving is instant.
+    const link = await saveLink(c.env, url, new Date(), later(c));
+    return c.json(presentLink(link, link.fetched_at !== null), 201);
   } catch (error) {
     return fail(c, error);
   }
@@ -294,7 +294,7 @@ for (const [path, archived] of [["archive", true], ["read", true], ["unarchive",
 /** POST /v1/links/:id/page {html, url}: the page as the device fetched it, for sites that turn the server away. */
 app.post("/:id/page", async (c) => {
   const body = await c.req.json().catch(() => null) as { html?: unknown; url?: unknown } | null;
-  if (!body || typeof body.html !== "string" || body.html.length < 200) return c.json({ error: "html is required" }, 400);
+  if (!body || typeof body.html !== "string" || body.html.length < 200) return failWithStatus(c, 400, "html is required");
   try {
     const url = typeof body.url === "string" ? body.url : undefined;
     return c.json(presentLink(await fetchArticle(c.env, c.req.param("id"), new Date(), { html: body.html, url }), true));

@@ -1,35 +1,19 @@
-// @ts-expect-error vitest runs in Node; the Worker tsconfig has no Node types.
-import { readFileSync } from "node:fs";
-// @ts-expect-error same as above (node:sqlite is Node's built-in SQLite).
-import { DatabaseSync } from "node:sqlite";
+import { testD1 } from "../helpers/d1";
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import type { Env } from "../../types/env";
 import visitsRoute from "../../routes/visits";
 
-function setup() {
-  const db = new DatabaseSync(":memory:");
-  db.exec(readFileSync("migrations/0007_location.sql", "utf8"));
-  db.exec("ALTER TABLE location_history ADD COLUMN updated_at TEXT");
-  for (const m of ["0027_visits", "0028_place_names", "0029_journeys", "0041_visit_guess", "0042_utc_offset", "0043_recorded_departure", "0044_visit_corrections"]) {
-    db.exec(readFileSync(`migrations/${m}.sql`, "utf8"));
-  }
-  const statement = (sql: string, args: unknown[] = []) => ({
-    bind: (...next: unknown[]) => statement(sql, next),
-    async run() {
-      const info = db.prepare(sql).run(...args) as { changes: number };
-      return { meta: { changes: Number(info.changes) } };
-    },
-    async first<T>() { return (db.prepare(sql).get(...args) as T) ?? null; },
-    async all<T>() { return { results: db.prepare(sql).all(...args) as T[] }; },
+function setup(options: { versions?: boolean } = {}) {
+  const { db, DB } = testD1({
+    migrations: ["0007_location", "0027_visits", "0028_place_names", "0029_journeys", "0032_place_categories", "0039_saved_places", "0040_saved_place_notes",
+      "0041_visit_guess", "0042_utc_offset", "0043_recorded_departure", "0044_visit_corrections", "0046_data_versions"],
+    sql: "ALTER TABLE location_history ADD COLUMN updated_at TEXT",
   });
-  const DB = {
-    prepare: (sql: string) => statement(sql),
-    async batch(list: Array<{ run: () => Promise<unknown> }>) { const out = []; for (const s of list) out.push(await s.run()); return out; },
-  } as unknown as D1Database;
+  if (options.versions === false) db.exec("DROP TABLE data_versions");
   const root = new Hono<{ Bindings: Env }>();
   root.route("/v1/visits", visitsRoute);
-  const get = (path: string) => root.request(path, {}, { DB } as Env);
+  const get = (path: string, headers: Record<string, string> = {}) => root.request(path, { headers }, { DB } as Env);
   const send = (path: string, method: string, body: unknown) =>
     root.request(path, { method, body: JSON.stringify(body), headers: { "Content-Type": "application/json" } }, { DB } as Env);
   const post = (visits: unknown[]) => root.request("/v1/visits", { method: "POST", body: JSON.stringify({ visits }), headers: { "Content-Type": "application/json" } }, { DB } as Env);
@@ -133,5 +117,117 @@ describe("where you woke up", () => {
     expect(day.visits.length).toBe(2);
     expect(day.visits[0].woke_here).toBe(true);
     expect(day.visits[0].place).toBe("Home");
+  });
+});
+
+describe("conditional GETs", () => {
+  const places = "/v1/visits/places";
+
+  it("answers 304 until a write changes the places", async () => {
+    const { post, get } = setup();
+    await post([stop("2026-11-24T16:37:32Z")]);
+    const first = await get(places);
+    const tag = first.headers.get("ETag")!;
+    expect(tag).toMatch(/^W\/"places-1-/);
+    expect(first.headers.get("Cache-Control")).toBe("private, no-cache");
+    const again = await get(places, { "If-None-Match": tag });
+    expect(again.status).toBe(304);
+    expect(await again.text()).toBe("");
+    // A repeat changes nothing, so the tag holds.
+    await post([stop("2026-11-24T16:37:32Z")]);
+    expect((await get(places, { "If-None-Match": tag })).status).toBe(304);
+    await post([{ ...stop("2026-11-24T18:00:00Z"), arrived_at: "2026-11-24T17:00:00Z", source_key: "visit:2" }]);
+    const changed = await get(places, { "If-None-Match": tag });
+    expect(changed.status).toBe(200);
+    expect(changed.headers.get("ETag")).not.toBe(tag);
+  });
+
+  it("gives each query its own tag", async () => {
+    const { get } = setup();
+    const a = (await get("/v1/visits/days?year=2024")).headers.get("ETag");
+    const b = (await get("/v1/visits/days?year=2025")).headers.get("ETag");
+    expect(a).toBeTruthy();
+    expect(a).not.toBe(b);
+  });
+
+  it("moves on for every kind of places write", async () => {
+    const { db, get, send, post } = setup();
+    const version = () => (db.prepare("SELECT version FROM data_versions WHERE name = 'places'").get() as { version: number } | undefined)?.version ?? 0;
+    await post([stop("2026-11-24T16:37:32Z")]);
+    expect(version()).toBe(1);
+    await send("/v1/visits/names", "POST", { names: [{ key: "38.806,-77.058", name: "King St" }] });
+    expect(version()).toBe(2);
+    const saved = await (await send("/v1/visits/saved", "POST", { name: "Home", latitude: 38.8, longitude: -77 })).json() as { id: number };
+    await send(`/v1/visits/saved/${saved.id}`, "PATCH", { note: "the flat" });
+    await send(`/v1/visits/saved/${saved.id}`, "DELETE", {});
+    expect(version()).toBe(5);
+    const id = (db.prepare("SELECT id FROM visits").get() as { id: number }).id;
+    await send(`/v1/visits/${id}`, "PATCH", { note: "coffee" });
+    await send("/v1/visits/journeys", "POST", { journeys: [{ started_at: "2026-11-24T16:00:00Z", mode: "walking", source: "phone" }] });
+    const journey = (db.prepare("SELECT id FROM journeys").get() as { id: number }).id;
+    await send(`/v1/visits/journeys/${journey}`, "PATCH", { mode: "running" });
+    expect(version()).toBe(8);
+    // Nothing found, nothing changed.
+    await send("/v1/visits/999", "PATCH", { note: "x" });
+    await send("/v1/visits/saved/999", "DELETE", {});
+    expect(version()).toBe(8);
+    expect((await get("/v1/visits/years")).headers.get("ETag")).toMatch(/^W\/"places-8-/);
+  });
+
+  it("leaves the sliding 30-day journeys window untagged", async () => {
+    const { get } = setup();
+    expect((await get("/v1/visits/journeys")).headers.get("ETag")).toBeNull();
+    expect((await get("/v1/visits/journeys?start=2026-01-01")).headers.get("ETag")).toBeTruthy();
+  });
+
+  it("works as before on a database without data_versions", async () => {
+    const { post, get } = setup({ versions: false });
+    expect((await post([stop("2026-11-24T16:37:32Z")])).status).toBe(200);
+    const res = await get(places);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("ETag")).toBeNull();
+    expect(res.headers.get("Cache-Control")).toBe("private, max-age=300");
+  });
+});
+
+describe("pages and errors", () => {
+  const at = (i: number) => ({ ...stop(`2026-11-2${i}T12:00:00Z`), arrived_at: `2026-11-2${i}T10:00:00Z`, source_key: `v${i}` });
+
+  it("pages visits newest first with next_cursor, keeping the old key", async () => {
+    const { post, get } = setup();
+    await post([at(1), at(2), at(3)]);
+    type Page = { visits: Array<{ source_key: string }>; items: Array<{ source_key: string }>; next_cursor: string | null; sources: unknown[] };
+    const one = await (await get("/v1/visits?limit=2")).json() as Page;
+    expect(one.items.map((v) => v.source_key)).toEqual(["v3", "v2"]);
+    expect(one.visits).toEqual(one.items);
+    expect(one.sources).toHaveLength(1);
+    expect(one.next_cursor).toBeTruthy();
+    const two = await (await get(`/v1/visits?limit=2&cursor=${one.next_cursor}`)).json() as Page;
+    expect(two.items.map((v) => v.source_key)).toEqual(["v1"]);
+    expect(two.next_cursor).toBeNull();
+  });
+
+  it("pages journeys oldest first", async () => {
+    const { send, get } = setup();
+    await send("/v1/visits/journeys", "POST", { journeys: [1, 2, 3].map((i) => ({ started_at: `2026-11-2${i}T10:00:00Z`, mode: "walking", source: "phone" })) });
+    type Page = { journeys: Array<{ started_at: string }>; items: Array<{ started_at: string }>; next_cursor: string | null };
+    const one = await (await get("/v1/visits/journeys?start=2026-11-01&end=2026-12-01&limit=2")).json() as Page;
+    expect(one.items.map((j) => j.started_at.slice(0, 10))).toEqual(["2026-11-21", "2026-11-22"]);
+    expect(one.journeys).toEqual(one.items);
+    const two = await (await get(`/v1/visits/journeys?start=2026-11-01&end=2026-12-01&limit=2&cursor=${one.next_cursor}`)).json() as Page;
+    expect(two.items.map((j) => j.started_at.slice(0, 10))).toEqual(["2026-11-23"]);
+    expect(two.next_cursor).toBeNull();
+  });
+
+  it("answers errors in the one shape", async () => {
+    const { get, send } = setup();
+    const bad = await get("/v1/visits/at?key=nowhere");
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toEqual({ error: { code: "invalid", message: "key must look like 38.898,-77.037" } });
+    expect(bad.headers.get("ETag")).toBeNull();
+    expect(await (await get("/v1/visits?cursor=nonsense")).json()).toMatchObject({ error: { code: "invalid" } });
+    const missing = await send("/v1/visits/999", "PATCH", { note: "x" });
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({ error: { code: "not_found", message: "Not found" } });
   });
 });

@@ -1,45 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Env } from "../../types/env";
+import { allMigrations, testD1, type Sqlite } from "../helpers/d1";
 import siteRoute from "../../routes/site";
 import profileRoute from "../../routes/profile";
 import settingsRoute from "../../routes/settings";
 
-type SqliteStatement = {
-  all: (...bindings: unknown[]) => unknown[];
-  get: (...bindings: unknown[]) => unknown;
-  run: (...bindings: unknown[]) => { changes: number | bigint };
-};
-
-type SqliteDatabase = {
-  close: () => void;
-  exec: (sql: string) => void;
-  prepare: (sql: string) => SqliteStatement;
-};
-
-class SqliteD1Statement {
-  constructor(
-    private readonly database: SqliteDatabase,
-    readonly sql: string,
-    readonly bindings: unknown[] = [],
-  ) {}
-
-  bind(...bindings: unknown[]) {
-    return new SqliteD1Statement(this.database, this.sql, bindings);
-  }
-
-  async first<T>(): Promise<T | null> {
-    return (this.database.prepare(this.sql).get(...this.bindings) ?? null) as T | null;
-  }
-
-  async all<T>() {
-    return { results: this.database.prepare(this.sql).all(...this.bindings) as T[], success: true, meta: {} };
-  }
-
-  async run() {
-    const result = this.database.prepare(this.sql).run(...this.bindings);
-    return { success: true, results: [], meta: { changes: Number(result.changes) } };
-  }
-}
+type SqliteDatabase = Sqlite;
 
 describe("site control routes", () => {
   let database: SqliteDatabase;
@@ -50,15 +16,10 @@ describe("site control routes", () => {
   const getProfile = async () => (await (await profileRoute.request("/", undefined, env)).json()) as Record<string, unknown>;
   const getSettings = async () => (await (await settingsRoute.request("/", undefined, env)).json()) as Record<string, unknown>;
 
-  beforeEach(async () => {
-    // @ts-expect-error The Worker typecheck intentionally excludes Node test-runtime declarations.
-    const { DatabaseSync } = await import("node:sqlite");
-    database = new DatabaseSync(":memory:") as SqliteDatabase;
-    // @ts-expect-error The Worker typecheck intentionally excludes Node test-runtime declarations.
-    const { readdir, readFile } = await import("node:fs/promises");
-    const migrations = ((await readdir("migrations")) as string[]).filter((name) => name.endsWith(".sql")).sort();
-    for (const name of migrations) database.exec((await readFile(`migrations/${name}`, "utf8")) as string);
-    env = { DB: { prepare: (sql: string) => new SqliteD1Statement(database, sql) } } as unknown as Env;
+  beforeEach(() => {
+    const d1 = testD1({ migrations: "all" });
+    database = d1.db;
+    env = { DB: d1.DB } as Env;
   });
 
   afterEach(() => database.close());

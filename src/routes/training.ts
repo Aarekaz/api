@@ -1,12 +1,13 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
+import { fail } from "../lib/http";
 import { z } from "zod";
 import {
   authSecurity,
   dateSchema,
   dateTimeSchema,
-  okResponses,
+  structuredOkResponses,
   okSchema,
   openApiJsonRequestBody,
   openApiRegistry,
@@ -149,7 +150,7 @@ openApiRegistry.registerPath({
   path: "/v1/training/routines",
   summary: "List training routines",
   security: authSecurity,
-  responses: okResponses(z.object({ routines: z.array(routineSchema) })),
+  responses: structuredOkResponses(z.object({ routines: z.array(routineSchema) })),
 });
 
 openApiRegistry.registerPath({
@@ -158,7 +159,7 @@ openApiRegistry.registerPath({
   summary: "Get today's workout in the rotation",
   security: authSecurity,
   request: { query: z.object({ today: day.openapi({ description: "The phone's local date" }) }) },
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     routine_id: z.string().nullable(),
     state: z.enum(["first", "doing", "next", "rest", "none"]),
     picked: z.boolean().openapi({ description: "True when today is a day you picked instead of the plan" }),
@@ -179,7 +180,7 @@ openApiRegistry.registerPath({
       routine_id: z.string().max(64).nullable().openapi({ description: "null puts the day back on the plan" }),
     })),
   },
-  responses: okResponses(z.object({ ok: z.boolean(), day: day, routine_id: z.string().nullable() })),
+  responses: structuredOkResponses(z.object({ ok: z.boolean(), day: day, routine_id: z.string().nullable() })),
 });
 
 openApiRegistry.registerPath({
@@ -197,7 +198,7 @@ openApiRegistry.registerPath({
       position: z.number().optional(),
     })),
   },
-  responses: okResponses(routineSchema),
+  responses: structuredOkResponses(routineSchema),
 });
 
 openApiRegistry.registerPath({
@@ -206,7 +207,7 @@ openApiRegistry.registerPath({
   summary: "Archive a routine (history keeps it)",
   security: authSecurity,
   request: { params: z.object({ id: z.string() }) },
-  responses: okResponses(okSchema),
+  responses: structuredOkResponses(okSchema),
 });
 
 openApiRegistry.registerPath({
@@ -225,7 +226,7 @@ openApiRegistry.registerPath({
       unit: z.string().max(8).nullable().optional(),
     })),
   },
-  responses: okResponses(okSchema),
+  responses: structuredOkResponses(okSchema),
 });
 
 openApiRegistry.registerPath({
@@ -240,7 +241,7 @@ openApiRegistry.registerPath({
       set_number: z.coerce.number().int(),
     }),
   },
-  responses: okResponses(okSchema),
+  responses: structuredOkResponses(okSchema),
 });
 
 openApiRegistry.registerPath({
@@ -249,7 +250,7 @@ openApiRegistry.registerPath({
   summary: "Get one day's ticked sets and the previous time each exercise was done",
   security: authSecurity,
   request: { query: z.object({ day }) },
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     day,
     sets: z.array(setRowSchema),
     last: z.array(z.object({
@@ -273,7 +274,7 @@ openApiRegistry.registerPath({
       days: z.coerce.number().int().min(1).max(3650).optional().openapi({ description: "Default 90" }),
     }),
   },
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     days: z.array(z.object({
       day,
       routine_id: z.string().nullable(),
@@ -294,7 +295,7 @@ app.get("/routines", async (c) => {
 /** Today's workout in the rotation. ?today=YYYY-MM-DD (the phone's local date) */
 app.get("/next", async (c) => {
   const today = c.req.query("today");
-  if (!isDay(today)) return c.json({ error: "today must look like 2026-11-24" }, 400);
+  if (!isDay(today)) return fail(c, 400, "today must look like 2026-11-24");
   const { results } = await c.env.DB.prepare("SELECT * FROM training_routines WHERE archived = 0 ORDER BY position, created_at").all();
   const routines = (results as Record<string, unknown>[]).map(present) as unknown as RotationRoutine[];
   const last = await c.env.DB.prepare(
@@ -308,7 +309,7 @@ app.get("/next", async (c) => {
 /** Do another day today (or rest). { day, routine_id } — routine_id null goes back to the plan. */
 app.put("/pick", async (c) => {
   const b = (await parseJson(c.req.raw)) as Record<string, unknown> | null;
-  if (!b || !isDay(b.day)) return c.json({ error: "Send day (2026-11-24) and routine_id (or null for the plan)" }, 400);
+  if (!b || !isDay(b.day)) return fail(c, 400, "Send day (2026-11-24) and routine_id (or null for the plan)");
   const id = str(b.routine_id, 64);
   if (id) {
     await c.env.DB.prepare(
@@ -324,7 +325,7 @@ app.put("/pick", async (c) => {
 app.put("/routines/:id", async (c) => {
   const body = (await parseJson(c.req.raw)) as Record<string, unknown> | null;
   const name = str(body?.name);
-  if (!body || !name) return c.json({ error: "A routine needs a name" }, 400);
+  if (!body || !name) return fail(c, 400, "A routine needs a name");
   const id = c.req.param("id").slice(0, 64);
   const now = new Date().toISOString();
   await c.env.DB.prepare(
@@ -347,7 +348,7 @@ app.post("/sets", async (c) => {
   const b = (await parseJson(c.req.raw)) as Record<string, unknown> | null;
   const exercise = str(b?.exercise);
   const set = num(b?.set_number);
-  if (!b || !exercise || !isDay(b.day) || set === null) return c.json({ error: "Send day, exercise and set_number" }, 400);
+  if (!b || !exercise || !isDay(b.day) || set === null) return fail(c, 400, "Send day, exercise and set_number");
   await c.env.DB.prepare(
     `INSERT INTO training_sets (routine_id, day, exercise, set_number, reps, weight, unit, done_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(day, exercise, set_number) DO UPDATE SET reps = excluded.reps, weight = excluded.weight, unit = excluded.unit, done_at = excluded.done_at`,
@@ -358,7 +359,7 @@ app.post("/sets", async (c) => {
 /** Untick a set. ?day=&exercise=&set_number= (only that one row) */
 app.delete("/sets", async (c) => {
   const day = c.req.query("day"), exercise = c.req.query("exercise"), set = Number(c.req.query("set_number"));
-  if (!isDay(day) || !exercise || !Number.isInteger(set)) return c.json({ error: "Send day, exercise and set_number" }, 400);
+  if (!isDay(day) || !exercise || !Number.isInteger(set)) return fail(c, 400, "Send day, exercise and set_number");
   await c.env.DB.prepare("DELETE FROM training_sets WHERE day = ? AND exercise = ? AND set_number = ?").bind(day, exercise, set).run();
   return c.json({ ok: true });
 });
@@ -366,7 +367,7 @@ app.delete("/sets", async (c) => {
 /** One day's ticked sets, plus the last time each of those exercises was done before it. ?day= */
 app.get("/day", async (c) => {
   const day = c.req.query("day");
-  if (!isDay(day)) return c.json({ error: "day must look like 2026-11-24" }, 400);
+  if (!isDay(day)) return fail(c, 400, "day must look like 2026-11-24");
   const sets = await c.env.DB.prepare("SELECT * FROM training_sets WHERE day = ? ORDER BY exercise, set_number").bind(day).all();
   const last = await c.env.DB.prepare(
     `SELECT s.exercise, s.day, s.set_number, s.reps, s.weight, s.unit FROM training_sets AS s

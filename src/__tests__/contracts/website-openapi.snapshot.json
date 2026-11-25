@@ -1,0 +1,1445 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Personal API",
+    "version": "0.4.0"
+  },
+  "paths": {
+    "/v1/profile": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/posts": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PostResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/photos": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PhotoResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/experience": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExperienceResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/education": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EducationResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/skills": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SkillResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/now": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NowResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/uses": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UsesItemResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/settings": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shelf": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ShelfItemResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/github": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHubResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/wakatime": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WakaTimeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/wakatime/hourly": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WakaTimeHourlyResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "EducationResponse": {
+        "type": "object",
+        "properties": {
+          "institution": {
+            "type": "string",
+            "minLength": 1
+          },
+          "degree": {
+            "type": "string",
+            "nullable": true
+          },
+          "field": {
+            "type": "string",
+            "nullable": true
+          },
+          "start_date": {
+            "type": "string",
+            "nullable": true
+          },
+          "end_date": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "published": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
+          },
+          "id": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "updated_at": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "institution",
+          "degree",
+          "field",
+          "start_date",
+          "end_date",
+          "description",
+          "published",
+          "id",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "ExperienceResponse": {
+        "type": "object",
+        "properties": {
+          "company": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "start_date": {
+            "type": "string",
+            "nullable": true
+          },
+          "end_date": {
+            "type": "string",
+            "nullable": true
+          },
+          "employment_type": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "published": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
+          },
+          "id": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "updated_at": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "company",
+          "role",
+          "location",
+          "start_date",
+          "end_date",
+          "employment_type",
+          "description",
+          "published",
+          "id",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "GitHubResponse": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "daily": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "created_at": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "personal_count": {
+                  "type": "integer"
+                },
+                "work_count": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "date",
+                "count",
+                "created_at",
+                "personal_count",
+                "work_count"
+              ]
+            }
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "range_start": {
+                  "type": "string"
+                },
+                "range_end": {
+                  "type": "string"
+                },
+                "repo": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "range_start",
+                "range_end",
+                "repo",
+                "count"
+              ]
+            }
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "daily",
+          "repos"
+        ]
+      },
+      "NowResponse": {
+        "type": "object",
+        "properties": {
+          "focus": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "availability": {
+            "type": "string",
+            "nullable": true
+          },
+          "mood": {
+            "type": "string",
+            "nullable": true
+          },
+          "current_song": {
+            "type": "string",
+            "nullable": true
+          },
+          "learning": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "projects": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {},
+                "status": {},
+                "description": {}
+              },
+              "additionalProperties": {}
+            }
+          },
+          "life": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "reading_goal": {
+            "type": "string",
+            "nullable": true
+          },
+          "last_updated": {
+            "type": "string",
+            "nullable": true
+          },
+          "id": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "PhotoResponse": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "thumb_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "width": {
+            "type": "integer",
+            "nullable": true
+          },
+          "height": {
+            "type": "integer",
+            "nullable": true
+          },
+          "shot_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "camera": {
+            "type": "string",
+            "nullable": true
+          },
+          "lens": {
+            "type": "string",
+            "nullable": true
+          },
+          "settings": {
+            "type": "string",
+            "nullable": true
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "tags": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "published": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
+          },
+          "id": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "updated_at": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "title",
+          "description",
+          "url",
+          "thumb_url",
+          "width",
+          "height",
+          "shot_at",
+          "camera",
+          "lens",
+          "settings",
+          "location",
+          "tags",
+          "published",
+          "id",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "PostResponse": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "summary": {
+            "type": "string",
+            "nullable": true
+          },
+          "content": {
+            "type": "string",
+            "nullable": true
+          },
+          "tags": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "published_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "published": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "updated_at": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "slug",
+          "title",
+          "summary",
+          "content",
+          "tags",
+          "published_at",
+          "pinned",
+          "id",
+          "published",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "ProfileResponse": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "bio": {
+            "type": "string",
+            "nullable": true
+          },
+          "handles": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "github": {},
+              "linkedin": {},
+              "twitter": {}
+            },
+            "additionalProperties": {}
+          },
+          "contact": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "email": {}
+            },
+            "additionalProperties": {}
+          },
+          "timezone": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatar_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "website": {
+            "type": "string",
+            "nullable": true
+          },
+          "image_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "image_alt": {
+            "type": "string",
+            "nullable": true
+          },
+          "summary": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ProjectResponse": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "links": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "sort_order": {
+            "type": "integer",
+            "nullable": true
+          },
+          "published": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
+          },
+          "id": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "updated_at": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "title",
+          "description",
+          "links",
+          "tags",
+          "status",
+          "sort_order",
+          "published",
+          "id",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "SettingsResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "public_fields": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "theme": {
+            "type": "string",
+            "nullable": true
+          },
+          "flags": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": {}
+          },
+          "shelf_config": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "sections": {
+                "type": "object",
+                "properties": {
+                  "links": {
+                    "type": "object",
+                    "properties": {
+                      "visible": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "visible"
+                    ]
+                  },
+                  "quotes": {
+                    "type": "object",
+                    "properties": {
+                      "visible": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "visible"
+                    ]
+                  },
+                  "visuals": {
+                    "type": "object",
+                    "properties": {
+                      "visible": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "visible"
+                    ]
+                  },
+                  "wallpapers": {
+                    "type": "object",
+                    "properties": {
+                      "visible": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "visible"
+                    ]
+                  },
+                  "books": {
+                    "type": "object",
+                    "properties": {
+                      "visible": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "visible"
+                    ]
+                  },
+                  "movies": {
+                    "type": "object",
+                    "properties": {
+                      "visible": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "visible"
+                    ]
+                  },
+                  "shows": {
+                    "type": "object",
+                    "properties": {
+                      "visible": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "visible"
+                    ]
+                  }
+                }
+              },
+              "hiddenItems": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              }
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "public_fields",
+          "theme",
+          "flags",
+          "shelf_config"
+        ]
+      },
+      "ShelfItemResponse": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "quote": {
+            "type": "string",
+            "nullable": true
+          },
+          "author": {
+            "type": "string",
+            "nullable": true
+          },
+          "source": {
+            "type": "string",
+            "nullable": true
+          },
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "image_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "drawer": {
+            "type": "string",
+            "nullable": true
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              {
+                "type": "object",
+                "nullable": true,
+                "enum": [
+                  null
+                ]
+              }
+            ]
+          },
+          "date_added": {
+            "type": "string",
+            "nullable": true
+          },
+          "published": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "library",
+              "reading",
+              "completed",
+              "want_to_read",
+              "paused",
+              "dnf",
+              "watched",
+              "watching",
+              "want_to_watch",
+              "dropped"
+            ]
+          },
+          "rating": {
+            "type": "number",
+            "nullable": true
+          },
+          "rating_scale": {
+            "type": "integer",
+            "nullable": true,
+            "enum": [
+              5,
+              10,
+              null
+            ]
+          },
+          "started_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "completed_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "last_watched_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "progress_current": {
+            "type": "number",
+            "nullable": true
+          },
+          "progress_total": {
+            "type": "number",
+            "nullable": true
+          },
+          "progress_unit": {
+            "type": "string",
+            "nullable": true
+          },
+          "favorite_rank": {
+            "type": "integer",
+            "nullable": true
+          },
+          "showcase": {
+            "type": "boolean"
+          },
+          "shelf_group": {
+            "type": "string",
+            "nullable": true
+          },
+          "display_order": {
+            "type": "integer",
+            "nullable": true
+          },
+          "cover_override_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "spine_image_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "goodreads_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "isbn": {
+            "type": "string",
+            "nullable": true
+          },
+          "apple_books_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "metadata": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": {}
+          },
+          "id": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "updated_at": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "quote",
+          "author",
+          "source",
+          "url",
+          "note",
+          "image_url",
+          "drawer",
+          "tags",
+          "date_added",
+          "published",
+          "status",
+          "rating",
+          "rating_scale",
+          "started_at",
+          "completed_at",
+          "last_watched_at",
+          "progress_current",
+          "progress_total",
+          "progress_unit",
+          "favorite_rank",
+          "showcase",
+          "shelf_group",
+          "display_order",
+          "cover_override_url",
+          "spine_image_url",
+          "goodreads_id",
+          "isbn",
+          "apple_books_id",
+          "metadata",
+          "id",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "SkillResponse": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string",
+            "minLength": 1
+          },
+          "items": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "published": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
+          },
+          "id": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "updated_at": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "category",
+          "items",
+          "published",
+          "id",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "UsesItemResponse": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "published": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
+          },
+          "id": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "updated_at": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "category",
+          "name",
+          "url",
+          "note",
+          "published",
+          "id",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "WakaTimeHourlyResponse": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "hours": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string"
+                },
+                "hour": {
+                  "type": "integer"
+                },
+                "seconds": {
+                  "type": "number",
+                  "nullable": true
+                },
+                "languages": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "number"
+                  }
+                }
+              },
+              "required": [
+                "date",
+                "hour",
+                "seconds",
+                "languages"
+              ]
+            }
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "hours"
+        ]
+      },
+      "WakaTimeResponse": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string"
+                },
+                "total_seconds": {
+                  "type": "number",
+                  "nullable": true
+                },
+                "total_minutes": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "timezone": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "created_at": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "date",
+                "total_seconds",
+                "total_minutes",
+                "timezone",
+                "created_at"
+              ]
+            }
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "total_seconds": {
+                  "type": "number",
+                  "nullable": true
+                },
+                "total_minutes": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "percent": {
+                  "type": "number",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "date",
+                "name",
+                "total_seconds",
+                "total_minutes",
+                "percent"
+              ]
+            }
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "total_seconds": {
+                  "type": "number",
+                  "nullable": true
+                },
+                "total_minutes": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "percent": {
+                  "type": "number",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "date",
+                "name",
+                "total_seconds",
+                "total_minutes",
+                "percent"
+              ]
+            }
+          },
+          "editors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "total_seconds": {
+                  "type": "number",
+                  "nullable": true
+                },
+                "total_minutes": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "percent": {
+                  "type": "number",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "date",
+                "name",
+                "total_seconds",
+                "total_minutes",
+                "percent"
+              ]
+            }
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "days",
+          "languages",
+          "projects",
+          "editors"
+        ]
+      }
+    }
+  }
+}

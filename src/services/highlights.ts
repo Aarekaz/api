@@ -34,12 +34,14 @@ function text(value: unknown, field: string, max: number, required = false): str
   return trimmed || null;
 }
 
-export async function listHighlights(env: Env, documentId?: string, limit = 500) {
-  const where = documentId ? "h.document_id = ? AND " : "";
+/** Highlights newest first: `limit + 1` of them, so the caller can tell another page follows. `after` is the last page's [created_at, id]. */
+export async function listHighlights(env: Env, documentId?: string, limit = 500, after?: [string, string] | null) {
+  const where = (documentId ? "h.document_id = ? AND " : "") + (after ? "(h.created_at < ? OR (h.created_at = ? AND h.id < ?)) AND " : "");
   const binds: unknown[] = documentId ? [documentId] : [];
+  if (after) binds.push(after[0], after[0], after[1]);
   const { results } = await env.DB.prepare(
-    `${SELECT} WHERE ${where}h.deleted_at IS NULL AND d.deleted_at IS NULL ORDER BY h.created_at DESC LIMIT ?`,
-  ).bind(...binds, Math.min(Math.max(limit, 1), 2000)).all<HighlightRow>();
+    `${SELECT} WHERE ${where}h.deleted_at IS NULL AND d.deleted_at IS NULL ORDER BY h.created_at DESC, h.id DESC LIMIT ?`,
+  ).bind(...binds, Math.min(Math.max(limit, 1), 2000) + 1).all<HighlightRow>();
   return results;
 }
 

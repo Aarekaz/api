@@ -370,15 +370,18 @@ export async function getLink(env: Env, id: string): Promise<LinkRow> {
 export type LinkListState = "unread" | "read" | "starred" | "all" | "inbox" | "archived";
 
 /** Saved links, newest first. `inbox` is `unread` and `archived` is `read` under their plan names. */
-export async function listLinks(env: Env, state: LinkListState = "all", limit = 500, tag?: string): Promise<LinkRow[]> {
+/** Links newest first: `limit + 1` of them, so the caller can tell another page follows. `after` is the last page's [created_at, id]. */
+export async function listLinks(env: Env, state: LinkListState = "all", limit = 500, tag?: string, after?: [string, string] | null): Promise<LinkRow[]> {
   const filter = state === "unread" || state === "inbox" ? " AND l.read_at IS NULL"
     : state === "read" || state === "archived" ? " AND l.read_at IS NOT NULL"
     : state === "starred" ? " AND json_extract(d.frontmatter_json, '$.starred_at') IS NOT NULL" : "";
   const tagFilter = tag ? " AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(d.frontmatter_json, '$.tags'), '[]')) t WHERE t.value = ?)" : "";
   const binds: unknown[] = tag ? [tag.trim().toLowerCase()] : [];
+  const afterFilter = after ? " AND (d.created_at < ? OR (d.created_at = ? AND d.id < ?))" : "";
+  if (after) binds.push(after[0], after[0], after[1]);
   const { results } = await env.DB.prepare(
-    `${LIST_SELECT} WHERE d.deleted_at IS NULL${filter}${tagFilter} ORDER BY d.created_at DESC LIMIT ?`,
-  ).bind(...binds, Math.min(Math.max(limit, 1), 2000)).all<LinkRow>();
+    `${LIST_SELECT} WHERE d.deleted_at IS NULL${filter}${tagFilter}${afterFilter} ORDER BY d.created_at DESC, d.id DESC LIMIT ?`,
+  ).bind(...binds, Math.min(Math.max(limit, 1), 2000) + 1).all<LinkRow>();
   return results;
 }
 
@@ -827,8 +830,12 @@ export async function fetchArticle(env: Env, id: string, now = new Date(), page?
   return getLink(env, id);
 }
 
-/** Saves a URL once. Saving it again returns the same link (and brings it back if it was deleted). */
-export async function saveLink(env: Env, rawUrl: string, now = new Date()): Promise<LinkRow> {
+/**
+ * Saves a URL once. Saving it again returns the same link (and brings it back if it was deleted).
+ * A new link's page is fetched before this returns, unless `later` is given (the request's
+ * waitUntil): then it's fetched after the reply and the link comes back with fetched_at null.
+ */
+export async function saveLink(env: Env, rawUrl: string, now = new Date(), later?: (work: Promise<unknown>) => void): Promise<LinkRow> {
   const url = normalizeUrl(rawUrl);
   const existing = await env.DB.prepare("SELECT document_id FROM links WHERE url = ?").bind(url).first<{ document_id: string }>();
   if (existing) {
@@ -839,7 +846,9 @@ export async function saveLink(env: Env, rawUrl: string, now = new Date()): Prom
   const host = new URL(url).hostname.replace(/^www\./, "");
   const doc = await createDocument(env, { kind: "link", title: host, body: "", folder: "Links", frontmatter: { url } }, now);
   await env.DB.prepare("INSERT INTO links (document_id, url, site) VALUES (?, ?, ?)").bind(doc.id, url, host).run();
-  return fetchArticle(env, doc.id, now);
+  if (!later) return fetchArticle(env, doc.id, now);
+  later(fetchArticle(env, doc.id, now).catch((error) => console.error("link fetch failed", error)));
+  return getLink(env, doc.id);
 }
 
 export async function markRead(env: Env, id: string, read: boolean, now = new Date()): Promise<LinkRow> {

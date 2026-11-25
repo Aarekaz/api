@@ -1,7 +1,6 @@
 // @ts-expect-error vitest runs in Node; the Worker tsconfig has no Node types.
 import { readFileSync } from "node:fs";
-// @ts-expect-error same as above (node:sqlite is Node's built-in SQLite).
-import { DatabaseSync } from "node:sqlite";
+import { testD1 } from "../helpers/d1";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import type { Env } from "../../types/env";
@@ -13,37 +12,14 @@ import { linkKind } from "../../services/links";
 // article, tags, and the one error shape, on a real SQLite database.
 
 function d1(): D1Database {
-  const db = new DatabaseSync(":memory:");
+  const { db, DB } = testD1();
   db.exec(`CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL,
     summary TEXT, content TEXT, tags_json TEXT, published_at TEXT, pinned INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT);`);
   db.exec(readFileSync("migrations/0025_documents.sql", "utf8"));
   db.exec(readFileSync("migrations/0026_highlights.sql", "utf8"));
   db.exec(readFileSync("migrations/0036_links_state.sql", "utf8"));
   db.exec(readFileSync("migrations/0038_reading_days.sql", "utf8"));
-  const statement = (sql: string, args: unknown[] = []) => ({
-    bind: (...next: unknown[]) => statement(sql, next),
-    async run() {
-      const info = db.prepare(sql).run(...args) as { changes: number; lastInsertRowid: number };
-      return { meta: { changes: Number(info.changes), last_row_id: Number(info.lastInsertRowid) } };
-    },
-    async first<T>() { return (db.prepare(sql).get(...args) as T) ?? null; },
-    async all<T>() { return { results: db.prepare(sql).all(...args) as T[] }; },
-  });
-  return {
-    prepare: (sql: string) => statement(sql),
-    async batch(list: Array<{ run: () => Promise<unknown> }>) {
-      db.exec("BEGIN");
-      try {
-        const out = [];
-        for (const s of list) out.push(await s.run());
-        db.exec("COMMIT");
-        return out;
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
-      }
-    },
-  } as unknown as D1Database;
+  return DB;
 }
 
 const PAGE = `<html><head><meta property="og:title" content="On Reading Slowly"><meta property="og:site_name" content="Field Notes"></head>
@@ -84,6 +60,38 @@ describe("links: inbox and archive", () => {
     for (const key of ["url", "site", "excerpt", "reading_minutes", "fetched_at", "image_url", "icon_url", "starred_at", "fetch_error", "visibility", "created_at", "updated_at", "version", "body"]) {
       expect(link).toHaveProperty(key);
     }
+  });
+
+  it("answers a save at once and reads the page after the reply (waitUntil)", async () => {
+    const { env } = setup();
+    const root = new Hono<{ Bindings: Env }>();
+    root.route("/v1/links", linksRoute);
+    const pending: Promise<unknown>[] = [];
+    const ctx = { waitUntil: (p: Promise<unknown>) => { pending.push(p); }, passThroughOnException() {}, props: {} } as unknown as ExecutionContext;
+    const res = await root.request("/v1/links", { method: "POST", body: JSON.stringify({ url: "https://example.com/later" }), headers: { "Content-Type": "application/json" } }, env, ctx);
+    expect(res.status).toBe(201);
+    const saved = await res.json() as Link & { fetched_at: string | null; body?: string };
+    expect(saved.fetched_at).toBeNull();
+    expect(saved).not.toHaveProperty("body");
+    expect(saved.title).toBe("example.com");
+    expect(pending).toHaveLength(1);
+    await Promise.all(pending);
+    const read = await (await root.request(`/v1/links/${saved.id}`, {}, env)).json() as Link & { fetched_at: string | null };
+    expect(read.title).toBe("On Reading Slowly");
+    expect(read.fetched_at).toBeTruthy();
+  });
+
+  it("pages the list with next_cursor, keeping links", async () => {
+    const { send, save } = setup();
+    for (const n of [1, 2, 3]) { await save(`https://example.com/${n}`); await new Promise((r) => setTimeout(r, 2)); }
+    type Page = { links: Link[]; items: Link[]; next_cursor: string | null };
+    const one = await (await send("/v1/links?limit=2")).json() as Page;
+    expect(one.links).toEqual(one.items);
+    expect(one.items).toHaveLength(2);
+    const two = await (await send(`/v1/links?limit=2&cursor=${one.next_cursor}`)).json() as Page;
+    expect(two.items).toHaveLength(1);
+    expect(two.next_cursor).toBeNull();
+    expect(new Set([...one.items, ...two.items].map((l) => l.id)).size).toBe(3);
   });
 
   it("archives and unarchives, keeping read_at in step and the first finish time", async () => {

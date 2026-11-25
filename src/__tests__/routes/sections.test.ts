@@ -1,7 +1,6 @@
 // @ts-expect-error vitest runs in Node; the Worker tsconfig has no Node types.
 import { readFileSync } from "node:fs";
-// @ts-expect-error node:sqlite is Node's built-in SQLite.
-import { DatabaseSync } from "node:sqlite";
+import { testD1 } from "../helpers/d1";
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import type { Env } from "../../types/env";
@@ -11,36 +10,12 @@ import { normalizePath, prefixes, rebase } from "../../services/sections";
 
 /** A real SQLite database behind the subset of the D1 API the code uses. */
 function d1() {
-  const db = new DatabaseSync(":memory:");
+  const { db, DB } = testD1();
   db.exec(`CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL,
     summary TEXT, content TEXT, tags_json TEXT, published_at TEXT, pinned INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT);`);
   db.exec(readFileSync("migrations/0025_documents.sql", "utf8"));
   db.exec(readFileSync("migrations/0035_sections.sql", "utf8"));
-  const statement = (sql: string, args: unknown[] = []) => ({
-    bind: (...next: unknown[]) => statement(sql, next),
-    async run() {
-      const info = db.prepare(sql).run(...args) as { changes: number; lastInsertRowid: number };
-      return { meta: { changes: Number(info.changes), last_row_id: Number(info.lastInsertRowid) } };
-    },
-    async first<T>() { return (db.prepare(sql).get(...args) as T) ?? null; },
-    async all<T>() { return { results: db.prepare(sql).all(...args) as T[] }; },
-  });
-  const d1 = {
-    prepare: (sql: string) => statement(sql),
-    async batch(list: Array<{ run: () => Promise<unknown> }>) {
-      db.exec("BEGIN");
-      try {
-        const out = [];
-        for (const s of list) out.push(await s.run());
-        db.exec("COMMIT");
-        return out;
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
-      }
-    },
-  } as unknown as D1Database;
-  return { d1, db };
+  return { d1: DB, db };
 }
 
 type Section = { path: string; name: string; parent: string; depth: number; count: number; total: number };
@@ -202,12 +177,12 @@ describe("/v1/sections", () => {
     expect(JSON.stringify(db.prepare("SELECT * FROM documents WHERE id = ?").get(draft.id))).toBe(docBefore);
   });
 
-  it("leaves the documents list shape as it was", async () => {
+  it("leaves the documents list shape as it was (plus items and next_cursor)", async () => {
     const { send, note } = setup();
     await note("Kept", "Library");
     await send("/v1/sections", "PATCH", { path: "Library", name: "Shelf" });
     const list = (await (await send("/v1/documents")).json()) as { documents: Record<string, unknown>[]; server_time: string };
-    expect(Object.keys(list).sort()).toEqual(["documents", "server_time"]);
+    expect(Object.keys(list).sort()).toEqual(["documents", "items", "next_cursor", "server_time"]);
     expect(Object.keys(list.documents[0]).sort()).toEqual(
       ["created_at", "folder", "id", "kind", "post_id", "slug", "source", "status", "title", "updated_at", "version", "visibility"],
     );

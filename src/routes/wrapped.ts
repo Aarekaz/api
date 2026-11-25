@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import type { Env } from "../types/env";
 import { dateOnly, addDays } from "../utils/date";
 import { buildWrapped } from "../services/wakatime";
@@ -44,6 +45,15 @@ openApiRegistry.registerPath({
   responses: okResponses(genericObjectSchema),
 });
 
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/wrapped/{year}",
+  summary: "Get one calendar year's wrapped (2000 to next year)",
+  security: authSecurity,
+  request: { params: z.object({ year: z.string().regex(/^\d{4}$/).openapi({ example: "2025" }) }) },
+  responses: okResponses(genericObjectSchema),
+});
+
 // Route handlers
 app.get("/day", async (c) => {
   const today = dateOnly(new Date());
@@ -62,8 +72,20 @@ app.get("/month", async (c) => {
   return c.json(await buildWrapped(c.env, start, end));
 });
 
+// The website reads /2026: it stays its own route, exactly as it was.
 app.get("/2026", async (c) => {
   return c.json(await buildWrapped(c.env, "2026-01-01", "2026-12-31"));
+});
+
+// Any other year. Registered after /day, /week, /month and /2026 so it never
+// shadows them; anything that isn't a four-digit year is refused.
+app.get("/:year", async (c) => {
+  const raw = c.req.param("year");
+  const year = /^\d{4}$/.test(raw) ? Number(raw) : NaN;
+  if (!(year >= 2000 && year <= new Date().getUTCFullYear() + 1)) {
+    return c.json({ error: "year must be a four-digit year from 2000 to next year" }, 400);
+  }
+  return c.json(await buildWrapped(c.env, `${year}-01-01`, `${year}-12-31`));
 });
 
 export default app;

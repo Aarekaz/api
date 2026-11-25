@@ -2,10 +2,13 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
+import { cursorFrom, failWith, limitFrom, list, page } from "../lib/http";
 import { parseJson } from "../utils/json";
 import { ulid } from "../services/documents-core";
 import {
   authSecurity,
+  cursorQuery,
+  pageFields,
   dateSchema,
   imageUploadSchema,
   okSchema,
@@ -92,15 +95,8 @@ export function presentRecipe(row: Row, log?: LogRow[]) {
 
 const presentLog = (l: LogRow) => ({ id: l.id, recipe_id: l.recipe_id, cooked_on: l.cooked_on, rating: l.rating, note: l.note, servings: l.servings, created_at: l.created_at });
 
-/** One error shape for new routes: { error: { code, message } }. */
-function fail(c: Context<{ Bindings: Env }>, error: unknown) {
-  if (error instanceof z.ZodError) {
-    return c.json({ error: { code: "invalid", message: error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ") } }, 400);
-  }
-  if (error instanceof RecipeError) return c.json({ error: { code: error.code, message: error.message } }, error.status);
-  console.error("recipes route failed", error);
-  return c.json({ error: { code: "server", message: "Recipe request failed" } }, 500);
-}
+/** One error shape, { error: { code, message } } (lib/http.ts). */
+const fail = (c: Context<{ Bindings: Env }>, error: unknown) => failWith(c, error, "Recipe request");
 
 // Each recipe with how often it was cooked, when last, and its average rating.
 const SELECT = `SELECT r.*, (SELECT COUNT(*) FROM recipe_log l WHERE l.recipe_id = r.id) AS cooked_count,
@@ -231,9 +227,10 @@ openApiRegistry.registerPath({
       tag: z.string().optional(),
       favorite: z.enum(["1"]).optional(),
       limit: z.coerce.number().int().min(1).max(2000).optional().openapi({ description: "Default 1000" }),
+      cursor: cursorQuery,
     }),
   },
-  responses: structuredOkResponses(z.object({ items: z.array(recipeSchema) })),
+  responses: structuredOkResponses(z.object(pageFields(recipeSchema))),
 });
 
 openApiRegistry.registerPath({
@@ -252,9 +249,10 @@ openApiRegistry.registerPath({
   request: {
     query: z.object({
       limit: z.coerce.number().int().min(1).max(2000).optional().openapi({ description: "Default 200" }),
+      cursor: cursorQuery,
     }),
   },
-  responses: structuredOkResponses(z.object({ items: z.array(recipeLogSchema.extend({ title: z.string() })) })),
+  responses: structuredOkResponses(z.object(pageFields(recipeLogSchema.extend({ title: z.string() })))),
 });
 
 openApiRegistry.registerPath({
@@ -374,10 +372,13 @@ app.get("/", async (c) => {
     const tag = c.req.query("tag")?.trim();
     if (tag) { where.push("EXISTS (SELECT 1 FROM json_each(r.tags_json) t WHERE lower(t.value) = lower(?))"); args.push(tag); }
     if (c.req.query("favorite") === "1") where.push("r.favorite = 1");
-    const limit = Math.min(Math.max(Number(c.req.query("limit")) || 1000, 1), 2000);
-    const { results } = await c.env.DB.prepare(`${SELECT} WHERE ${where.join(" AND ")} ORDER BY r.updated_at DESC LIMIT ?`)
-      .bind(...args, limit).all<Row>();
-    return c.json({ items: results.map((r) => presentRecipe(r)) });
+    const after = cursorFrom(c, 2);
+    if (after) { where.push("(r.updated_at < ? OR (r.updated_at = ? AND r.id < ?))"); args.push(after[0], after[0], after[1]); }
+    const limit = limitFrom(c, 1000, 2000);
+    const { results } = await c.env.DB.prepare(`${SELECT} WHERE ${where.join(" AND ")} ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`)
+      .bind(...args, limit + 1).all<Row>();
+    const { items, next_cursor } = page(results, limit, (r) => [r.updated_at, r.id]);
+    return list(c, "items", items.map((r) => presentRecipe(r)), next_cursor);
   } catch (error) {
     return fail(c, error);
   }
@@ -399,12 +400,15 @@ app.get("/tags", async (c) => {
 /** GET /v1/recipes/log?limit= : what you cooked, newest first, across every recipe. */
 app.get("/log", async (c) => {
   try {
-    const limit = Math.min(Math.max(Number(c.req.query("limit")) || 200, 1), 2000);
+    const limit = limitFrom(c, 200, 2000);
+    const after = cursorFrom(c, 2);
     const { results } = await c.env.DB.prepare(
       `SELECT l.*, r.title FROM recipe_log l JOIN recipes r ON r.id = l.recipe_id WHERE r.deleted_at IS NULL
+       ${after ? "AND (l.cooked_on < ? OR (l.cooked_on = ? AND l.id < ?))" : ""}
        ORDER BY l.cooked_on DESC, l.id DESC LIMIT ?`,
-    ).bind(limit).all<LogRow & { title: string }>();
-    return c.json({ items: results.map((l) => ({ ...presentLog(l), title: l.title })) });
+    ).bind(...(after ? [after[0], after[0], after[1]] : []), limit + 1).all<LogRow & { title: string }>();
+    const { items, next_cursor } = page(results, limit, (l) => [l.cooked_on, l.id]);
+    return list(c, "items", items.map((l) => ({ ...presentLog(l), title: l.title })), next_cursor);
   } catch (error) {
     return fail(c, error);
   }

@@ -2,10 +2,13 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
+import { cursorFrom, failWith, limitFrom, list, page } from "../lib/http";
 import { parseJson } from "../utils/json";
 import { ulid } from "../services/documents-core";
 import {
   authSecurity,
+  cursorQuery,
+  pageFields,
   dateSchema,
   imageUploadSchema,
   okSchema,
@@ -178,18 +181,8 @@ function feelings(
   };
 }
 
-/** One error shape for new routes: { error: { code, message } }. */
-function fail(c: Context<{ Bindings: Env }>, error: unknown) {
-  if (error instanceof z.ZodError) {
-    return c.json({ error: { code: "invalid", message: error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ") } }, 400);
-  }
-  if (error instanceof DocumentError) {
-    const code = error.status === 404 ? "not_found" : error.status === 409 ? "conflict" : "invalid";
-    return c.json({ error: { code, message: error.message } }, error.status);
-  }
-  console.error("journal route failed", error);
-  return c.json({ error: { code: "server", message: "Journal request failed" } }, 500);
-}
+/** One error shape, { error: { code, message } } (lib/http.ts). */
+const fail = (c: Context<{ Bindings: Env }>, error: unknown) => failWith(c, error, "Journal request");
 
 const iso = (s: string) => new Date(s).toISOString();
 const WHEN = "COALESCE(json_extract(frontmatter_json, '$.happened_at'), created_at)";
@@ -349,9 +342,11 @@ app.get("/on-this-day", async (c) => {
 app.get("/", async (c) => {
   try {
     const from = c.req.query("from"), to = c.req.query("to"), q = c.req.query("q")?.trim();
-    const limit = Math.min(Math.max(Number(c.req.query("limit")) || 500, 1), 2000);
+    const limit = limitFrom(c, 500, 2000);
+    const after = cursorFrom(c, 2);
     const where = [LIVE];
     const args: unknown[] = [];
+    if (after) { where.push(`(${WHEN} < ? OR (${WHEN} = ? AND id < ?))`); args.push(after[0], after[0], after[1]); }
     if (from && !Number.isNaN(Date.parse(from))) { where.push(`${WHEN} >= ?`); args.push(iso(from)); }
     if (to && !Number.isNaN(Date.parse(to))) { where.push(`${WHEN} < ?`); args.push(iso(to)); }
     if (q) {
@@ -363,9 +358,10 @@ app.get("/", async (c) => {
       }
     }
     const { results } = await c.env.DB.prepare(
-      `SELECT * FROM documents WHERE ${where.join(" AND ")} ORDER BY ${WHEN} DESC LIMIT ?`,
-    ).bind(...args, limit).all<DocumentRow>();
-    return c.json({ items: results.map(presentEntry) });
+      `SELECT *, ${WHEN} AS sort_at FROM documents WHERE ${where.join(" AND ")} ORDER BY ${WHEN} DESC, id DESC LIMIT ?`,
+    ).bind(...args, limit + 1).all<DocumentRow & { sort_at: string }>();
+    const { items, next_cursor } = page(results, limit, (row) => [row.sort_at, row.id]);
+    return list(c, "items", items.map(presentEntry), next_cursor);
   } catch (error) {
     return fail(c, error);
   }
@@ -555,9 +551,10 @@ openApiRegistry.registerPath({
       to: z.string().optional().openapi({ description: "ISO time" }),
       q: z.string().optional().openapi({ description: "Every word must appear in the text, place or prompt" }),
       limit: z.coerce.number().int().min(1).max(2000).optional().openapi({ description: "Default 500" }),
+      cursor: cursorQuery,
     }),
   },
-  responses: structuredOkResponses(z.object({ items: z.array(entrySchema) })),
+  responses: structuredOkResponses(z.object(pageFields(entrySchema))),
 });
 
 openApiRegistry.registerPath({

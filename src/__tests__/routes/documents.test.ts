@@ -1,7 +1,6 @@
 // @ts-expect-error vitest runs in Node; the Worker tsconfig has no Node types.
 import { readFileSync } from "node:fs";
-// @ts-expect-error same as above (node:sqlite is Node's built-in SQLite).
-import { DatabaseSync } from "node:sqlite";
+import { testD1 } from "../helpers/d1";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import type { Env } from "../../types/env";
@@ -20,7 +19,7 @@ import { classify, matchPost, splitFrontmatter, stripDatePrefix, toMarkdown, uli
 
 /** A real SQLite database behind the subset of the D1 API the code uses. */
 function d1(): D1Database {
-  const db = new DatabaseSync(":memory:");
+  const { db, DB } = testD1();
   db.exec(`CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL,
     summary TEXT, content TEXT, tags_json TEXT, published_at TEXT, pinned INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT);`);
   db.exec(readFileSync("migrations/0025_documents.sql", "utf8"));
@@ -38,30 +37,7 @@ function d1(): D1Database {
   db.exec(`CREATE TABLE location_history (id INTEGER PRIMARY KEY AUTOINCREMENT, latitude REAL NOT NULL, longitude REAL NOT NULL,
     altitude REAL, accuracy REAL, speed REAL, heading REAL, recorded_at TEXT NOT NULL, address TEXT, city TEXT, state TEXT,
     country TEXT, postal_code TEXT, label TEXT, notes TEXT, source TEXT, created_at TEXT NOT NULL, updated_at TEXT);`);
-  const statement = (sql: string, args: unknown[] = []) => ({
-    bind: (...next: unknown[]) => statement(sql, next),
-    async run() {
-      const info = db.prepare(sql).run(...args) as { changes: number; lastInsertRowid: number };
-      return { meta: { changes: Number(info.changes), last_row_id: Number(info.lastInsertRowid) } };
-    },
-    async first<T>() { return (db.prepare(sql).get(...args) as T) ?? null; },
-    async all<T>() { return { results: db.prepare(sql).all(...args) as T[] }; },
-  });
-  return {
-    prepare: (sql: string) => statement(sql),
-    async batch(list: Array<{ run: () => Promise<unknown> }>) {
-      db.exec("BEGIN");
-      try {
-        const out = [];
-        for (const s of list) out.push(await s.run());
-        db.exec("COMMIT");
-        return out;
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
-      }
-    },
-  } as unknown as D1Database;
+  return DB;
 }
 
 function app() {
@@ -122,10 +98,32 @@ describe("documents routes", () => {
 
     const stale = await root.request(`/v1/documents/${created.id}`, { ...json({ body: "old tab", version: 1 }), method: "PUT" }, env);
     expect(stale.status).toBe(409);
-    expect(((await stale.json()) as { latest: { body: string } }).latest.body).toBe("new text");
+    const conflict = (await stale.json()) as { latest: { body: string }; error: { code: string; message: string } };
+    expect(conflict.latest.body).toBe("new text");
+    expect(conflict.error).toEqual({ code: "conflict", message: "This document changed since you loaded it" });
 
     const versions = await (await root.request(`/v1/documents/${created.id}/versions`, {}, env)).json() as { versions: unknown[] };
     expect(versions.versions).toHaveLength(1);
+  });
+
+  it("pages the list with next_cursor, newest change first, keeping documents", async () => {
+    const env = { DB: d1() } as Env;
+    const root = app();
+    for (const title of ["One", "Two", "Three"]) await root.request("/v1/documents", json({ kind: "note", title, body: `# ${title}\n` }), env);
+    type Page = { documents: Array<{ title: string }>; items: Array<{ title: string }>; next_cursor: string | null; server_time: string };
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const res: Page = await (await root.request(`/v1/documents?limit=2${cursor ? `&cursor=${cursor}` : ""}`, {}, env)).json() as Page;
+      expect(res.documents).toEqual(res.items);
+      expect(res.server_time).toBeTruthy();
+      seen.push(...res.items.map((d) => d.title));
+      cursor = res.next_cursor;
+    } while (cursor);
+    expect(seen.sort()).toEqual(["One", "Three", "Two"]);
+    const bad = await root.request("/v1/documents?cursor=%%%", {}, env);
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toMatchObject({ error: { code: "invalid" } });
   });
 
   it("searches titles and bodies", async () => {
@@ -153,6 +151,15 @@ describe("documents routes", () => {
     await root.request(`/v1/documents/${doc.id}/unpublish`, { method: "POST" }, env);
     const after = await env.DB.prepare("SELECT published_at FROM posts WHERE id = ?").bind(published.post_id).first<{ published_at: string | null }>();
     expect(after?.published_at).toBeNull();
+
+    // Publishing again reuses the same post, and a second publish keeps the first date.
+    const again = await (await root.request(`/v1/documents/${doc.id}/publish`, { method: "POST" }, env)).json() as { post_id: number };
+    expect(again.post_id).toBe(published.post_id);
+    const first = await env.DB.prepare("SELECT published_at FROM posts WHERE id = ?").bind(published.post_id).first<{ published_at: string }>();
+    await root.request(`/v1/documents/${doc.id}/publish`, { method: "POST" }, env);
+    const kept = await env.DB.prepare("SELECT published_at FROM posts WHERE id = ?").bind(published.post_id).first<{ published_at: string }>();
+    expect(kept?.published_at).toBe(first?.published_at);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM posts").first()).toEqual({ n: 1 });
   });
 
   it("captures each thought as its own note in Inbox", async () => {

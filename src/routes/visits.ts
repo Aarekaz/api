@@ -1,54 +1,29 @@
 import { Hono } from "hono";
-import { applySaved, buildChapters, type MonthCount, type MonthMode, type MonthPlace, type SavedPlace } from "../services/chapters";
 import type { Env } from "../types/env";
-import { parseJson } from "../utils/json";
 import { z } from "zod";
 import {
   authSecurity,
   dateSchema,
   openApiJsonRequestBody,
   openApiRegistry,
-  okResponses,
+  structuredOkResponses,
 } from "../schemas/openapi";
+import { cursorFrom, fail, failWith, limitFrom, list, notModified, ok, page, shortHash, body as readBody } from "../lib/http";
+import { dataVersion } from "../services/data-versions";
+import {
+  addJourneys, addSaved, addVisits, chapters, cleanJourney, cleanSaved, cleanVisit, correctJourneyMode, correctVisit,
+  deleteSaved, flights, footprints, isDate, listJourneys, listPlaces, listSaved, listTrips, listVisits, offsetOf,
+  onThisDay, PLACE_KEY, saveNames, str, TRAVEL_MODES, updateSaved, visitDay, visitDays, visitMonths, visitSources,
+  visitsAt, visitYears, type CleanJourney, type CleanVisit, type JourneyInput, type VisitInput,
+} from "../services/places";
+
+export { cleanJourney, cleanSaved, cleanVisit, findTrips, TRAVEL_MODES, type AwayDay } from "../services/places";
 
 // /v1/visits: places you've been. The phone posts visits as they happen;
 // imports (photos, Google Timeline) post them in batches. Safe to repeat.
+// The SQL is in services/places.ts. App-only: errors are { error: { code, message } },
+// and every GET carries an ETag from the "places" data version (304 when unchanged).
 const app = new Hono<{ Bindings: Env }>();
-
-interface VisitInput {
-  latitude?: unknown; longitude?: unknown; arrived_at?: unknown; departed_at?: unknown;
-  place?: unknown; address?: unknown; city?: unknown; country?: unknown; source?: unknown; source_key?: unknown;
-  utc_offset?: unknown;
-}
-
-const str = (v: unknown, max = 300) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
-const isDate = (v: unknown) => typeof v === "string" && !Number.isNaN(Date.parse(v));
-/** Minutes from UTC where it happened (-840…840), or null. */
-const offsetIn = (v: unknown) => {
-  const n = Number(v);
-  return v !== null && v !== undefined && v !== "" && Number.isInteger(n) && Math.abs(n) <= 840 ? n : null;
-};
-
-export function cleanVisit(v: VisitInput): null | {
-  latitude: number; longitude: number; arrived_at: string; departed_at: string | null; place: string | null;
-  address: string | null; city: string | null; country: string | null; source: string; source_key: string;
-  utc_offset: number | null;
-} {
-  const lat = Number(v.latitude), lng = Number(v.longitude);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
-  if (!isDate(v.arrived_at)) return null;
-  const source = str(v.source, 40);
-  if (!source) return null;
-  const arrived = new Date(v.arrived_at as string).toISOString();
-  const departed = isDate(v.departed_at) ? new Date(v.departed_at as string).toISOString() : null;
-  // A stay that ends before it starts is a report the phone got wrong (seen after a relaunch): skip it.
-  if (departed && departed < arrived) return null;
-  // Without a key, a visit is identified by its source, arrival and rough position.
-  const key = str(v.source_key, 200) ?? `${source}:${arrived}:${lat.toFixed(3)},${lng.toFixed(3)}`;
-  return { latitude: lat, longitude: lng, arrived_at: arrived, departed_at: departed, place: str(v.place),
-    address: str(v.address), city: str(v.city, 120), country: str(v.country, 120), source, source_key: key,
-    utc_offset: offsetIn(v.utc_offset) };
-}
 
 // OpenAPI registrations. Posted visits and journeys are cleaned, not
 // validated: invalid items are skipped and counted in `valid`.
@@ -125,11 +100,14 @@ openApiRegistry.registerPath({
       start: z.string().optional().openapi({ description: "ISO time (default the beginning)" }),
       end: z.string().optional().openapi({ description: "ISO time (default now)" }),
       limit: z.coerce.number().int().min(1).max(5000).optional().openapi({ description: "Default 500" }),
+      cursor: z.string().optional().openapi({ description: "next_cursor from the page before" }),
     }),
   },
-  responses: okResponses(z.object({
-    visits: z.array(visitSchema),
+  responses: structuredOkResponses(z.object({
+    visits: z.array(visitSchema).openapi({ description: "Same as items (kept for older apps)" }),
     sources: z.array(z.object({ source: z.string(), n: z.number().int(), first: z.string() })),
+    items: z.array(visitSchema),
+    next_cursor: z.string().nullable().openapi({ description: "Pass as ?cursor= for the next page; null on the last" }),
   })),
 });
 
@@ -155,7 +133,7 @@ openApiRegistry.registerPath({
       })).min(1).max(500),
     })),
   },
-  responses: okResponses(batchResultSchema),
+  responses: structuredOkResponses(batchResultSchema),
 });
 
 openApiRegistry.registerPath({
@@ -170,7 +148,7 @@ openApiRegistry.registerPath({
       to: z.string().optional().openapi({ description: "ISO time" }),
     }),
   },
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     places: z.array(z.object({
       key: z.string(),
       lat: z.number(),
@@ -194,7 +172,7 @@ openApiRegistry.registerPath({
   path: "/v1/visits/years",
   summary: "Count visits and places per year",
   security: authSecurity,
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     years: z.array(z.object({ year: z.string(), visits: z.number().int(), places: z.number().int() })),
   })),
 });
@@ -205,7 +183,7 @@ openApiRegistry.registerPath({
   summary: "Count visits and places per month",
   security: authSecurity,
   request: { query: z.object({ offset }) },
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     months: z.array(z.object({ month: z.string(), visits: z.number().int(), places: z.number().int() })),
   })),
 });
@@ -216,7 +194,7 @@ openApiRegistry.registerPath({
   summary: "List one place's visits, newest first",
   security: authSecurity,
   request: { query: z.object({ key: placeKey }) },
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     key: z.string(),
     name: placeNameSchema.nullable(),
     visits: z.array(visitSchema),
@@ -234,7 +212,7 @@ openApiRegistry.registerPath({
       offset,
     }),
   },
-  responses: okResponses(z.object({ visits: z.array(visitWithNameSchema) })),
+  responses: structuredOkResponses(z.object({ visits: z.array(visitWithNameSchema) })),
 });
 
 openApiRegistry.registerPath({
@@ -243,7 +221,7 @@ openApiRegistry.registerPath({
   summary: "List days that have visits, with counts",
   security: authSecurity,
   request: { query: z.object({ year: z.string().regex(/^\d{4}$/).optional(), offset }) },
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     days: z.array(z.object({ day: dateSchema, visits: z.number().int(), places: z.number().int() })),
   })),
 });
@@ -254,7 +232,7 @@ openApiRegistry.registerPath({
   summary: "Get one local day's visits and the journeys between them",
   security: authSecurity,
   request: { query: z.object({ date: dateSchema.openapi({ example: "2024-05-01" }), offset }) },
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     date: dateSchema,
     start: z.string(),
     end: z.string(),
@@ -273,7 +251,7 @@ openApiRegistry.registerPath({
   path: "/v1/visits/flights",
   summary: "List every flight (journeys flown), oldest first",
   security: authSecurity,
-  responses: okResponses(z.object({ flights: z.array(z.record(z.string(), z.unknown())) })),
+  responses: structuredOkResponses(z.object({ flights: z.array(z.record(z.string(), z.unknown())) })),
 });
 
 openApiRegistry.registerPath({
@@ -281,7 +259,7 @@ openApiRegistry.registerPath({
   path: "/v1/visits/chapters",
   summary: "Your eras: where home was each stretch, where the days went, the places you kept going to, how you got around",
   security: authSecurity,
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     chapters: z.array(z.object({
       start: z.string().openapi({ description: "First month, YYYY-MM" }),
       end: z.string().openapi({ description: "Last month, YYYY-MM" }),
@@ -330,7 +308,7 @@ openApiRegistry.registerPath({
   path: "/v1/visits/footprints",
   summary: "Your footprints for a heat layer: time spent per ~50 m cell, and every ground journey's path",
   security: authSecurity,
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     spots: z.array(z.array(z.number())).openapi({ description: "[lat, lng, hours]" }),
     paths: z.array(z.object({ mode: z.string().nullable(), points: z.array(z.number()).openapi({ description: "lat, lng, lat, lng, …" }) })),
   })),
@@ -341,7 +319,7 @@ openApiRegistry.registerPath({
   path: "/v1/visits/saved",
   summary: "List the places you defined (a centre, a radius, a name, the months it applies)",
   security: authSecurity,
-  responses: okResponses(z.object({ places: z.array(savedPlace) })),
+  responses: structuredOkResponses(z.object({ places: z.array(savedPlace) })),
 });
 
 openApiRegistry.registerPath({
@@ -350,7 +328,7 @@ openApiRegistry.registerPath({
   summary: "Save a place of your own: visits inside its circle, in its months, count as it",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(savedPlaceInput) },
-  responses: okResponses(savedPlace),
+  responses: structuredOkResponses(savedPlace),
 });
 
 openApiRegistry.registerPath({
@@ -362,7 +340,7 @@ openApiRegistry.registerPath({
     params: z.object({ id: z.string() }),
     body: openApiJsonRequestBody(z.object({ mode: z.string() })),
   },
-  responses: okResponses(z.record(z.string(), z.unknown())),
+  responses: structuredOkResponses(z.record(z.string(), z.unknown())),
 });
 
 openApiRegistry.registerPath({
@@ -378,7 +356,7 @@ openApiRegistry.registerPath({
       move_to: z.object({ latitude: z.number(), longitude: z.number() }).optional(),
     })),
   },
-  responses: okResponses(visitSchema),
+  responses: structuredOkResponses(visitSchema),
 });
 
 openApiRegistry.registerPath({
@@ -387,7 +365,7 @@ openApiRegistry.registerPath({
   summary: "Change a place you saved",
   security: authSecurity,
   request: { params: z.object({ id: z.string() }), body: openApiJsonRequestBody(savedPlaceInput.partial()) },
-  responses: okResponses(savedPlace),
+  responses: structuredOkResponses(savedPlace),
 });
 
 openApiRegistry.registerPath({
@@ -396,7 +374,7 @@ openApiRegistry.registerPath({
   summary: "Remove a place you saved (the visits stay)",
   security: authSecurity,
   request: { params: z.object({ id: z.string() }) },
-  responses: okResponses(z.object({ deleted: z.boolean() })),
+  responses: structuredOkResponses(z.object({ deleted: z.boolean() })),
 });
 
 openApiRegistry.registerPath({
@@ -405,7 +383,7 @@ openApiRegistry.registerPath({
   summary: "List trips: days roughly 100 km or more from home, grouped",
   security: authSecurity,
   request: { query: z.object({ offset }) },
-  responses: okResponses(z.object({
+  responses: structuredOkResponses(z.object({
     trips: z.array(z.object({
       start: dateSchema,
       end: dateSchema,
@@ -444,7 +422,7 @@ openApiRegistry.registerPath({
       })).min(1).max(500),
     })),
   },
-  responses: okResponses(z.object({ received: z.number().int(), saved: z.number().int() })),
+  responses: structuredOkResponses(z.object({ received: z.number().int(), saved: z.number().int() })),
 });
 
 openApiRegistry.registerPath({
@@ -452,8 +430,13 @@ openApiRegistry.registerPath({
   path: "/v1/visits/journeys",
   summary: "Trips between visits in a time range (no raw path traces), oldest first",
   security: authSecurity,
-  request: { query: z.object({ start: z.string().optional(), end: z.string().optional(), limit: z.coerce.number().int().optional() }) },
-  responses: okResponses(z.object({ journeys: z.array(z.record(z.string(), z.unknown())) })),
+  request: { query: z.object({ start: z.string().optional(), end: z.string().optional(), limit: z.coerce.number().int().optional(),
+    cursor: z.string().optional().openapi({ description: "next_cursor from the page before" }) }) },
+  responses: structuredOkResponses(z.object({
+    journeys: z.array(z.record(z.string(), z.unknown())).openapi({ description: "Same as items (kept for older apps)" }),
+    items: z.array(z.record(z.string(), z.unknown())),
+    next_cursor: z.string().nullable(),
+  })),
 });
 
 openApiRegistry.registerPath({
@@ -480,432 +463,226 @@ openApiRegistry.registerPath({
       })).min(1).max(500),
     })),
   },
-  responses: okResponses(batchResultSchema),
+  responses: structuredOkResponses(batchResultSchema),
 });
 
+// ---------------------------------------------------------------------------
+// Conditional GETs. Every read here depends only on the stored rows (and the
+// query), so the "places" version, bumped on each write, makes a correct ETag.
+// /journeys defaults to "the last 30 days", a window that slides with the
+// clock, so it is tagged only when its start is given. (GET / ends at "now" by
+// default; only a visit stored with a future arrival could appear without a
+// write, which the phone and the imports don't send.)
+
+const SHAPE = 1; // bump when a reply's shape changes without a data change
+app.use("*", async (c, next) => {
+  if (c.req.method !== "GET" && c.req.method !== "HEAD") return next();
+  const url = new URL(c.req.url);
+  if (url.pathname.endsWith("/journeys") && !url.searchParams.has("start")) return next();
+  const version = await dataVersion(c.env, "places");
+  if (version === null) return next();
+  const query = [...url.searchParams.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join("&");
+  const tag = `W/"places-${version}-${shortHash(`${SHAPE}|${c.env.API_VERSION ?? ""}|${url.pathname}?${query}`)}"`;
+  tagged.add(c.req.raw);
+  const unchanged = notModified(c, tag);
+  if (unchanged) return unchanged;
+  await next();
+  // Only a successful body is worth revalidating; an error goes out untagged.
+  if (c.res.status !== 200) { c.res.headers.delete("ETag"); c.res.headers.delete("Cache-Control"); }
+});
+const tagged = new WeakSet<Request>();
+
+/** The old freshness hint, for a database without data_versions yet. An ETag'd reply keeps no-cache. */
+const cached = (c: { req: { raw: Request }; header: (k: string, v: string) => void }, seconds: number) => {
+  if (!tagged.has(c.req.raw)) c.header("Cache-Control", `private, max-age=${seconds}`);
+};
+
+const isoOr = (v: string | undefined, fallback: string) => (isDate(v) ? new Date(v!).toISOString() : fallback);
+const YEAR = /^\d{4}$/;
+const cleanAll = <I, O>(items: I[], clean: (item: I) => O | null) => items.map(clean).filter((v): v is O => v !== null);
+
 app.get("/", async (c) => {
-  const end = isDate(c.req.query("end")) ? new Date(c.req.query("end")!).toISOString() : new Date().toISOString();
-  const start = isDate(c.req.query("start")) ? new Date(c.req.query("start")!).toISOString() : "1970-01-01T00:00:00.000Z";
-  const limit = Math.min(Math.max(Number(c.req.query("limit")) || 500, 1), 5000);
-  const { results } = await c.env.DB.prepare(
-    "SELECT * FROM shown_visits WHERE arrived_at BETWEEN ? AND ? ORDER BY arrived_at DESC LIMIT ?",
-  ).bind(start, end, limit).all();
-  const counts = await c.env.DB.prepare("SELECT source, COUNT(*) AS n, MIN(arrived_at) AS first FROM visits GROUP BY source").all();
-  return c.json({ visits: results, sources: counts.results });
+  try {
+    const limit = limitFrom(c, 500, 5000);
+    const after = cursorFrom(c, 2) as [string, number] | null;
+    const rows = await listVisits(c.env, {
+      start: isoOr(c.req.query("start"), "1970-01-01T00:00:00.000Z"), end: isoOr(c.req.query("end"), new Date().toISOString()), limit, after,
+    });
+    const { items, next_cursor } = page(rows, limit, (v) => [v.arrived_at, v.id]);
+    return list(c, "visits", items, next_cursor, { sources: await visitSources(c.env) });
+  } catch (error) {
+    return failWith(c, error, "Visits request");
+  }
 });
 
 /** POST { visits: [...] } up to 500 at a time. Repeats are ignored, but can fill in a missing departure. */
 app.post("/", async (c) => {
-  const body = (await parseJson(c.req.raw)) as { visits?: unknown } | null;
-  const list = Array.isArray(body?.visits) ? (body!.visits as VisitInput[]) : null;
-  if (!list || list.length === 0 || list.length > 500) return c.json({ error: "Send visits: 1 to 500 items" }, 400);
-  const clean = list.map(cleanVisit).filter((v): v is NonNullable<ReturnType<typeof cleanVisit>> => v !== null);
-  const now = new Date().toISOString();
-  const statements = clean.map((v) => c.env.DB.prepare(
-    // A repeat is ignored, except that a stop sent first on arrival gets its
-    // departure filled in when the phone sends it again on leaving.
-    `INSERT INTO visits (latitude, longitude, arrived_at, departed_at, place, address, city, country, source, source_key, created_at, utc_offset)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(source_key) DO UPDATE SET departed_at = excluded.departed_at, utc_offset = COALESCE(visits.utc_offset, excluded.utc_offset)
-     WHERE visits.departed_at IS NULL AND excluded.departed_at IS NOT NULL AND excluded.departed_at > visits.arrived_at`,
-  ).bind(v.latitude, v.longitude, v.arrived_at, v.departed_at, v.place, v.address, v.city, v.country, v.source, v.source_key, now, v.utc_offset));
-  let added = 0;
-  for (let i = 0; i < statements.length; i += 50) {
-    const results = await c.env.DB.batch(statements.slice(i, i + 50));
-    added += results.reduce((sum, r) => sum + (r.meta?.changes ?? 0), 0);
+  try {
+    const b = (await readBody(c)) as { visits?: unknown };
+    const items = Array.isArray(b?.visits) ? (b.visits as VisitInput[]) : null;
+    if (!items || items.length === 0 || items.length > 500) return fail(c, 400, "Send visits: 1 to 500 items");
+    const clean = cleanAll<VisitInput, CleanVisit>(items, cleanVisit);
+    return ok(c, { received: items.length, valid: clean.length, added: await addVisits(c.env, clean) });
+  } catch (error) {
+    return failWith(c, error, "Visits request");
   }
-  // A live visit from the phone also becomes "where I am now" for Today.
-  const live = clean.filter((v) => v.source === "visit").sort((a, b) => b.arrived_at.localeCompare(a.arrived_at))[0];
-  if (live && added > 0 && Date.now() - Date.parse(live.arrived_at) < 6 * 3600_000) {
-    await c.env.DB.prepare(
-      `INSERT INTO location_history (latitude, longitude, recorded_at, address, city, country, label, source, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'visit', ?, ?)`,
-    ).bind(live.latitude, live.longitude, live.arrived_at, live.address, live.city, live.country, live.place, now, now).run();
-  }
-  return c.json({ received: list.length, valid: clean.length, added });
 });
 
+/** PATCH /v1/visits/journeys/:id { mode }: you know how you travelled better than the motion sensor (a bus isn't a car). */
+app.patch("/journeys/:id", async (c) => {
+  try {
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id)) return fail(c, 400, "Invalid id");
+    const b = (await readBody(c)) as { mode?: unknown };
+    const mode = typeof b?.mode === "string" ? b.mode : "";
+    if (!(TRAVEL_MODES as readonly string[]).includes(mode)) return fail(c, 400, `mode must be one of: ${TRAVEL_MODES.join(", ")}`);
+    const row = await correctJourneyMode(c.env, id, mode);
+    return row ? ok(c, row) : fail(c, 404, "Not found");
+  } catch (error) {
+    return failWith(c, error, "Journey request");
+  }
+});
 
 /**
  * PATCH /v1/visits/:id { hidden?, note?, move_to?: { latitude, longitude } }:
  * your corrections. Hidden visits leave every view but stay in the table; a
  * moved visit keeps its old spot in guess_latitude/guess_longitude.
  */
-/** How you can say you travelled. Google Timeline's words, which the rest of the data already uses. */
-export const TRAVEL_MODES = ["walking", "running", "cycling", "in passenger vehicle", "in bus", "in subway", "in train", "in tram", "in ferry", "flying"] as const;
-
-/** PATCH /v1/visits/journeys/:id { mode }: you know how you travelled better than the motion sensor (a bus isn't a car). */
-app.patch("/journeys/:id", async (c) => {
-  const id = Number(c.req.param("id"));
-  if (!Number.isInteger(id)) return c.json({ error: "Invalid id" }, 400);
-  const body = (await parseJson(c.req.raw)) as { mode?: unknown } | null;
-  const mode = typeof body?.mode === "string" ? body.mode : "";
-  if (!(TRAVEL_MODES as readonly string[]).includes(mode)) return c.json({ error: `mode must be one of: ${TRAVEL_MODES.join(", ")}` }, 400);
-  const row = await c.env.DB.prepare("UPDATE journeys SET mode = ? WHERE id = ? RETURNING *").bind(mode, id).first();
-  return row ? c.json(row) : c.json({ error: "Not found" }, 404);
-});
-
 app.patch("/:id", async (c) => {
-  const id = Number(c.req.param("id"));
-  if (!Number.isInteger(id)) return c.json({ error: "Invalid id" }, 400);
-  const body = (await parseJson(c.req.raw)) as { hidden?: unknown; note?: unknown; move_to?: { latitude?: unknown; longitude?: unknown } } | null;
-  if (!body) return c.json({ error: "Send hidden, note or move_to" }, 400);
-  const sets: string[] = [];
-  const args: unknown[] = [];
-  if (typeof body.hidden === "boolean") { sets.push("hidden_at = ?"); args.push(body.hidden ? new Date().toISOString() : null); }
-  if (body.note !== undefined) { sets.push("note = ?"); args.push(str(body.note, 500)); }
-  if (body.move_to) {
-    const lat = Number(body.move_to.latitude), lng = Number(body.move_to.longitude);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return c.json({ error: "move_to needs latitude and longitude" }, 400);
-    sets.push("guess_latitude = COALESCE(guess_latitude, latitude)", "guess_longitude = COALESCE(guess_longitude, longitude)", "latitude = ?", "longitude = ?");
-    args.push(lat, lng);
+  try {
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id)) return fail(c, 400, "Invalid id");
+    const b = (await readBody(c).catch(() => null)) as { hidden?: unknown; note?: unknown; move_to?: { latitude?: unknown; longitude?: unknown } } | null;
+    if (!b) return fail(c, 400, "Send hidden, note or move_to");
+    let moveTo: { latitude: number; longitude: number } | undefined;
+    if (b.move_to) {
+      const lat = Number(b.move_to.latitude), lng = Number(b.move_to.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return fail(c, 400, "move_to needs latitude and longitude");
+      moveTo = { latitude: lat, longitude: lng };
+    }
+    const hidden = typeof b.hidden === "boolean" ? b.hidden : undefined;
+    const note = b.note !== undefined ? str(b.note, 500) : undefined;
+    if (hidden === undefined && note === undefined && !moveTo) return fail(c, 400, "Nothing to change");
+    const row = await correctVisit(c.env, id, { hidden, note, moveTo });
+    return row ? ok(c, row) : fail(c, 404, "Not found");
+  } catch (error) {
+    return failWith(c, error, "Visit request");
   }
-  if (!sets.length) return c.json({ error: "Nothing to change" }, 400);
-  const row = await c.env.DB.prepare(`UPDATE visits SET ${sets.join(", ")} WHERE id = ? RETURNING *`).bind(...args, id).first();
-  return row ? c.json(row) : c.json({ error: "Not found" }, 404);
 });
 
 // ---------------------------------------------------------------------------
 // The map. Visits are grouped into places by a ~110 m grid cell: the key is
 // printf('%.3f,%.3f', lat, lng), the same string the apps build.
 
-const KEY = "printf('%.3f,%.3f', latitude, longitude)";
-const offsetOf = (v: string | undefined) => {
-  const n = Math.round(Number(v));
-  return Number.isFinite(n) && Math.abs(n) <= 14 * 60 ? n : 0;
-};
-/**
- * SQL for a row's own local time: its stored utc_offset (where it happened), or
- * the reader's offset (`param`) when unknown. `col` is the UTC column.
- */
-const local = (col: string, param: string, prefix = "") =>
-  `datetime(${prefix}${col}, printf('%+d minutes', COALESCE(${prefix}utc_offset, ${param})))`;
-const cached = (c: { header: (k: string, v: string) => void }, seconds: number) =>
-  c.header("Cache-Control", `private, max-age=${seconds}`);
-
 /** Places, most visited first. ?year=2024 or ?from=&to= (ISO) narrow the visits counted. */
 app.get("/places", async (c) => {
-  const where: string[] = [];
-  const args: unknown[] = [];
   const year = c.req.query("year");
-  if (year && /^\d{4}$/.test(year)) { where.push("arrived_at >= ? AND arrived_at < ?"); args.push(`${year}-01-01`, `${Number(year) + 1}-01-01`); }
-  if (isDate(c.req.query("from"))) { where.push("arrived_at >= ?"); args.push(new Date(c.req.query("from")!).toISOString()); }
-  if (isDate(c.req.query("to"))) { where.push("arrived_at < ?"); args.push(new Date(c.req.query("to")!).toISOString()); }
-  const { results } = await c.env.DB.prepare(`
-    WITH v AS (SELECT ${KEY} AS key, * FROM shown_visits ${where.length ? "WHERE " + where.join(" AND ") : ""}),
-    g AS (
-      SELECT key, AVG(latitude) AS lat, AVG(longitude) AS lng, COUNT(*) AS visits,
-        CAST(SUM(CASE WHEN departed_at IS NOT NULL
-          THEN MIN(MAX((julianday(departed_at) - julianday(arrived_at)) * 1440, 0), 1440) ELSE 0 END) AS INTEGER) AS minutes,
-        MIN(arrived_at) AS first, MAX(arrived_at) AS last,
-        SUM(CASE WHEN source = 'photos' THEN 1 ELSE 0 END) AS photos,
-        SUM(CASE WHEN departed_at IS NOT NULL AND (julianday(departed_at) - julianday(arrived_at)) * 1440 < 10 THEN 1 ELSE 0 END) AS brief,
-        SUM(CASE WHEN (julianday(departed_at) - julianday(arrived_at)) * 24 >= 6 THEN 1 ELSE 0 END) AS long_stays
-      FROM v GROUP BY key),
-    p AS (SELECT key, place, COUNT(*) AS n FROM v WHERE place IS NOT NULL GROUP BY key, place),
-    top AS (SELECT key, place FROM p AS a WHERE n = (SELECT MAX(n) FROM p AS b WHERE b.key = a.key) GROUP BY key),
-    city AS (SELECT key, MAX(city) AS city, MAX(country) AS country FROM v WHERE city IS NOT NULL GROUP BY key)
-    SELECT g.*, COALESCE(n.name, top.place) AS name, top.place AS label,
-      COALESCE(n.city, city.city) AS city, COALESCE(n.country, city.country) AS country,
-      n.category AS category, n.map_item_id AS map_item_id
-    FROM g LEFT JOIN place_names AS n ON n.key = g.key LEFT JOIN top ON top.key = g.key LEFT JOIN city ON city.key = g.key
-    ORDER BY visits DESC`).bind(...args).all();
+  const places = await listPlaces(c.env, {
+    year: year && YEAR.test(year) ? year : undefined,
+    from: isDate(c.req.query("from")) ? new Date(c.req.query("from")!).toISOString() : undefined,
+    to: isDate(c.req.query("to")) ? new Date(c.req.query("to")!).toISOString() : undefined,
+  });
   cached(c, 300);
-  return c.json({ places: results });
+  return ok(c, { places });
 });
 
 /** Visits per year, for the map's year scrubber. */
 app.get("/years", async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT substr(${local("arrived_at", "0")}, 1, 4) AS year, COUNT(*) AS visits, COUNT(DISTINCT ${KEY}) AS places
-     FROM shown_visits GROUP BY year ORDER BY year`,
-  ).all();
+  const years = await visitYears(c.env);
   cached(c, 300);
-  return c.json({ years: results });
+  return ok(c, { years });
 });
 
 /** Visits per month, for the map's timeline. ?offset= minutes from UTC for local months. */
 app.get("/months", async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT substr(${local("arrived_at", "?1")}, 1, 7) AS month, COUNT(*) AS visits, COUNT(DISTINCT ${KEY}) AS places
-     FROM shown_visits GROUP BY month ORDER BY month`,
-  ).bind(offsetOf(c.req.query("offset"))).all();
+  const months = await visitMonths(c.env, offsetOf(c.req.query("offset")));
   cached(c, 300);
-  return c.json({ months: results });
+  return ok(c, { months });
 });
 
 /** One place's visits, newest first. ?key=38.898,-77.037 */
 app.get("/at", async (c) => {
   const key = c.req.query("key") ?? "";
-  if (!/^-?\d+\.\d{3},-?\d+\.\d{3}$/.test(key)) return c.json({ error: "key must look like 38.898,-77.037" }, 400);
-  const { results } = await c.env.DB.prepare(
-    `SELECT * FROM shown_visits WHERE ${KEY} = ? ORDER BY arrived_at DESC LIMIT 5000`,
-  ).bind(key).all();
-  const name = await c.env.DB.prepare("SELECT * FROM place_names WHERE key = ?").bind(key).first();
-  return c.json({ key, name, visits: results });
+  if (!PLACE_KEY.test(key)) return fail(c, 400, "key must look like 38.898,-77.037");
+  const { name, visits } = await visitsAt(c.env, key);
+  return ok(c, { key, name, visits });
 });
 
 /** Where you were on this date in past years. ?md=11-23&offset=-300 (local minutes from UTC). */
 app.get("/on-this-day", async (c) => {
   const md = c.req.query("md") ?? "";
-  if (!/^\d{2}-\d{2}$/.test(md)) return c.json({ error: "md must look like 11-23" }, 400);
-  const offset = offsetOf(c.req.query("offset"));
-  const { results } = await c.env.DB.prepare(
-    `SELECT v.*, ${KEY.replace(/latitude|longitude/g, (m) => "v." + m)} AS key, n.name AS place_name, n.city AS place_city
-     FROM shown_visits AS v LEFT JOIN place_names AS n ON n.key = ${KEY.replace(/latitude|longitude/g, (m) => "v." + m)}
-     WHERE strftime('%m-%d', ${local("arrived_at", "?1", "v.")}) = ?2 ORDER BY v.arrived_at`,
-  ).bind(offset, md).all();
-  return c.json({ visits: results });
+  if (!/^\d{2}-\d{2}$/.test(md)) return fail(c, 400, "md must look like 11-23");
+  return ok(c, { visits: await onThisDay(c.env, md, offsetOf(c.req.query("offset"))) });
 });
 
 /** Days that have visits, with counts. ?year=2024&offset=-300 */
 app.get("/days", async (c) => {
-  const offset = offsetOf(c.req.query("offset"));
   const year = c.req.query("year");
-  const ok = !!year && /^\d{4}$/.test(year);
-  // A day near New Year can fall in the next or previous UTC year, so read a day either side.
-  const from = ok ? `${Number(year) - 1}-12-31` : "0000";
-  const to = ok ? `${Number(year) + 1}-01-02` : "9999";
-  const { results } = await c.env.DB.prepare(
-    `SELECT day, COUNT(*) AS visits, COUNT(DISTINCT key) AS places FROM
-       (SELECT date(${local("arrived_at", "?1")}) AS day, ${KEY} AS key FROM shown_visits WHERE arrived_at >= ?2 AND arrived_at < ?3)
-     GROUP BY day ORDER BY day`,
-  ).bind(offset, from, to).all();
-  const rows = (results as Array<{ day: string }>).filter((r) => !ok || r.day.startsWith(year!));
+  const days = await visitDays(c.env, year && YEAR.test(year) ? year : null, offsetOf(c.req.query("offset")));
   cached(c, 300);
-  return c.json({ days: rows });
+  return ok(c, { days });
 });
 
 /** One day: its visits and the journeys between them, in order. ?date=2024-05-01&offset=-240 */
 app.get("/day", async (c) => {
   const date = c.req.query("date") ?? "";
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: "date must look like 2024-05-01" }, 400);
-  const offset = offsetOf(c.req.query("offset"));
-  // The day is the local day where you were: each row is read in its own offset.
-  // A UTC window two days wide finds the candidates (any offset is within ±14 h).
-  const near = [new Date(Date.parse(`${date}T00:00:00Z`) - 2 * 86_400_000).toISOString(),
-    new Date(Date.parse(`${date}T00:00:00Z`) + 2 * 86_400_000).toISOString()];
-  const visits = await c.env.DB.prepare(
-    `SELECT v.*, ${KEY.replace(/latitude|longitude/g, (m) => "v." + m)} AS key, n.name AS place_name, n.city AS place_city
-     FROM shown_visits AS v LEFT JOIN place_names AS n ON n.key = ${KEY.replace(/latitude|longitude/g, (m) => "v." + m)}
-     WHERE v.arrived_at >= ?3 AND v.arrived_at < ?4
-       AND (date(${local("arrived_at", "?1", "v.")}) = ?2
-         OR (date(${local("arrived_at", "?1", "v.")}) < ?2 AND v.departed_at IS NOT NULL AND date(${local("departed_at", "?1", "v.")}) >= ?2))
-     ORDER BY v.arrived_at`,
-  ).bind(offset, date, ...near).all();
-  const journeys = await c.env.DB.prepare(
-    `SELECT * FROM journeys WHERE started_at >= ?3 AND started_at < ?4 AND date(${local("started_at", "?1")}) = ?2 ORDER BY started_at`,
-  ).bind(offset, date, ...near).all();
-  // The day's own offset (where most of it happened), for the app's clock.
-  const rows = visits.results as Array<{ id: number; utc_offset: number | null; arrived_at: string }>;
-  const dayOffset = rows.find((r) => r.utc_offset != null)?.utc_offset ?? offset;
-  const start = new Date(Date.parse(`${date}T00:00:00Z`) - dayOffset * 60_000).toISOString();
-  const end = new Date(Date.parse(start) + 86_400_000).toISOString();
-  // Where you woke up: the last stay that began before the day, when nothing came between
-  // it and midnight (a night at home whose departure the phone never sent).
-  const before = await c.env.DB.prepare(
-    `SELECT v.*, ${KEY.replace(/latitude|longitude/g, (m) => "v." + m)} AS key, n.name AS place_name, n.city AS place_city
-     FROM shown_visits AS v LEFT JOIN place_names AS n ON n.key = ${KEY.replace(/latitude|longitude/g, (m) => "v." + m)}
-     WHERE v.arrived_at < ?1 AND v.arrived_at > ?2 AND v.source != 'photos' ORDER BY v.arrived_at DESC LIMIT 1`,
-  ).bind(start, new Date(Date.parse(start) - 3 * 86_400_000).toISOString()).first<{ id: number; departed_at: string | null }>();
-  const list = visits.results as unknown[];
-  if (before && !rows.some((r) => r.id === before.id) && (before.departed_at == null || before.departed_at > start)) {
-    list.unshift({ ...before, woke_here: true });
-  }
-  return c.json({ date, start, end, utc_offset: dayOffset, visits: list, journeys: journeys.results });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return fail(c, 400, "date must look like 2024-05-01");
+  return ok(c, await visitDay(c.env, date, offsetOf(c.req.query("offset"))));
 });
 
-export interface AwayDay {
-  day: string; visits: number; lat: number; lng: number;
-  min_lat: number; max_lat: number; min_lng: number; max_lng: number;
-  keys: string | null; cities: string | null; countries: string | null;
-}
-
-/** Days away from home (computed in SQL), joined into trips when no more than a day apart. */
-export function findTrips(days: AwayDay[]) {
-  type Trip = { start: string; end: string; days: AwayDay[] };
-  const trips: Trip[] = [];
-  for (const d of [...days].sort((a, b) => a.day.localeCompare(b.day))) {
-    const last = trips[trips.length - 1];
-    if (last && (Date.parse(d.day) - Date.parse(last.end)) / 86_400_000 <= 2) { last.end = d.day; last.days.push(d); }
-    else trips.push({ start: d.day, end: d.day, days: [d] });
-  }
-  const top = (lists: Array<string | null>) => {
-    const counts = new Map<string, number>();
-    for (const list of lists) for (const x of (list ?? "").split("|")) if (x) counts.set(x, (counts.get(x) ?? 0) + 1);
-    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-  };
-  return trips.map((t) => {
-    const visits = t.days.reduce((s, d) => s + d.visits, 0);
-    return {
-      start: t.start, end: t.end, days: Math.round((Date.parse(t.end) - Date.parse(t.start)) / 86_400_000) + 1,
-      visits, places: new Set(t.days.flatMap((d) => (d.keys ?? "").split("|").filter(Boolean))).size,
-      lat: t.days.reduce((s, d) => s + d.lat * d.visits, 0) / visits,
-      lng: t.days.reduce((s, d) => s + d.lng * d.visits, 0) / visits,
-      city: top(t.days.map((d) => d.cities)), country: top(t.days.map((d) => d.countries)),
-      bounds: {
-        min_lat: Math.min(...t.days.map((d) => d.min_lat)), max_lat: Math.max(...t.days.map((d) => d.max_lat)),
-        min_lng: Math.min(...t.days.map((d) => d.min_lng)), max_lng: Math.max(...t.days.map((d) => d.max_lng)),
-      },
-    };
-  }).reverse();
-}
-
-/**
- * Trips: days spent roughly 100 km or more from home, grouped. Home is the busiest place over a
- * three-month window, so moving cities doesn't turn your new life into one long trip.
- * All the heavy lifting is SQL; the Worker only joins the few hundred away-days. ?offset=-300
- */
-/**
- * Your footprints, for the map's heat layer: where you spent time (visits in
- * ~50 m cells, weighted by hours) and the ground you covered (every journey's
- * path but flights, flattened to [lat, lng, lat, lng, …] at ~11 m).
- */
+/** Footprints for the map's heat layer (see services/places.ts). */
 app.get("/footprints", async (c) => {
-  const db = c.env.DB;
-  const [spots, paths] = await Promise.all([
-    db.prepare(`SELECT ROUND(latitude * 2000) / 2000 AS lat, ROUND(longitude * 2000) / 2000 AS lng,
-        SUM(MIN(MAX(COALESCE((julianday(departed_at) - julianday(arrived_at)) * 24, 0.25), 0.1), 24)) AS hours
-      FROM shown_visits GROUP BY 1, 2`).all(),
-    db.prepare(`SELECT mode, points_json FROM journeys
-      WHERE points_json IS NOT NULL AND (mode IS NULL OR mode != 'flying')`).all(),
-  ]);
-  const round = (v: number) => Math.round(v * 1e4) / 1e4;
+  const body = await footprints(c.env);
   cached(c, 6 * 3600);
-  return c.json({
-    spots: (spots.results as Array<{ lat: number; lng: number; hours: number }>)
-      .map((s) => [s.lat, s.lng, Math.round(s.hours * 10) / 10]),
-    paths: (paths.results as Array<{ mode: string | null; points_json: string }>).flatMap((j) => {
-      try {
-        const pts = JSON.parse(j.points_json) as number[][];
-        return pts.length >= 2 ? [{ mode: j.mode, points: pts.flatMap((p) => [round(p[0]), round(p[1])]) }] : [];
-      } catch { return []; }
-    }),
-  });
+  return ok(c, body);
 });
 
 /** Every flight, oldest first: the arcs of your travels. */
 app.get("/flights", async (c) => {
-  const { results } = await c.env.DB.prepare(
-    "SELECT * FROM journeys WHERE mode = 'flying' ORDER BY started_at",
-  ).all();
+  const body = { flights: await flights(c.env) };
   cached(c, 3600);
-  return c.json({ flights: results });
+  return ok(c, body);
 });
 
 /** Your eras: where home was, where the days went, how you got around. See services/chapters.ts. */
 app.get("/chapters", async (c) => {
-  const db = c.env.DB;
-  const [rows, visits, fresh, modes, saved] = await Promise.all([
-    db.prepare(`
-      WITH v AS (SELECT ${KEY} AS key, latitude AS lat, longitude AS lng, substr(${local("arrived_at", "0")}, 1, 7) AS mo,
-        MIN(MAX((julianday(departed_at) - julianday(arrived_at)) * 24, 0), 24) AS h
-        FROM shown_visits WHERE departed_at IS NOT NULL),
-      mk AS (SELECT mo, key, SUM(h) AS hours, COUNT(*) AS n, AVG(lat) AS lat, AVG(lng) AS lng FROM v GROUP BY mo, key),
-      r AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY mo ORDER BY hours DESC) AS rk FROM mk)
-      SELECT r.mo, r.key, r.hours, r.n, r.lat, r.lng, n.name, n.city, n.country
-      FROM r LEFT JOIN place_names AS n ON n.key = r.key WHERE rk <= 12 ORDER BY r.mo, rk`).all(),
-    db.prepare(`SELECT substr(${local("arrived_at", "0")}, 1, 7) AS mo, COUNT(*) AS n FROM shown_visits GROUP BY mo`).all(),
-    db.prepare(`SELECT substr(first, 1, 7) AS mo, COUNT(*) AS n FROM (SELECT ${KEY} AS key, MIN(${local("arrived_at", "0")}) AS first FROM shown_visits GROUP BY key) GROUP BY mo`).all(),
-    db.prepare(`SELECT substr(${local("started_at", "0")}, 1, 7) AS mo, mode, SUM(distance_m) AS m FROM journeys
-      WHERE distance_m IS NOT NULL AND mode NOT IN ('path', 'unknown') GROUP BY mo, mode`).all(),
-    db.prepare("SELECT * FROM saved_places").all(),
-  ]);
+  const body = { chapters: await chapters(c.env) };
   // Changes to your own places show at once, so the answer isn't cached for an hour.
   cached(c, 60);
-  return c.json({
-    chapters: buildChapters(applySaved(rows.results as unknown as MonthPlace[], saved.results as unknown as SavedPlace[]), visits.results as unknown as MonthCount[],
-      fresh.results as unknown as MonthCount[], modes.results as unknown as MonthMode[]),
-  });
+  return ok(c, body);
 });
 
+/** Trips: days roughly 100 km or more from home, grouped. ?offset=-300 */
 app.get("/trips", async (c) => {
-  const keyV = KEY.replace(/latitude|longitude/g, (m) => "v." + m);
-  const { results } = await c.env.DB.prepare(`
-    WITH v AS (
-      SELECT v.latitude AS lat, v.longitude AS lng, ${keyV} AS key, substr(${local("arrived_at", "?1", "v.")}, 1, 7) AS mo,
-        date(${local("arrived_at", "?1", "v.")}) AS day, COALESCE(n.city, v.city) AS city, COALESCE(n.country, v.country) AS country
-      FROM shown_visits AS v LEFT JOIN place_names AS n ON n.key = ${keyV}),
-    mk AS (SELECT mo, key, COUNT(*) AS n, AVG(lat) AS lat, AVG(lng) AS lng FROM v GROUP BY mo, key),
-    months AS (SELECT DISTINCT mo FROM v),
-    win AS (
-      SELECT m.mo, k.key, SUM(k.n) AS n, AVG(k.lat) AS lat, AVG(k.lng) AS lng
-      FROM months AS m JOIN mk AS k
-        ON k.mo BETWEEN substr(date(m.mo || '-01', '-1 month'), 1, 7) AND substr(date(m.mo || '-01', '+1 month'), 1, 7)
-      GROUP BY m.mo, k.key),
-    ranked AS (SELECT mo, lat, lng, ROW_NUMBER() OVER (PARTITION BY mo ORDER BY n DESC) AS r FROM win),
-    home AS (SELECT mo, lat, lng FROM ranked WHERE r = 1)
-    SELECT v.day, COUNT(*) AS visits, AVG(v.lat) AS lat, AVG(v.lng) AS lng,
-      MIN(v.lat) AS min_lat, MAX(v.lat) AS max_lat, MIN(v.lng) AS min_lng, MAX(v.lng) AS max_lng,
-      group_concat(DISTINCT v.key) AS keys_csv, group_concat(v.city, '|') AS cities, group_concat(v.country, '|') AS countries
-    FROM v JOIN home AS h ON h.mo = v.mo
-    WHERE abs(v.lat - h.lat) > 0.9 OR abs(v.lng - h.lng) > 1.1
-    GROUP BY v.day`).bind(offsetOf(c.req.query("offset"))).all();
-  // Keys contain commas themselves, so pick them out by shape.
-  const days = (results as unknown as Array<AwayDay & { keys_csv: string | null }>).map((d) => ({
-    ...d, keys: ((d.keys_csv ?? "").match(/-?\d+\.\d{3},-?\d+\.\d{3}/g) ?? []).join("|"),
-  }));
+  const body = { trips: await listTrips(c.env, offsetOf(c.req.query("offset"))) };
   cached(c, 600);
-  return c.json({ trips: findTrips(days) });
+  return ok(c, body);
 });
 
 // Places you define: a centre and a radius (see services/chapters.ts applySaved).
-const KINDS = ["home", "work", "school", "gym", "other", "hidden"];
-const month = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}(-\d{2})?$/.test(v) ? v.slice(0, 7) : null);
 
-/** A saved place from a request body; `partial` for a change, where missing fields stay. */
-export function cleanSaved(b: Record<string, unknown>, partial = false) {
-  const out: Record<string, unknown> = {};
-  if (b.name !== undefined || !partial) { const n = str(b.name, 120); if (!n) return null; out.name = n; }
-  if (b.kind !== undefined || !partial) out.kind = KINDS.includes(String(b.kind)) ? String(b.kind) : "other";
-  for (const [k, lo, hi] of [["latitude", -90, 90], ["longitude", -180, 180]] as const) {
-    if (b[k] === undefined && partial) continue;
-    const v = Number(b[k]);
-    if (!Number.isFinite(v) || v < lo || v > hi) return null;
-    out[k] = v;
-  }
-  if (b.radius_m !== undefined || !partial) out.radius_m = Math.round(Math.min(Math.max(Number(b.radius_m) || 150, 25), 2000));
-  if (b.address !== undefined) out.address = str(b.address, 300);
-  if (b.starts_on !== undefined) out.starts_on = month(b.starts_on);
-  if (b.ends_on !== undefined) out.ends_on = month(b.ends_on);
-  if (b.note !== undefined) out.note = str(b.note, 500);
-  return out;
-}
-
-app.get("/saved", async (c) => {
-  const { results } = await c.env.DB.prepare("SELECT * FROM saved_places ORDER BY name").all();
-  return c.json({ places: results });
-});
+app.get("/saved", async (c) => ok(c, { places: await listSaved(c.env) }));
 
 app.post("/saved", async (c) => {
-  const body = (await parseJson(c.req.raw)) as Record<string, unknown> | null;
-  const p = body && cleanSaved(body);
-  if (!p) return c.json({ error: "Send name, latitude and longitude" }, 400);
-  const now = new Date().toISOString();
-  const row = await c.env.DB.prepare(
-    `INSERT INTO saved_places (name, kind, latitude, longitude, radius_m, address, starts_on, ends_on, note, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
-  ).bind(p.name, p.kind, p.latitude, p.longitude, p.radius_m, p.address ?? null, p.starts_on ?? null, p.ends_on ?? null, p.note ?? null, now, now).first();
-  return c.json(row);
+  const b = (await readBody(c).catch(() => null)) as Record<string, unknown> | null;
+  const p = b && cleanSaved(b);
+  if (!p) return fail(c, 400, "Send name, latitude and longitude");
+  return ok(c, await addSaved(c.env, p));
 });
 
 app.patch("/saved/:id", async (c) => {
   const id = Number(c.req.param("id"));
-  const body = (await parseJson(c.req.raw)) as Record<string, unknown> | null;
-  const p = body && cleanSaved(body, true);
-  if (!Number.isInteger(id) || !p) return c.json({ error: "Invalid place" }, 400);
-  const fields = Object.keys(p);
-  const row = await c.env.DB.prepare(
-    `UPDATE saved_places SET ${[...fields.map((f) => `${f} = ?`), "updated_at = ?"].join(", ")} WHERE id = ? RETURNING *`,
-  ).bind(...fields.map((f) => p[f] as string | number | null), new Date().toISOString(), id).first();
-  return row ? c.json(row) : c.json({ error: "Not found" }, 404);
+  const b = (await readBody(c).catch(() => null)) as Record<string, unknown> | null;
+  const p = b && cleanSaved(b, true);
+  if (!Number.isInteger(id) || !p) return fail(c, 400, "Invalid place");
+  const row = await updateSaved(c.env, id, p);
+  return row ? ok(c, row) : fail(c, 404, "Not found");
 });
 
 app.delete("/saved/:id", async (c) => {
   const id = Number(c.req.param("id"));
-  if (!Number.isInteger(id)) return c.json({ error: "Invalid id" }, 400);
-  const r = await c.env.DB.prepare("DELETE FROM saved_places WHERE id = ?").bind(id).run();
-  return c.json({ deleted: (r.meta.changes ?? 0) > 0 });
+  if (!Number.isInteger(id)) return fail(c, 400, "Invalid id");
+  return ok(c, { deleted: await deleteSaved(c.env, id) });
 });
 
 /**
@@ -914,73 +691,41 @@ app.delete("/saved/:id", async (c) => {
  * fields keep what's already there.
  */
 app.post("/names", async (c) => {
-  const body = (await parseJson(c.req.raw)) as { names?: unknown } | null;
-  const list = Array.isArray(body?.names) ? (body!.names as Array<Record<string, unknown>>) : null;
-  if (!list || list.length === 0 || list.length > 500) return c.json({ error: "Send names: 1 to 500 items" }, 400);
-  const now = new Date().toISOString();
-  const valid = list.filter((n) => typeof n.key === "string" && /^-?\d+\.\d{3},-?\d+\.\d{3}$/.test(n.key));
-  const statements = valid.map((n) => c.env.DB.prepare(
-    `INSERT INTO place_names (key, name, city, country, category, map_item_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET name = COALESCE(excluded.name, name), city = COALESCE(excluded.city, city),
-       country = COALESCE(excluded.country, country), category = COALESCE(excluded.category, category),
-       map_item_id = COALESCE(excluded.map_item_id, map_item_id), updated_at = excluded.updated_at`,
-  ).bind(n.key, str(n.name, 200), str(n.city, 120), str(n.country, 120), str(n.category, 80), str(n.map_item_id, 300), now));
-  for (let i = 0; i < statements.length; i += 50) await c.env.DB.batch(statements.slice(i, i + 50));
-  return c.json({ received: list.length, saved: valid.length });
+  const b = (await readBody(c).catch(() => null)) as { names?: unknown } | null;
+  const items = Array.isArray(b?.names) ? (b!.names as Array<Record<string, unknown>>) : null;
+  if (!items || items.length === 0 || items.length > 500) return fail(c, 400, "Send names: 1 to 500 items");
+  const valid = items.filter((n): n is Record<string, unknown> & { key: string } => typeof n.key === "string" && PLACE_KEY.test(n.key));
+  await saveNames(c.env, valid);
+  return ok(c, { received: items.length, saved: valid.length });
 });
 
-interface JourneyInput {
-  started_at?: unknown; ended_at?: unknown; start_lat?: unknown; start_lng?: unknown; end_lat?: unknown; end_lng?: unknown;
-  distance_m?: unknown; mode?: unknown; points?: unknown; source?: unknown; source_key?: unknown; utc_offset?: unknown;
-}
-const num = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
-
-export function cleanJourney(j: JourneyInput) {
-  if (!isDate(j.started_at)) return null;
-  const source = str(j.source, 40);
-  if (!source) return null;
-  const started = new Date(j.started_at as string).toISOString();
-  const points = Array.isArray(j.points)
-    ? (j.points as unknown[]).filter((p): p is number[] => Array.isArray(p) && p.length >= 2 && p.every((x) => Number.isFinite(Number(x))))
-        .slice(0, 2000).map((p) => p.slice(0, 3).map(Number))
-    : null;
-  const mode = str(j.mode, 40)?.toLowerCase() ?? null;
-  return {
-    started_at: started, ended_at: isDate(j.ended_at) ? new Date(j.ended_at as string).toISOString() : null,
-    start_lat: num(j.start_lat), start_lng: num(j.start_lng), end_lat: num(j.end_lat), end_lng: num(j.end_lng),
-    distance_m: num(j.distance_m), mode, points_json: points && points.length ? JSON.stringify(points) : null,
-    source, source_key: str(j.source_key, 200) ?? `${source}:${started}:${mode ?? ""}`, utc_offset: offsetIn(j.utc_offset),
-  };
-}
-
-/** GET /v1/visits/journeys?start=&end=&limit=: trips between visits (not raw path traces), oldest first. */
+/** GET /v1/visits/journeys?start=&end=&limit=&cursor=: trips between visits (not raw path traces), oldest first. */
 app.get("/journeys", async (c) => {
-  const end = isDate(c.req.query("end")) ? new Date(c.req.query("end")!).toISOString() : new Date().toISOString();
-  const start = isDate(c.req.query("start")) ? new Date(c.req.query("start")!).toISOString() : new Date(Date.now() - 30 * 86_400_000).toISOString();
-  const limit = Math.min(Math.max(Number(c.req.query("limit")) || 1000, 1), 5000);
-  const { results } = await c.env.DB.prepare(
-    "SELECT * FROM journeys WHERE started_at BETWEEN ? AND ? AND mode IS NOT NULL AND mode != 'path' ORDER BY started_at LIMIT ?",
-  ).bind(start, end, limit).all();
-  return c.json({ journeys: results });
+  try {
+    const limit = limitFrom(c, 1000, 5000);
+    const after = cursorFrom(c, 2) as [string, number] | null;
+    const rows = await listJourneys(c.env, {
+      start: isoOr(c.req.query("start"), new Date(Date.now() - 30 * 86_400_000).toISOString()),
+      end: isoOr(c.req.query("end"), new Date().toISOString()), limit, after,
+    });
+    const { items, next_cursor } = page(rows, limit, (j) => [j.started_at, j.id]);
+    return list(c, "journeys", items, next_cursor);
+  } catch (error) {
+    return failWith(c, error, "Journeys request");
+  }
 });
 
 /** POST { journeys: [...] } up to 500 at a time. Repeats are ignored. */
 app.post("/journeys", async (c) => {
-  const body = (await parseJson(c.req.raw)) as { journeys?: unknown } | null;
-  const list = Array.isArray(body?.journeys) ? (body!.journeys as JourneyInput[]) : null;
-  if (!list || list.length === 0 || list.length > 500) return c.json({ error: "Send journeys: 1 to 500 items" }, 400);
-  const clean = list.map(cleanJourney).filter((j): j is NonNullable<ReturnType<typeof cleanJourney>> => j !== null);
-  const now = new Date().toISOString();
-  const statements = clean.map((j) => c.env.DB.prepare(
-    `INSERT OR IGNORE INTO journeys (started_at, ended_at, start_lat, start_lng, end_lat, end_lng, distance_m, mode, points_json, source, source_key, created_at, utc_offset)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).bind(j.started_at, j.ended_at, j.start_lat, j.start_lng, j.end_lat, j.end_lng, j.distance_m, j.mode, j.points_json, j.source, j.source_key, now, j.utc_offset));
-  let added = 0;
-  for (let i = 0; i < statements.length; i += 50) {
-    const results = await c.env.DB.batch(statements.slice(i, i + 50));
-    added += results.reduce((sum, r) => sum + (r.meta?.changes ?? 0), 0);
+  try {
+    const b = (await readBody(c)) as { journeys?: unknown };
+    const items = Array.isArray(b?.journeys) ? (b.journeys as JourneyInput[]) : null;
+    if (!items || items.length === 0 || items.length > 500) return fail(c, 400, "Send journeys: 1 to 500 items");
+    const clean = cleanAll<JourneyInput, CleanJourney>(items, cleanJourney);
+    return ok(c, { received: items.length, valid: clean.length, added: await addJourneys(c.env, clean) });
+  } catch (error) {
+    return failWith(c, error, "Journeys request");
   }
-  return c.json({ received: list.length, valid: clean.length, added });
 });
 
 export default app;

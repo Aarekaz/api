@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
+import { failWith } from "../lib/http";
 import { parseJson } from "../utils/json";
 import {
   authSecurity,
@@ -103,15 +104,8 @@ openApiRegistry.registerPath({
   responses: structuredOkResponses(SectionDeleted),
 });
 
-/** One error shape for new routes: { error: { code, message } }. */
-function fail(c: Context<{ Bindings: Env }>, error: unknown) {
-  if (error instanceof z.ZodError) {
-    return c.json({ error: { code: "invalid", message: error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ") } }, 400);
-  }
-  if (error instanceof SectionError) return c.json({ error: { code: error.code, message: error.message } }, error.status);
-  console.error("sections route failed", error);
-  return c.json({ error: { code: "server", message: "Folder request failed" } }, 500);
-}
+/** One error shape, { error: { code, message } } (lib/http.ts). */
+const fail = (c: Context<{ Bindings: Env }>, error: unknown) => failWith(c, error, "Folder request");
 
 async function body(c: Context<{ Bindings: Env }>) {
   const json = await parseJson(c.req.raw);

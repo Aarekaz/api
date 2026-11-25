@@ -1,6 +1,9 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { authSecurity, dateTimeSchema, musicNowResponseSchema, okResponses, openApiRegistry } from "../schemas/openapi";
+import {
+  authSecurity, cursorQuery, dateTimeSchema, musicNowResponseSchema, okResponses, openApiRegistry, pageFields, structuredOkResponses,
+} from "../schemas/openapi";
+import { cursorFrom, failWith, limitFrom, list, page } from "../lib/http";
 import { getMusicNow, type MusicNowDependencies } from "../services/spotify/now-playing";
 import type { Env } from "../types/env";
 
@@ -11,14 +14,21 @@ export function createMusicRoute(dependencies: MusicNowDependencies = {}) {
 
   /** Every play kept so far, newest first. ?limit=100&before=ISO */
   app.get("/history", async (c) => {
-    const limit = Math.min(Math.max(Number(c.req.query("limit")) || 100, 1), 1000);
-    const before = c.req.query("before");
-    const until = before && !Number.isNaN(Date.parse(before)) ? new Date(before).toISOString() : "9999";
-    const { results } = await c.env.DB.prepare(
-      "SELECT * FROM music_plays WHERE played_at < ? ORDER BY played_at DESC LIMIT ?",
-    ).bind(until, limit).all();
-    const total = await c.env.DB.prepare("SELECT COUNT(*) AS n, MIN(played_at) AS since FROM music_plays").first();
-    return c.json({ plays: results, total });
+    try {
+      const limit = limitFrom(c, 100, 1000);
+      const before = c.req.query("before");
+      const until = before && !Number.isNaN(Date.parse(before)) ? new Date(before).toISOString() : "9999";
+      const after = cursorFrom(c, 2);
+      const { results } = await c.env.DB.prepare(
+        `SELECT * FROM music_plays WHERE played_at < ?${after ? " AND (played_at < ? OR (played_at = ? AND id < ?))" : ""}
+         ORDER BY played_at DESC, id DESC LIMIT ?`,
+      ).bind(until, ...(after ? [after[0], after[0], after[1]] : []), limit + 1).all<{ id: number; played_at: string }>();
+      const total = await c.env.DB.prepare("SELECT COUNT(*) AS n, MIN(played_at) AS since FROM music_plays").first();
+      const { items, next_cursor } = page(results, limit, (p) => [p.played_at, p.id]);
+      return list(c, "plays", items, next_cursor, { total });
+    } catch (error) {
+      return failWith(c, error, "Music history request");
+    }
   });
 
   /** What you listened to most. ?days=30 */
@@ -77,10 +87,12 @@ openApiRegistry.registerPath({
     query: z.object({
       limit: z.coerce.number().int().min(1).max(1000).optional().openapi({ description: "Default 100" }),
       before: dateTimeSchema.optional().openapi({ description: "Only plays before this time" }),
+      cursor: cursorQuery,
     }),
   },
-  responses: okResponses(z.object({
-    plays: z.array(musicPlaySchema),
+  responses: structuredOkResponses(z.object({
+    plays: z.array(musicPlaySchema).openapi({ description: "Same as items (kept for older apps)" }),
+    ...pageFields(musicPlaySchema),
     total: z.object({
       n: z.number().int().openapi({ description: "Plays kept in all" }),
       since: dateTimeSchema.nullable().openapi({ description: "The oldest play kept" }),
