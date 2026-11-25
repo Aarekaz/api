@@ -162,7 +162,8 @@ export async function saveDocument(env: Env, id: string, input: DocumentInput, n
        WHERE id = ? AND version = ? AND deleted_at IS NULL`,
     ).bind(kind, status, title, body, folder, visibility, frontmatter, stamp, id, expected),
   ]);
-  if ((update.meta?.changes ?? 0) !== 1) throw new DocumentError("This document changed since you loaded it", 409);
+  // Only one row can match (id + version); the search index trigger adds its own rows to the count, so test for none.
+  if ((update.meta?.changes ?? 0) === 0) throw new DocumentError("This document changed since you loaded it", 409);
   const saved = await getDocument(env, id);
   if (saved.kind === "writing" && saved.status === "published" && saved.post_id) await syncPost(env, saved, true, now);
   return saved;

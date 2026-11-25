@@ -33,14 +33,56 @@ function attr(tag: string, name: string): string | undefined {
   return m ? (m[2] ?? m[3]) : undefined;
 }
 
-/** An image as Markdown, or "" for tracking pixels and inline data. */
+/** Profile pictures and tiny thumbnails: X's avatars, Substack's 40-pixel crops, "X avatar for @…". */
+export function isAvatar(src: string, alt = ""): boolean {
+  return /\/profile_images\/|[,!\/]w_\d{1,2},h_\d{1,2}[,\/]|\/avatars?\//i.test(src) || /^(x |twitter )?avatar\b|^avatar for /i.test(alt);
+}
+
+/** An image as Markdown, or "" for tracking pixels, avatars and inline data. */
 function imageMarkdown(tag: string, base: string): string {
   const src = absolute(attr(tag, "src") ?? attr(tag, "data-src") ?? attr(tag, "srcset")?.split(/[\s,]/)[0], base);
   if (!src) return "";
-  const width = Number(attr(tag, "width") ?? "0");
-  if (width > 0 && width < 40) return "";
+  const width = Number(attr(tag, "width") ?? "0"), height = Number(attr(tag, "height") ?? "0");
+  if ((width > 0 && width < 40) || (height > 0 && height < 40)) return "";
   const alt = decodeEntities(attr(tag, "alt") ?? "").replace(/[\[\]]/g, "").trim();
+  if (isAvatar(src, alt)) return "";
   return `![${alt}](${src})`;
+}
+
+/**
+ * A newsletter's furniture, not the writer's words: "Subscribe now", "Thanks for
+ * reading X! Subscribe for free…", "Become a paid subscriber…", share buttons,
+ * WordPress's "Copy shortlink · Manage subscriptions". Only short lines.
+ */
+export function isBoilerplate(line: string): boolean {
+  const text = line.replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^(## |- |> )/, "").replace(/[*_]/g, "").trim();
+  if (text.length > 200) return false;
+  return /\b(subscribe|subscribed|paid subscriber)\b/i.test(text)
+    || /^thanks for reading\b/i.test(text)
+    || /^get \d+% off\b/i.test(text)
+    || /copy shortlink|manage subscriptions|view post in reader|report this content/i.test(text)
+    || /^(share|like|comment|restack|sign up|sign in|log in|discussion about this post)$/i.test(text);
+}
+
+/** Stored Markdown with avatars and newsletter furniture taken out (for text saved before the rules existed). */
+export function cleanMarkdown(markdown: string): string {
+  return markdown.split("\n\n").filter((block) => {
+    const image = block.trim().match(/^!\[([^\]]*)\]\((\S+)\)$/);
+    if (image) return !isAvatar(image[2], image[1]);
+    return !isBoilerplate(block.trim());
+  }).join("\n\n");
+}
+
+/** A data table as Markdown ("| a | b |"), or null for a layout table (one column, nested, or long cells). */
+export function tableMarkdown(html: string, base: string): string | null {
+  if (/<table\b/i.test(html)) return null;
+  const rows = [...html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)].map((r) =>
+    [...r[1].matchAll(/<(td|th)\b[^>]*>([\s\S]*?)<\/\1>/gi)].map((c) => inline(c[2], base).replace(/\|/g, "\\|")));
+  const width = Math.max(0, ...rows.map((r) => r.length));
+  if (rows.length < 2 || width < 2 || rows.some((r) => r.some((c) => c.length > 600))) return null;
+  const line = (r: string[]) => `| ${Array.from({ length: width }, (_, i) => r[i] ?? "").join(" | ")} |`;
+  return [line(rows[0]), `|${" --- |".repeat(width)}`, ...rows.slice(1).map(line)].join("\n");
 }
 
 const ENTITIES: Record<string, string> = {
@@ -103,12 +145,12 @@ function metaTags(html: string): Map<string, string> {
  * (keeping a heading or image that leads straight into it).
  */
 export function trimToArticle(lines: string[]) {
-  const isProse = (l: string) => !/^(## |- |> |!\[|```)/.test(l)
+  const isProse = (l: string) => !/^(## |- |> |!\[|```|\| )/.test(l)
     && l.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[*_`]/g, "").length >= 100;
   const first = lines.findIndex(isProse);
   if (first < 0) return;
   let last = lines.length - 1;
-  while (last > first && !isProse(lines[last]) && !/^(- |> |```|!\[)/.test(lines[last])) last--;
+  while (last > first && !isProse(lines[last]) && !/^(- |> |```|!\[|\| )/.test(lines[last])) last--;
   let start = first;
   while (start > 0 && start > first - 2 && /^(## |!\[)/.test(lines[start - 1])) start--;
   lines.splice(last + 1);
@@ -133,15 +175,24 @@ export function extractArticle(html: string, url: string): Article {
     ?? content.match(/<body\b[^>]*>([\s\S]*)<\/body>/i)?.[1]
     ?? content;
 
+  // Data tables become Markdown tables, held aside so the paragraph pass leaves them whole.
+  const tables: string[] = [];
+  const withTables = scope.replace(/<table\b[^>]*>((?:(?!<table\b)[\s\S])*?)<\/table>/gi, (whole, inner: string) => {
+    const md = tableMarkdown(inner, url);
+    if (!md) return whole;
+    tables.push(md);
+    return `<mdtable>${tables.length - 1}</mdtable>`;
+  });
   // Images become their own paragraphs, so the reader can show them in place.
-  const withImages = scope.replace(/<img\b[^>]*>/gi, (tag) => {
+  const withImages = withTables.replace(/<img\b[^>]*>/gi, (tag) => {
     const md = imageMarkdown(tag, url);
     return md ? `<p>${md}</p>` : "";
   });
 
   const lines: string[] = [];
-  for (const m of withImages.matchAll(/<(h[1-6]|p|li|blockquote|pre)\b[^>]*>([\s\S]*?)<\/\1>/gi)) {
+  for (const m of withImages.matchAll(/<(h[1-6]|p|li|blockquote|pre|mdtable)\b[^>]*>([\s\S]*?)<\/\1>/gi)) {
     const tag = m[1].toLowerCase();
+    if (tag === "mdtable") { lines.push(tables[Number(m[2])]); continue; }
     if (tag === "pre") {
       const code = decodeEntities(m[2].replace(/<[^>]+>/g, "")).trimEnd();
       if (code.trim()) lines.push("```\n" + code + "\n```");
@@ -166,6 +217,7 @@ export function extractArticle(html: string, url: string): Article {
     else if (tag === "blockquote") lines.push(`> ${text}`);
     else lines.push(text);
   }
+  for (let i = lines.length - 1; i >= 0; i--) if (isBoilerplate(lines[i])) lines.splice(i, 1);
   trimToArticle(lines);
   // Drop a leading heading that only repeats the title.
   if (title && lines[0]?.replace(/^## /, "").replace(/\*/g, "") === title) lines.shift();
@@ -388,6 +440,12 @@ export async function setLinkNote(env: Env, id: string, note: string | null, now
  * Titles sites give their pages for sharing, cleaned for a reading list:
  * `Dhravya Shah on X: "Jev changes a lot" / X` becomes the quoted words.
  */
+/** The page's own address for itself (<link rel="canonical"> or og:url). */
+export function canonicalUrl(html: string, base: string): string | null {
+  const tag = html.match(/<link\b[^>]*rel\s*=\s*["']canonical["'][^>]*>/i)?.[0];
+  return absolute(tag ? attr(tag, "href") : metaTags(html).get("og:url"), base);
+}
+
 export function cleanTitle(title: string): string {
   const x = title.match(/^(.+?) on (?:X|Twitter): ["“](.+)["”]\s*\/\s*(?:X|Twitter)$/s);
   if (x) return x[2].trim();
@@ -407,7 +465,7 @@ export function postText(oembedHtml: string): string {
 
 /** A short title from a post's first line, cut at a word. */
 export function titleFromText(text: string, max = 90): string {
-  const first = (text.split("\n").find((l) => l.trim().length > 0) ?? "").trim();
+  const first = (text.split("\n").map((l) => l.replace(/https?:\/\/\S+/g, "").trim()).find((l) => l.length > 0) ?? "");
   if (first.length <= max) return first.replace(/[:：]\s*$/, "");
   const cut = first.slice(0, max);
   return cut.slice(0, Math.max(cut.lastIndexOf(" "), 40)).replace(/[,;:—-]\s*$/, "") + "…";
@@ -422,6 +480,52 @@ export function titleFromPdfUrl(url: string): string | null {
   } catch { return null; }
 }
 
+/** A post as FixTweet's public API gives it: the whole text (long posts too), real photos, the quoted post. */
+interface FxPost {
+  text?: string;
+  author?: { name?: string; screen_name?: string };
+  media?: { photos?: Array<{ url: string }>; videos?: Array<{ url?: string; thumbnail_url?: string }> };
+  quote?: FxPost | null;
+  article?: { title?: string } | null;
+}
+
+function linkBareUrls(text: string): string {
+  return text.replace(/(^|[\s(])(https?:\/\/[^\s)]+)/g, (_, pre: string, href: string) => {
+    let label = href;
+    try { const u = new URL(href); label = (u.hostname.replace(/^www\./, "") + u.pathname).replace(/\/$/, ""); } catch { /* keep it */ }
+    return `${pre}[${label}](${href})`;
+  });
+}
+
+/** A post as the reader's Markdown: its paragraphs, its photos (no avatars), and a quoted post as a quote. */
+export function postMarkdown(post: FxPost, url: string): string {
+  const parts = (post.text ?? "").split(/\n{2,}/).map((p) => linkBareUrls(p.trim())).filter(Boolean);
+  for (const photo of post.media?.photos ?? []) parts.push(`![](${photo.url})`);
+  for (const video of post.media?.videos ?? []) {
+    if (video.thumbnail_url) parts.push(`![](${video.thumbnail_url})`);
+    parts.push(`[Watch the video on X](${url})`);
+  }
+  const q = post.quote;
+  if (q?.text) {
+    const who = q.author?.name ? `**${q.author.name}**${q.author.screen_name ? ` @${q.author.screen_name}` : ""}` : "";
+    parts.push([who, ...q.text.split(/\n+/).map((l) => linkBareUrls(l.trim())).filter(Boolean)].filter(Boolean).map((l) => `> ${l}`).join("\n"));
+    for (const photo of q.media?.photos ?? []) parts.push(`![](${photo.url})`);
+  }
+  return parts.join("\n\n");
+}
+
+async function fxPost(url: string): Promise<FxPost | null> {
+  const id = url.match(/\/status(?:es)?\/(\d+)/)?.[1];
+  if (!id) return null;
+  try {
+    // FixTweet refuses requests without a User-Agent (401).
+    const r = await fetch(`https://api.fxtwitter.com/status/${id}`,
+      { headers: { "User-Agent": "anurag-os-reader/1.0" }, signal: AbortSignal.timeout(8_000) });
+    if (!r.ok) return null;
+    return ((await r.json()) as { tweet?: FxPost }).tweet ?? null;
+  } catch { return null; }
+}
+
 interface OEmbed { title?: string; author_name?: string; html?: string; thumbnail_url?: string }
 
 async function oembed(endpoint: string, url: string): Promise<OEmbed | null> {
@@ -433,10 +537,20 @@ async function oembed(endpoint: string, url: string): Promise<OEmbed | null> {
 }
 
 /** What a non-article is, from the place that knows best (X's and YouTube's embeds, the file name, arXiv). */
-async function describeNonArticle(link: LinkRow): Promise<{ title: string; site?: string; body?: string; image?: string; excerpt?: string } | null> {
+async function describeNonArticle(link: LinkRow): Promise<{ title: string; site?: string; body?: string; image?: string; excerpt?: string; whole?: boolean } | null> {
   const host = new URL(link.url).hostname.replace(/^www\./, "");
   const kind = linkKind(link.url, link.fetch_error);
   if (kind === "post" && /^(x\.com|twitter\.com)$/.test(host)) {
+    // A plain post: FixTweet has all of it (X's embed cuts long posts off). A long-form
+    // X Article came in whole from the page, so it's left as it is.
+    const fx = await fxPost(link.url);
+    if (fx?.text && !fx.article) {
+      const body = postMarkdown(fx, link.url);
+      return { title: titleFromText(fx.text) || `${fx.author?.name ?? "A post"} on X`, site: fx.author?.name, body,
+        excerpt: fx.text.slice(0, 280), whole: true };
+    }
+    // A long-form X Article: the page brought the words; its own title is better than "Name on X".
+    if (fx?.article?.title) return { title: fx.article.title, site: fx.author?.name };
     const o = await oembed("https://publish.twitter.com/oembed", link.url);
     if (!o?.html) return null;
     const text = postText(o.html);
@@ -468,13 +582,21 @@ async function describeNonArticle(link: LinkRow): Promise<{ title: string; site?
 async function enrich(env: Env, id: string): Promise<void> {
   const link = await getLink(env, id);
   const extra = await describeNonArticle(link);
-  if (!extra) return;
+  if (!extra) {
+    // Even when the site refused this time, what's stored loses its avatars and subscribe lines.
+    const cleaned = cleanMarkdown(link.body ?? "");
+    if (cleaned !== (link.body ?? "")) {
+      await env.DB.prepare("UPDATE documents SET body = ?, version = version + 1 WHERE id = ?").bind(cleaned, id).run();
+    }
+    return;
+  }
   const fm = link.frontmatter_json ? JSON.parse(link.frontmatter_json) : {};
   const body = link.body ?? "";
   // A long X post ("article") already came in whole, with a clean title: only add who wrote it.
-  const alreadyWhole = body.length > 600;
+  const alreadyWhole = !extra.whole && body.length > 600;
   const title = alreadyWhole && extra.body ? link.title : extra.title;
-  const newBody = extra.body && !alreadyWhole ? `${extra.body}\n\n${body}`.trim() : body;
+  const newBody = cleanMarkdown(extra.whole && extra.body ? extra.body
+    : extra.body && !alreadyWhole ? `${extra.body}\n\n${body}`.trim() : body);
   const image = extra.image && !fm.image ? { image: extra.image } : {};
   await env.DB.batch([
     env.DB.prepare("UPDATE documents SET title = ?, body = ?, frontmatter_json = ?, version = version + 1 WHERE id = ?")
@@ -496,8 +618,16 @@ export async function fetchArticle(env: Env, id: string, now = new Date()): Prom
     if (!response.ok) throw new Error(`The site answered ${response.status}`);
     const type = response.headers.get("content-type") ?? "";
     if (!/html|xml/i.test(type)) throw new Error(`Not a web page (${type.split(";")[0] || "unknown type"})`);
-    const html = (await response.text()).slice(0, 3_000_000);
-    const fresh = extractArticle(html, response.url || link.url);
+    let html = (await response.text()).slice(0, 3_000_000);
+    let pageUrl = response.url || link.url;
+    // A share or preview link (Substack's /p/<uuid>) is a different page from the post: follow its canonical address.
+    const canonical = canonicalUrl(html, pageUrl);
+    if (canonical && new URL(canonical).pathname !== new URL(pageUrl).pathname && /\/p\/[0-9a-f-]{36}\b/i.test(pageUrl)) {
+      const again = await fetch(canonical, { headers: { "User-Agent": "Mozilla/5.0 (compatible; anurag-os-reader/1.0)", Accept: "text/html" },
+        redirect: "follow", signal: AbortSignal.timeout(10_000) });
+      if (again.ok) { html = (await again.text()).slice(0, 3_000_000); pageUrl = again.url || canonical; }
+    }
+    const fresh = extractArticle(html, pageUrl);
     // Never trade good text for worse: some sites (X especially) serve a stripped page now and then.
     const had = (link.body ?? "").length;
     const worse = had > 600 && fresh.markdown.length < had * 0.5;
