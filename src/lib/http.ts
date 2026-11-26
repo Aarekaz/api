@@ -126,21 +126,11 @@ export function later(c: AnyContext): ((work: Promise<unknown>) => void) | undef
 /**
  * Lists on the app's routes answer `{ items: [...], next_cursor }` (plus any
  * `extra` fields); `next_cursor` is null on the last page. Pass it back as
- * `?cursor=` for the next page.
- *
- * Deprecated: the old named key (`links`, `documents`, `visits`, …) carrying
- * the same items, sent only while the LEGACY_LIST_KEYS var is "on" (set in
- * wrangler.toml for the release after the apps moved to `items`; then removed
- * with this parameter). docs/adr/0005-legacy-list-keys.md.
+ * `?cursor=` for the next page. (docs/adr/0005-legacy-list-keys.md: the old
+ * named keys are gone.)
  */
-export function list<T>(c: AnyContext, key: string, items: T[], next_cursor: string | null, extra: Record<string, unknown> = {}) {
-  const legacy = legacyListKeys(c) ? { [key]: items } : {};
-  return c.json({ ...legacy, ...extra, items, next_cursor } as never);
-}
-
-/** Whether lists still send their old named key beside `items`. */
-export function legacyListKeys(c: AnyContext): boolean {
-  return (c.env as { LEGACY_LIST_KEYS?: string } | undefined)?.LEGACY_LIST_KEYS === "on";
+export function list<T>(c: AnyContext, items: T[], next_cursor: string | null, extra: Record<string, unknown> = {}) {
+  return c.json({ ...extra, items, next_cursor } as never);
 }
 
 /** `?limit=` between 1 and `max`, `fallback` when missing or not a number. */

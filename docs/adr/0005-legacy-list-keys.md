@@ -1,6 +1,6 @@
 # 0005: Old list keys go, behind LEGACY_LIST_KEYS for one release
 
-Status: accepted, 25 Nov 2026
+Status: accepted, 25 Nov 2026; completed 26 Nov 2026
 
 ## Context
 
@@ -50,3 +50,12 @@ Order:
    parameter of `list()`, and the deprecated schema fields.
 
 Until step 3, replies are as large as before.
+
+## Done (branch `standards`, Nov 2026)
+
+Step 4. The var had been `"off"` in production since the cut-over, and the app
+(`../apple/Sources`) reads `items` on every one of these lists (checked key by
+key: `links`, `documents`, `visits`, `journeys`, `highlights`, `plays`,
+`bests`). `list()` no longer takes a key, `LEGACY_LIST_KEYS` is gone from
+wrangler.toml and `Env`, and the deprecated OpenAPI fields are removed. The
+website slice of the OpenAPI document is unchanged (freeze test).

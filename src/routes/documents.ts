@@ -70,7 +70,6 @@ openApiRegistry.registerPath({
     }),
   },
   responses: structuredOkResponses(z.object({
-    documents: z.array(listedDocument).optional().openapi({ deprecated: true, description: "Deprecated: same as items, sent only while LEGACY_LIST_KEYS is on" }),
     server_time: z.string(),
     ...pageFields(listedDocument),
   })),
@@ -208,8 +207,7 @@ app.get("/", async (c) => {
   });
   const includeBody = c.req.query("include") === "body";
   const { items, next_cursor } = page(rows, limit, (row) => [row.updated_at, row.id]);
-  return list(c, "documents",
-    items.map((row) => ({ ...present(row, includeBody), ...(row.deleted_at ? { deleted_at: row.deleted_at } : {}) })),
+  return list(c, items.map((row) => ({ ...present(row, includeBody), ...(row.deleted_at ? { deleted_at: row.deleted_at } : {}) })),
     next_cursor, { server_time: new Date().toISOString() });
 });
 

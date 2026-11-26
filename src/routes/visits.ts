@@ -112,7 +112,6 @@ openApiRegistry.registerPath({
     }),
   },
   responses: structuredOkResponses(z.object({
-    visits: z.array(visitSchema).optional().openapi({ deprecated: true, description: "Deprecated: same as items, sent only while LEGACY_LIST_KEYS is on" }),
     sources: z.array(z.object({ source: z.string(), n: z.number().int(), first: z.string() })),
     items: z.array(visitSchema),
     next_cursor: z.string().nullable().openapi({ description: "Pass as ?cursor= for the next page; null on the last" }),
@@ -441,7 +440,6 @@ openApiRegistry.registerPath({
   request: { query: z.object({ start: z.string().optional(), end: z.string().optional(), limit: z.coerce.number().int().optional(),
     cursor: z.string().optional().openapi({ description: "next_cursor from the page before" }) }) },
   responses: structuredOkResponses(z.object({
-    journeys: z.array(z.record(z.string(), z.unknown())).optional().openapi({ deprecated: true, description: "Deprecated: same as items, sent only while LEGACY_LIST_KEYS is on" }),
     items: z.array(z.record(z.string(), z.unknown())),
     next_cursor: z.string().nullable(),
   })),
@@ -532,7 +530,7 @@ app.get("/", async (c) => {
       start: isoOr(c.req.query("start"), "1970-01-01T00:00:00.000Z"), end: isoOr(c.req.query("end"), new Date().toISOString()), limit, after,
     });
     const { items, next_cursor } = page(rows, limit, (v) => [v.arrived_at, v.id]);
-    return list(c, "visits", items, next_cursor, { sources: await visitSources(c.env) });
+    return list(c, items, next_cursor, { sources: await visitSources(c.env) });
   } catch (error) {
     return failWith(c, error, "Visits request");
   }
@@ -723,7 +721,7 @@ app.get("/journeys", async (c) => {
       end: isoOr(c.req.query("end"), new Date().toISOString()), limit, after,
     });
     const { items, next_cursor } = page(rows, limit, (j) => [j.started_at, j.id]);
-    return list(c, "journeys", items, next_cursor);
+    return list(c, items, next_cursor);
   } catch (error) {
     return failWith(c, error, "Journeys request");
   }

@@ -69,7 +69,6 @@ openApiRegistry.registerPath({
     }),
   },
   responses: structuredOkResponses(z.object({
-    highlights: z.array(highlightSchema).optional().openapi({ deprecated: true, description: "Deprecated: same as items, sent only while LEGACY_LIST_KEYS is on" }),
     ...pageFields(highlightSchema),
   })),
 });
@@ -110,7 +109,7 @@ app.get("/", async (c) => {
   const limit = limitFrom(c, 500, 2000);
   const rows = await listHighlights(c.env, c.req.query("document_id") || undefined, limit, cursorFrom(c, 2) as [string, string] | null);
   const { items, next_cursor } = page(rows, limit, (row) => [row.created_at, row.id]);
-  return list(c, "highlights", items.map(presentHighlight), next_cursor);
+  return list(c, items.map(presentHighlight), next_cursor);
 });
 
 app.post("/", async (c) => {

@@ -115,7 +115,7 @@ describe("documents routes", () => {
     let cursor: string | null = null;
     do {
       const res: Page = await (await root.request(`/v1/documents?limit=2${cursor ? `&cursor=${cursor}` : ""}`, {}, env)).json() as Page;
-      expect(res.documents).toBeUndefined(); // the old key goes (LEGACY_LIST_KEYS off)
+      expect(res.documents).toBeUndefined(); // the old key is gone (ADR 0005)
       expect(res.server_time).toBeTruthy();
       seen.push(...res.items.map((d) => d.title));
       cursor = res.next_cursor;

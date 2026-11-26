@@ -376,7 +376,7 @@ app.get("/", async (c) => {
   const { results } = await c.env.DB.prepare(`${SELECT} WHERE ${where.join(" AND ")} ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`)
     .bind(...args, limit + 1).all<Row>();
   const { items, next_cursor } = page(results, limit, (r) => [r.updated_at, r.id]);
-  return list(c, "items", items.map((r) => presentRecipe(r)), next_cursor);
+  return list(c, items.map((r) => presentRecipe(r)), next_cursor);
 });
 
 /** GET /v1/recipes/tags : collections with how many recipes are in each. */
@@ -398,7 +398,7 @@ app.get("/log", async (c) => {
      ORDER BY l.cooked_on DESC, l.id DESC LIMIT ?`,
   ).bind(...(after ? [after[0], after[0], after[1]] : []), limit + 1).all<LogRow & { title: string }>();
   const { items, next_cursor } = page(results, limit, (l) => [l.cooked_on, l.id]);
-  return list(c, "items", items.map((l) => ({ ...presentLog(l), title: l.title })), next_cursor);
+  return list(c, items.map((l) => ({ ...presentLog(l), title: l.title })), next_cursor);
 });
 
 /**

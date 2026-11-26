@@ -352,7 +352,7 @@ app.get("/", async (c) => {
     `SELECT *, ${WHEN} AS sort_at FROM documents WHERE ${where.join(" AND ")} ORDER BY ${WHEN} DESC, id DESC LIMIT ?`,
   ).bind(...args, limit + 1).all<DocumentRow & { sort_at: string }>();
   const { items, next_cursor } = page(results, limit, (row) => [row.sort_at, row.id]);
-  return list(c, "items", items.map(presentEntry), next_cursor);
+  return list(c, items.map(presentEntry), next_cursor);
 });
 
 /** GET /v1/journal/:id */

@@ -25,7 +25,7 @@ export function createMusicRoute(dependencies: MusicNowDependencies = {}) {
       ).bind(until, ...(after ? [after[0], after[0], after[1]] : []), limit + 1).all<{ id: number; played_at: string }>();
       const total = await c.env.DB.prepare("SELECT COUNT(*) AS n, MIN(played_at) AS since FROM music_plays").first();
       const { items, next_cursor } = page(results, limit, (p) => [p.played_at, p.id]);
-      return list(c, "plays", items, next_cursor, { total });
+      return list(c, items, next_cursor, { total });
     } catch (error) {
       return failWith(c, error, "Music history request");
     }
@@ -91,7 +91,6 @@ openApiRegistry.registerPath({
     }),
   },
   responses: structuredOkResponses(z.object({
-    plays: z.array(musicPlaySchema).optional().openapi({ deprecated: true, description: "Deprecated: same as items, sent only while LEGACY_LIST_KEYS is on" }),
     ...pageFields(musicPlaySchema),
     total: z.object({
       n: z.number().int().openapi({ description: "Plays kept in all" }),

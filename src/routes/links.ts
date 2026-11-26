@@ -93,7 +93,6 @@ openApiRegistry.registerPath({
     }),
   },
   responses: structuredOkResponses(z.object({
-    links: z.array(linkSchema.omit({ body: true })).optional().openapi({ deprecated: true, description: "Deprecated: same as items, sent only while LEGACY_LIST_KEYS is on" }),
     ...pageFields(linkSchema.omit({ body: true })),
   })),
 });
@@ -215,7 +214,7 @@ app.get("/", async (c) => {
   const limit = limitFrom(c, 500, 2000);
   const rows = await listLinks(c.env, state, limit, c.req.query("tag") || undefined, cursorFrom(c, 2) as [string, string] | null);
   const { items, next_cursor } = page(rows, limit, (row) => [row.created_at, row.id]);
-  return list(c, "links", items.map((row) => presentLink(row)), next_cursor);
+  return list(c, items.map((row) => presentLink(row)), next_cursor);
 });
 
 /** GET /v1/links/tags: every tag with how many links carry it (and how many are in the Inbox). */

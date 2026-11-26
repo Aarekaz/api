@@ -367,8 +367,8 @@ describe("days come from local_date", () => {
   });
 });
 
-describe("old list keys while LEGACY_LIST_KEYS is on", () => {
-  it("visits and journeys carry the same items under their old names", async () => {
+describe("old list keys", () => {
+  it("visits and journeys answer items only, even with the retired LEGACY_LIST_KEYS var set", async () => {
     const { DB } = testD1({
       migrations: ["0007_location", "0027_visits", "0028_place_names", "0029_journeys", "0032_place_categories", "0041_visit_guess",
         "0042_utc_offset", "0043_recorded_departure", "0044_visit_corrections", "0046_data_versions", "0048_local_date"],
@@ -377,12 +377,12 @@ describe("old list keys while LEGACY_LIST_KEYS is on", () => {
     });
     const root = new Hono<{ Bindings: Env }>();
     root.route("/v1/visits", visitsRoute);
-    const env = { DB, LEGACY_LIST_KEYS: "on" } as Env;
-    const visits = await (await root.request("/v1/visits", {}, env)).json() as { visits: unknown[]; items: unknown[] };
+    const env = { DB, LEGACY_LIST_KEYS: "on" } as unknown as Env;
+    const visits = await (await root.request("/v1/visits", {}, env)).json() as Record<string, unknown[]>;
     expect(visits.items).toHaveLength(1);
-    expect(visits.visits).toEqual(visits.items);
-    const journeys = await (await root.request("/v1/visits/journeys?start=2026-11-01", {}, env)).json() as { journeys: unknown[]; items: unknown[] };
+    expect(Object.keys(visits).sort()).toEqual(["items", "next_cursor", "sources"]);
+    const journeys = await (await root.request("/v1/visits/journeys?start=2026-11-01", {}, env)).json() as Record<string, unknown[]>;
     expect(journeys.items).toHaveLength(1);
-    expect(journeys.journeys).toEqual(journeys.items);
+    expect(Object.keys(journeys).sort()).toEqual(["items", "next_cursor"]);
   });
 });

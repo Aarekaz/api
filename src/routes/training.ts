@@ -309,7 +309,6 @@ openApiRegistry.registerPath({
   security: authSecurity,
   request: { query: z.object({ before: day.optional().openapi({ description: "Only sets on days before this one" }) }) },
   responses: structuredOkResponses(z.object({
-    bests: z.array(bestSchema).optional().openapi({ deprecated: true, description: "Deprecated: same as items, sent only while LEGACY_LIST_KEYS is on" }),
     ...pageFields(bestSchema),
   })),
 });
@@ -454,7 +453,7 @@ app.get("/bests", async (c) => {
   const before = c.req.query("before");
   if (before !== undefined && !isDay(before)) return fail(c, 400, "before must look like 2026-11-24");
   const { results } = await c.env.DB.prepare(BESTS_SQL).bind(before ?? null).all();
-  return list(c, "bests", results, null);
+  return list(c, results, null);
 });
 
 /**

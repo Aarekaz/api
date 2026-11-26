@@ -23,7 +23,7 @@ app.get("/cursor", (c) => {
 app.post("/body", async (c) => {
   try { return c.json(await body(c, z.object({ name: z.string() }))); } catch (error) { return failWith(c, error); }
 });
-app.get("/list", (c) => list(c, "links", [1, 2], "abc", { total: 2 }));
+app.get("/list", (c) => list(c, [1, 2], "abc", { total: 2 }));
 app.get("/tagged", (c) => notModified(c, 'W/"places-3-x"') ?? c.json({ ok: true }));
 
 const json = async (path: string, init?: RequestInit) => {
@@ -70,15 +70,10 @@ describe("lib/http", () => {
     expect(page(rows, 3, (r) => [r.id])).toEqual({ items: rows, next_cursor: null });
   });
 
-  it("lists items and next_cursor, without the old named key", async () => {
+  it("lists items and next_cursor, and never an old named key (the LEGACY_LIST_KEYS switch is gone)", async () => {
     expect((await json("/list")).body).toEqual({ total: 2, items: [1, 2], next_cursor: "abc" });
-    const off = await app.request("/list", {}, { LEGACY_LIST_KEYS: "off" });
-    expect(await off.json()).toEqual({ total: 2, items: [1, 2], next_cursor: "abc" });
-  });
-
-  it("keeps the named key beside items while LEGACY_LIST_KEYS is on", async () => {
-    const res = await app.request("/list", {}, { LEGACY_LIST_KEYS: "on" });
-    expect(await res.json()).toEqual({ links: [1, 2], total: 2, items: [1, 2], next_cursor: "abc" });
+    const on = await app.request("/list", {}, { LEGACY_LIST_KEYS: "on" });
+    expect(await on.json()).toEqual({ total: 2, items: [1, 2], next_cursor: "abc" });
   });
 
   it("answers 304 to a matching If-None-Match, weak or strong", async () => {
