@@ -20,13 +20,13 @@
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.4",
-    "hono": "^4.11.3",
-    "zod": "^3.23.8"
+    "hono": "^4.13.22",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260526.1",
-    "typescript": "^5.4.5",
-    "vitest": "^4.0.17",
-    "wrangler": "^4.82.2"
+    "@cloudflare/workers-types": "^5.20261125.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.2",
+    "wrangler": "^4.168.0"
   }
 }
