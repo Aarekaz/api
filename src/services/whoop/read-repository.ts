@@ -243,6 +243,14 @@ interface SleepRow {
   sort_at: string;
 }
 
+/**
+ * The instant of a SQL timestamp as Date.toISOString() text. The text sorts
+ * and compares as the instant does, and julianday() and strftime() read the
+ * same millisecond, so it orders rows exactly as julianday() did. Migration
+ * 0053 indexes `isoInstant(timeExpression)` verbatim for each collection.
+ */
+export const isoInstant = (sql: string) => `strftime('%Y-%m-%dT%H:%M:%fZ', ${sql})`;
+
 interface CollectionOptions {
   start: string | null;
   end: string | null;
@@ -449,21 +457,27 @@ export class WhoopHealthReadRepository {
     whoopUserId: number;
     options: CollectionOptions;
   }): Promise<{ rows: T[]; nextAnchor: { sortAt: string; id: string } | null }> {
-    const instantExpression = `julianday(${input.timeExpression})`;
-    const canonicalSortExpression = `strftime('%Y-%m-%dT%H:%M:%fZ', ${input.timeExpression})`;
+    // Compared as ISO text rather than julianday() numbers so the read can
+    // seek the 0053 index on this expression instead of sorting the user's rows.
+    // A row stored with an offset still sorts by its instant.
+    const sortExpression = isoInstant(input.timeExpression);
+    const bound = isoInstant("?");
     const filters = ["whoop_user_id = ?", "deleted_at IS NULL"];
     const bindings: unknown[] = [input.whoopUserId];
     if (input.options.start !== null) {
-      filters.push(`${instantExpression} >= julianday(?)`);
+      filters.push(`${sortExpression} >= ${bound}`);
       bindings.push(input.options.start);
     }
     if (input.options.end !== null) {
-      filters.push(`${instantExpression} <= julianday(?)`);
+      filters.push(`${sortExpression} <= ${bound}`);
       bindings.push(input.options.end);
     }
     if (input.options.cursor !== null) {
-      filters.push(`(${instantExpression} < julianday(?) OR (${instantExpression} = julianday(?) AND ${input.keyColumn} < ?))`);
+      // The leading `<=` repeats what the OR implies, so the index can seek.
+      filters.push(`${sortExpression} <= ${bound}`);
+      filters.push(`(${sortExpression} < ${bound} OR (${sortExpression} = ${bound} AND ${input.keyColumn} < ?))`);
       bindings.push(
+        input.options.cursor.sortAt,
         input.options.cursor.sortAt,
         input.options.cursor.sortAt,
         input.keyColumn === "cycle_id" ? Number(input.options.cursor.id) : input.options.cursor.id,
@@ -471,10 +485,10 @@ export class WhoopHealthReadRepository {
     }
     bindings.push(input.options.limit + 1);
     const result = await this.db.prepare(`
-      SELECT ${input.columns}, ${canonicalSortExpression} AS sort_at
+      SELECT ${input.columns}, ${sortExpression} AS sort_at
       FROM ${input.table}
       WHERE ${filters.join(" AND ")}
-      ORDER BY ${instantExpression} DESC, ${input.keyColumn} DESC
+      ORDER BY ${sortExpression} DESC, ${input.keyColumn} DESC
       LIMIT ?
     `).bind(...bindings).all<T & Record<string, unknown>>();
     const rows = result.results.slice(0, input.options.limit) as T[];

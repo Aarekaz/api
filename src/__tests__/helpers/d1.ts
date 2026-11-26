@@ -6,8 +6,9 @@ import { DatabaseSync } from "node:sqlite";
 /**
  * One D1 for every route test: Node's built-in SQLite behind the parts of the
  * D1 API the Worker uses (prepare/bind/first/all/run/raw, batch as one
- * transaction, exec). `run()` and `all()` both return RETURNING rows, the
- * way D1 does, so `INSERT ... RETURNING *` works whichever one the code calls.
+ * transaction, exec). `run()` and `all()` both return a read's rows and
+ * RETURNING rows, the way D1 does, so `INSERT ... RETURNING *` works whichever
+ * one the code calls and a batch of SELECTs gets its rows back.
  */
 
 export interface Sqlite {
@@ -65,6 +66,8 @@ export function testD1(options: { migrations?: string[] | "all"; sql?: string | 
         return { results, success: true, meta: { changes: isRead(sql) ? 0 : changes() } };
       },
       async run<T>() {
+        // D1's run() (and so batch()) carries a read's rows, like all().
+        if (isRead(sql)) return { results: rows<T>(), success: true, meta: { changes: 0, last_row_id: 0 } };
         if (/\breturning\b/i.test(sql)) {
           const results = rows<T>();
           return { results, success: true, meta: { changes: results.length, last_row_id: 0 } };

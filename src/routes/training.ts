@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
-import { parseJson } from "../utils/json";
+import { parseJsonAs } from "../utils/json";
 import { fail, list } from "../lib/http";
 import { isDay } from "../utils/date";
 import { z } from "zod";
@@ -28,6 +28,31 @@ type Exercise = {
 };
 const str = (v: unknown, max = 120) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+// Bodies are forgiving on purpose: a field of the wrong type is dropped (text
+// is trimmed and cut to length), and only the fields a write can't do without
+// fail it, each route with its one message.
+const text = (max = 120) => z.unknown().transform((v) => str(v, max));
+const number = z.unknown().transform(num);
+const isSet = <T>(v: T | null): v is T => v !== null;
+const Day = z.custom<string>(isDay);
+
+const PickBody = z.object({ day: Day, routine_id: text(64) });
+const RoutineBody = z.object({
+  name: text().refine(isSet),
+  weekdays: z.unknown().transform(cleanWeekdays),
+  exercises: z.unknown().transform((v) => cleanExercises(v)),
+  position: number,
+});
+const SetBody = z.object({
+  day: Day,
+  exercise: text().refine(isSet),
+  set_number: number.refine(isSet),
+  routine_id: text(64),
+  reps: number,
+  weight: number,
+  unit: text(8),
+});
 
 export function cleanExercises(list: unknown): Exercise[] {
   if (!Array.isArray(list)) return [];
@@ -333,9 +358,10 @@ app.get("/next", async (c) => {
 
 /** Do another day today (or rest). { day, routine_id } — routine_id null goes back to the plan. */
 app.put("/pick", async (c) => {
-  const b = (await parseJson(c.req.raw)) as Record<string, unknown> | null;
-  if (!b || !isDay(b.day)) return fail(c, 400, "Send day (2026-11-24) and routine_id (or null for the plan)");
-  const id = str(b.routine_id, 64);
+  const parsed = await parseJsonAs(c.req.raw, PickBody);
+  if (!parsed.success) return fail(c, 400, "Send day (2026-11-24) and routine_id (or null for the plan)");
+  const b = parsed.data;
+  const id = b.routine_id;
   if (id) {
     await c.env.DB.prepare(
       "INSERT INTO training_picks (day, routine_id, updated_at) VALUES (?, ?, ?) ON CONFLICT(day) DO UPDATE SET routine_id = excluded.routine_id, updated_at = excluded.updated_at",
@@ -348,16 +374,16 @@ app.put("/pick", async (c) => {
 
 /** Create or replace a routine. { id?, name, weekdays: [1..7], exercises: [...] } */
 app.put("/routines/:id", async (c) => {
-  const body = (await parseJson(c.req.raw)) as Record<string, unknown> | null;
-  const name = str(body?.name);
-  if (!body || !name) return fail(c, 400, "A routine needs a name");
+  const parsed = await parseJsonAs(c.req.raw, RoutineBody);
+  if (!parsed.success) return fail(c, 400, "A routine needs a name");
+  const { name, ...body } = parsed.data;
   const id = c.req.param("id").slice(0, 64);
   const now = new Date().toISOString();
   await c.env.DB.prepare(
     `INSERT INTO training_routines (id, name, weekdays, exercises_json, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET name = excluded.name, weekdays = excluded.weekdays, exercises_json = excluded.exercises_json,
        position = excluded.position, archived = 0, updated_at = excluded.updated_at`,
-  ).bind(id, name, cleanWeekdays(body.weekdays), JSON.stringify(cleanExercises(body.exercises)), Math.round(num(body.position) ?? 0), now, now).run();
+  ).bind(id, name, body.weekdays, JSON.stringify(body.exercises), Math.round(body.position ?? 0), now, now).run();
   const row = await c.env.DB.prepare("SELECT * FROM training_routines WHERE id = ?").bind(id).first();
   return c.json(present(row as Record<string, unknown>));
 });
@@ -370,14 +396,13 @@ app.delete("/routines/:id", async (c) => {
 
 /** Tick a set off (or update it). { routine_id, day, exercise, set_number, reps, weight, unit } */
 app.post("/sets", async (c) => {
-  const b = (await parseJson(c.req.raw)) as Record<string, unknown> | null;
-  const exercise = str(b?.exercise);
-  const set = num(b?.set_number);
-  if (!b || !exercise || !isDay(b.day) || set === null) return fail(c, 400, "Send day, exercise and set_number");
+  const parsed = await parseJsonAs(c.req.raw, SetBody);
+  if (!parsed.success) return fail(c, 400, "Send day, exercise and set_number");
+  const { exercise, set_number: set, ...b } = parsed.data;
   await c.env.DB.prepare(
     `INSERT INTO training_sets (routine_id, day, exercise, set_number, reps, weight, unit, done_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(day, exercise, set_number) DO UPDATE SET reps = excluded.reps, weight = excluded.weight, unit = excluded.unit, done_at = excluded.done_at`,
-  ).bind(str(b.routine_id, 64), b.day, exercise, Math.round(set), num(b.reps), num(b.weight), str(b.unit, 8), new Date().toISOString()).run();
+  ).bind(b.routine_id, b.day, exercise, Math.round(set), b.reps, b.weight, b.unit, new Date().toISOString()).run();
   return c.json({ ok: true });
 });
 

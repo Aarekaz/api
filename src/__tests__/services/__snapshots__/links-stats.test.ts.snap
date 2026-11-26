@@ -1,0 +1,131 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`links reading stats > from fixed rows (day 2026-11-04) 1`] = `
+{
+  "articles": [
+    {
+      "id": "ghost",
+      "minutes": 1.5,
+      "title": null,
+    },
+    {
+      "id": "e",
+      "minutes": 0.3,
+      "title": "e",
+    },
+    {
+      "id": "c",
+      "minutes": 1,
+      "title": "c",
+    },
+  ],
+  "day": "2026-11-04",
+  "days": [
+    {
+      "articles": 1,
+      "day": "2026-10-02",
+      "minutes": 7,
+    },
+    {
+      "articles": 2,
+      "day": "2026-11-03",
+      "minutes": 4.3,
+    },
+    {
+      "articles": 4,
+      "day": "2026-11-04",
+      "minutes": 4.9,
+    },
+  ],
+  "finished_by_month": [
+    {
+      "count": 2,
+      "month": "2026-11",
+    },
+    {
+      "count": 1,
+      "month": "2026-10",
+    },
+    {
+      "count": 1,
+      "month": "2025-12",
+    },
+  ],
+  "top_sites": [
+    {
+      "count": 2,
+      "site": "two.example",
+    },
+    {
+      "count": 2,
+      "site": "one.example",
+    },
+    {
+      "count": 1,
+      "site": "five.example",
+    },
+  ],
+  "totals": {
+    "finished": 4,
+    "highlights": 2,
+    "reading": 2,
+    "saved": 7,
+  },
+}
+`;
+
+exports[`links reading stats > from fixed rows (day undefined) 1`] = `
+{
+  "days": [
+    {
+      "articles": 1,
+      "day": "2026-10-02",
+      "minutes": 7,
+    },
+    {
+      "articles": 2,
+      "day": "2026-11-03",
+      "minutes": 4.3,
+    },
+    {
+      "articles": 4,
+      "day": "2026-11-04",
+      "minutes": 4.9,
+    },
+  ],
+  "finished_by_month": [
+    {
+      "count": 2,
+      "month": "2026-11",
+    },
+    {
+      "count": 1,
+      "month": "2026-10",
+    },
+    {
+      "count": 1,
+      "month": "2025-12",
+    },
+  ],
+  "top_sites": [
+    {
+      "count": 2,
+      "site": "two.example",
+    },
+    {
+      "count": 2,
+      "site": "one.example",
+    },
+    {
+      "count": 1,
+      "site": "five.example",
+    },
+  ],
+  "totals": {
+    "finished": 4,
+    "highlights": 2,
+    "reading": 2,
+    "saved": 7,
+  },
+}
+`;

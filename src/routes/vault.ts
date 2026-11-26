@@ -10,7 +10,7 @@ import {
   openApiRegistry,
   openApiResponse,
 } from "../schemas/openapi";
-import { parseJson } from "../utils/json";
+import { firstMessage, parseJsonAs } from "../utils/json";
 import {
   VaultError,
   capture,
@@ -28,6 +28,21 @@ import {
 const app = new Hono<{ Bindings: Env }>();
 const MAX_BLOBS_PER_REQUEST = 100;
 const MAX_FILE_BYTES = 1_000_000;
+const SHA = /^[0-9a-f]{40}$/;
+
+// Each body answers with its own fixed messages; a file write names the first
+// field that is wrong, in the order path, content, sha.
+const BlobsBody = z.object({ shas: z.array(z.string().regex(SHA)).min(1).max(MAX_BLOBS_PER_REQUEST) });
+const INVALID_PATH = "Invalid vault path";
+const BAD_CONTENT = "content must be a string under 1 MB";
+const BAD_SHA = "sha must be the blob sha you loaded, or null for a new file";
+const FileBody = z.object({
+  path: z.custom<string>(isValidVaultPath, { message: INVALID_PATH }),
+  content: z.string({ invalid_type_error: BAD_CONTENT, required_error: BAD_CONTENT }).max(MAX_FILE_BYTES, BAD_CONTENT),
+  sha: z.string({ invalid_type_error: BAD_SHA }).regex(SHA, BAD_SHA).nullish(),
+  message: z.unknown().transform((m) => (typeof m === "string" && m.trim() ? `anurag.os: ${m.trim().slice(0, 120)}` : undefined)),
+});
+const CaptureBody = z.object({ text: z.string().transform((t) => t.trim()).pipe(z.string().min(1).max(2000)) });
 
 function fail(c: Context<{ Bindings: Env }>, error: unknown) {
   if (error instanceof VaultError) return c.json({ error: error.message }, error.status);
@@ -129,14 +144,10 @@ app.get("/tree", async (c) => {
 });
 
 app.post("/blobs", async (c) => {
-  const body = (await parseJson(c.req.raw)) as { shas?: unknown } | null;
-  const shas = body?.shas;
-  if (!Array.isArray(shas) || shas.length === 0 || shas.length > MAX_BLOBS_PER_REQUEST
-    || !shas.every((sha) => typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha))) {
-    return c.json({ error: `Send "shas": 1 to ${MAX_BLOBS_PER_REQUEST} blob shas` }, 400);
-  }
+  const parsed = await parseJsonAs(c.req.raw, BlobsBody);
+  if (!parsed.success) return c.json({ error: `Send "shas": 1 to ${MAX_BLOBS_PER_REQUEST} blob shas` }, 400);
   try {
-    return c.json({ blobs: await readBlobs(c.env, shas as string[]) });
+    return c.json({ blobs: await readBlobs(c.env, parsed.data.shas) });
   } catch (error) {
     return fail(c, error);
   }
@@ -153,24 +164,14 @@ app.get("/file", async (c) => {
 });
 
 app.put("/file", async (c) => {
-  const body = (await parseJson(c.req.raw)) as
-    | { path?: unknown; content?: unknown; sha?: unknown; message?: unknown }
-    | null;
-  if (!body || !isValidVaultPath(body.path)) return c.json({ error: "Invalid vault path" }, 400);
-  if (typeof body.content !== "string" || body.content.length > MAX_FILE_BYTES) {
-    return c.json({ error: "content must be a string under 1 MB" }, 400);
-  }
-  if (body.sha !== null && body.sha !== undefined && (typeof body.sha !== "string" || !/^[0-9a-f]{40}$/.test(body.sha))) {
-    return c.json({ error: "sha must be the blob sha you loaded, or null for a new file" }, 400);
-  }
-  const message = typeof body.message === "string" && body.message.trim()
-    ? `anurag.os: ${body.message.trim().slice(0, 120)}`
-    : undefined;
+  const parsed = await parseJsonAs(c.req.raw, FileBody);
+  if (!parsed.success) return c.json({ error: firstMessage(parsed.error, INVALID_PATH) }, 400);
+  const { path, content, sha, message } = parsed.data;
   try {
     return c.json(await writeFile(c.env, {
-      path: body.path,
-      content: body.content,
-      sha: (body.sha as string | null | undefined) ?? null,
+      path,
+      content,
+      sha: sha ?? null,
       message,
     }));
   } catch (error) {
@@ -179,11 +180,10 @@ app.put("/file", async (c) => {
 });
 
 app.post("/capture", async (c) => {
-  const body = (await parseJson(c.req.raw)) as { text?: unknown } | null;
-  const text = typeof body?.text === "string" ? body.text.trim() : "";
-  if (!text || text.length > 2000) return c.json({ error: "text is required (up to 2000 characters)" }, 400);
+  const parsed = await parseJsonAs(c.req.raw, CaptureBody);
+  if (!parsed.success) return c.json({ error: "text is required (up to 2000 characters)" }, 400);
   try {
-    return c.json({ ok: true, ...(await capture(c.env, text)) });
+    return c.json({ ok: true, ...(await capture(c.env, parsed.data.text)) });
   } catch (error) {
     return fail(c, error);
   }

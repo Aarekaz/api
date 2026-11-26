@@ -55,6 +55,7 @@ import recipesRoute from "./routes/recipes";
 import sectionsRoute from "./routes/sections";
 import siteRoute from "./routes/site";
 import { maybeRunVaultBackup } from "./services/backup";
+import { isOAuthSweepTick, pruneOAuthStates } from "./services/oauth-states";
 import { siteRefresh } from "./middleware/site-refresh";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -210,6 +211,10 @@ export default {
   async scheduled(event: ScheduledEvent, env: Env): Promise<void> {
     await handleScheduled(event, env);
     await maybeRunVaultBackup(env, new Date(event.scheduledTime));
+    // Outside handleScheduled's jobs on purpose: those are listed in /v1/status.
+    if (isOAuthSweepTick(new Date(event.scheduledTime))) {
+      try { await pruneOAuthStates(env, new Date(event.scheduledTime)); } catch (error) { console.error("OAuth state sweep failed", error); }
+    }
     // Spotify forgets after 50 plays; keep them every half hour.
     if (new Date(event.scheduledTime).getUTCMinutes() % 30 < 5) {
       try { await syncMusicPlays(env); } catch (error) { console.error("music history sync failed", error); }

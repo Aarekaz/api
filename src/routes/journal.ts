@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
-import { cursorFrom, appErrors, fail, limitFrom, list, page } from "../lib/http";
+import { cursorFrom, appErrors, fail, later, limitFrom, list, page } from "../lib/http";
 import { parseJson } from "../utils/json";
 import { ulid } from "../services/documents-core";
 import {
@@ -21,6 +21,9 @@ import {
 } from "../schemas/openapi";
 import { createDocument, deleteDocument, DocumentError, getDocument, saveDocument, type DocumentRow } from "../services/documents";
 import { DAY, dayAtOffset, dayInZone, shiftDay } from "../utils/date";
+import { countWords, recordWords, wordsBetween } from "../services/journal-words";
+
+export { countWords };
 
 // /v1/journal: your journal as a timeline of moments. Each entry is a locked
 // `journal` document (so search, versions, sync and the nightly backup keep
@@ -141,11 +144,6 @@ export function moodFor(valence: number): MoodWord {
 /** Where each weather word sits on the valence line. */
 export const MOOD_VALENCE: Record<MoodWord, number> = { great: 0.8, good: 0.4, okay: 0, low: -0.4, rough: -0.8 };
 
-export function countWords(body: string): number {
-  const words = body.trim().match(/[\p{L}\p{N}][\p{L}\p{N}'’_-]*/gu);
-  return words ? words.length : 0;
-}
-
 export function presentEntry(row: DocumentRow): JournalEntry {
   const m = meta(row);
   const mood = m.mood ?? (m.state_of_mind ? moodFor(m.state_of_mind.valence) : null);
@@ -183,7 +181,15 @@ function feelings(
 
 /** One error shape, { error: { code, message } } (lib/http.ts). */
 
+/** Stores a written entry's word count for /stats, after the reply where the runtime allows. */
+async function countLater(c: Parameters<typeof later>[0], row: DocumentRow) {
+  const work = recordWords(c.env as Env, row);
+  const after = later(c);
+  if (after) after(work); else await work;
+}
+
 const iso = (s: string) => new Date(s).toISOString();
+// Migration 0055 indexes this exact expression for live entries (LIVE).
 const WHEN = "COALESCE(json_extract(frontmatter_json, '$.happened_at'), created_at)";
 const LIVE = "kind = 'journal' AND deleted_at IS NULL";
 
@@ -280,15 +286,13 @@ app.get("/stats", async (c) => {
   const to = toQ && DAY.test(toQ) ? toQ : today;
   const from = fromQ && DAY.test(fromQ) ? fromQ : addDays(to, -364);
   // Pad by a day each side for time zones; the exact cut is made on local days.
-  const { results } = await c.env.DB.prepare(
-    `SELECT ${WHEN} AS at, body FROM documents WHERE ${LIVE} AND ${WHEN} >= ? AND ${WHEN} < ?`,
-  ).bind(`${addDays(from, -1)}T00:00:00.000Z`, `${addDays(to, 2)}T00:00:00.000Z`).all<{ at: string; body: string }>();
+  const results = await wordsBetween(c.env, WHEN, `${addDays(from, -1)}T00:00:00.000Z`, `${addDays(to, 2)}T00:00:00.000Z`);
   const perDay = new Map<string, { entries: number; words: number }>();
   for (const r of results) {
     const day = local(r.at);
     if (day < from || day > to) continue;
     const d = perDay.get(day) ?? { entries: 0, words: 0 };
-    d.entries++; d.words += countWords(r.body);
+    d.entries++; d.words += r.words;
     perDay.set(day, d);
   }
   const days = [...perDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, d]) => ({ day, ...d }));
@@ -332,7 +336,8 @@ app.get("/", async (c) => {
   const after = cursorFrom(c, 2);
   const where = [LIVE];
   const args: unknown[] = [];
-  if (after) { where.push(`(${WHEN} < ? OR (${WHEN} = ? AND id < ?))`); args.push(after[0], after[0], after[1]); }
+  // The leading `<=` repeats what the OR implies, so the index can seek.
+  if (after) { where.push(`${WHEN} <= ?`, `(${WHEN} < ? OR (${WHEN} = ? AND id < ?))`); args.push(after[0], after[0], after[0], after[1]); }
   if (from && !Number.isNaN(Date.parse(from))) { where.push(`${WHEN} >= ?`); args.push(iso(from)); }
   if (to && !Number.isNaN(Date.parse(to))) { where.push(`${WHEN} < ?`); args.push(iso(to)); }
   if (q) {
@@ -375,6 +380,7 @@ app.post("/", async (c) => {
   const row = await createDocument(c.env, {
     kind: "journal", title: happened.slice(0, 16).replace("T", " "), body: input.body, folder: "Journal", frontmatter,
   });
+  await countLater(c, row);
   return c.json(presentEntry(row), 201);
 });
 
@@ -397,6 +403,7 @@ app.patch("/:id", async (c) => {
     version: input.version, body: input.body, frontmatter: next,
     title: next.happened_at!.slice(0, 16).replace("T", " "),
   });
+  await countLater(c, row);
   return c.json(presentEntry(row));
 });
 

@@ -60,6 +60,8 @@ async function signedRaw(body: string, timestamp = NOW_MS): Promise<RequestInit>
     body,
     headers: {
       "content-type": "application/json",
+      // WHOOP sends a length; with one the body limit reads nothing itself.
+      "content-length": String(encoder.encode(body).byteLength),
       "X-WHOOP-Signature": btoa(String.fromCharCode(...new Uint8Array(signature))),
       "X-WHOOP-Signature-Timestamp": timestamp,
     },
@@ -86,8 +88,22 @@ describe("WHOOP public webhook", () => {
       expect.objectContaining({ in: "header", name: "X-WHOOP-Signature", required: true }),
       expect.objectContaining({ in: "header", name: "X-WHOOP-Signature-Timestamp", required: true }),
     ]));
-    expect(Object.keys(operation.responses).sort()).toEqual(["204", "400", "401", "503"]);
+    expect(Object.keys(operation.responses).sort()).toEqual(["204", "400", "401", "413", "503"]);
     expect(operation.security).toBeUndefined();
+  });
+
+  it("refuses a body over 64 KB with 413 before checking its signature", async () => {
+    const { dependencies, repository } = createDependencies();
+    const app = createApp(dependencies);
+    const big = JSON.stringify({ user_id: 42, padding: "x".repeat(64 * 1024) });
+    const declared = await app.fetch(new Request("https://api.example.test/integrations/whoop/webhook", await signedRaw(big)), ENV);
+    expect([declared.status, await declared.json()]).toEqual([413, { error: "Payload too large" }]);
+    // Without a length the body is cut off as it streams past the limit.
+    const init = await signedRaw(big);
+    delete (init.headers as Record<string, string>)["content-length"];
+    const streamed = await app.fetch(new Request("https://api.example.test/integrations/whoop/webhook", init), ENV);
+    expect([streamed.status, await streamed.json()]).toEqual([413, { error: "Payload too large" }]);
+    expect(repository.recordWebhookEvent).not.toHaveBeenCalled();
   });
 
   it("mounts outside bearer-protected v1 routes", async () => {
