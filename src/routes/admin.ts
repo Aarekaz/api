@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Env } from "../types/env";
 import { failWith, later, ok } from "../lib/http";
 import { backupStatus, backupTick, startBackup } from "../services/d1-backup";
+import { backfillJournalWords } from "../services/journal-words";
 import {
   authSecurity, dateSchema, dateTimeSchema, openApiRegistry, openApiResponse, structuredErrorResponses, structuredOkResponses,
 } from "../schemas/openapi";
@@ -49,6 +50,28 @@ openApiRegistry.registerPath({
   description: "Copies every table to backups/YYYY-MM-DD/ in the private bucket over the next cron ticks. 409 when one is running or today's exists.",
   security: authSecurity,
   responses: { 202: openApiResponse(statusSchema, "Started"), ...structuredErrorResponses },
+});
+
+const journalWordsSchema = z.object({
+  counted: z.number().int().openapi({ description: "Entries counted by this call" }),
+  more: z.boolean().openapi({ description: "Whether entries without a current count remain; call again" }),
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/admin/journal-words",
+  summary: "Store word counts for up to 200 journal entries that lack a current one",
+  description: "Fills journal_words (migration 0055) for /v1/journal/stats. Safe to repeat: it only writes counts, and a current count is never rewritten. Call until `more` is false.",
+  security: authSecurity,
+  responses: structuredOkResponses(journalWordsSchema),
+});
+
+app.post("/journal-words", async (c) => {
+  try {
+    return ok(c, await backfillJournalWords(c.env));
+  } catch (error) {
+    return failWith(c, error, "Journal word count");
+  }
 });
 
 app.get("/backup", async (c) => {
