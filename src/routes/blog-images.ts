@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
-import { fileExtensionForContentType } from "../utils/response";
+import { fileExtensionForContentType } from "../utils/content-type";
 import {
   openApiRegistry,
   openApiResponse,

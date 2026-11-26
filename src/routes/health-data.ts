@@ -3,9 +3,7 @@ import { z } from "zod";
 import type { Env } from "../types/env";
 import type { JsonRecord } from "../types/common";
 import { nowIso, dateOnly, addDays } from "../utils/date";
-import { parseJson } from "../utils/json";
-import { validateBody } from "../utils/validation";
-import { parseId } from "../utils/query";
+import { readBody } from "../lib/site-http";
 import {
   appleHealthDailySchema,
   appleHealthHeartRateSchema,
@@ -82,12 +80,7 @@ app.get("/", async (c) => {
 });
 
 app.post("/", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(appleHealthDailySchema, body);
+  const validation = await readBody(c, appleHealthDailySchema);
   if (!validation.ok) {
     return validation.response;
   }

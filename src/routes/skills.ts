@@ -2,8 +2,8 @@ import { Hono } from "hono";
 import type { Env } from "../types/env";
 import type { JsonRecord } from "../types/common";
 import { nowIso } from "../utils/date";
-import { parseJson, mapJsonField } from "../utils/json";
-import { validateBody } from "../utils/validation";
+import { mapJsonField } from "../utils/json";
+import { readBody, idParam, badId, notFound } from "../lib/site-http";
 import { normalizeSkill } from "../utils/normalizers";
 import { skillSchema } from "../schemas/profile";
 import { skillsResponseSchema } from "../schemas/responses";
@@ -27,7 +27,8 @@ import {
   addPublishedFilter,
   buildWhereClause,
   parseSort,
-  parseId,
+  patchAssignments,
+  publishedFlag,
 } from "../utils/query";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -116,10 +117,8 @@ app.get("/", async (c) => {
 });
 
 app.get("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const query = c.req.query();
   const filters = createFilterBuilder();
@@ -132,19 +131,14 @@ app.get("/:id", async (c) => {
     .all();
 
   if (!row.results || row.results.length === 0) {
-    return c.json({ error: "Skill not found" }, 404);
+    return notFound(c, "Skill");
   }
 
   return c.json(normalizeSkill(row.results[0] as JsonRecord));
 });
 
 app.post("/", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(skillSchema, body);
+  const validation = await readBody(c, skillSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -167,17 +161,10 @@ app.post("/", async (c) => {
 });
 
 app.put("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(skillSchema, body);
+  const validation = await readBody(c, skillSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -198,43 +185,26 @@ app.put("/:id", async (c) => {
     .run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Skill not found" }, 404);
+    return notFound(c, "Skill");
   }
 
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.patch("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(skillPatchSchema, body);
+  const validation = await readBody(c, skillPatchSchema);
   if (!validation.ok) {
     return validation.response;
   }
 
-  const updates: string[] = [];
-  const params: (string | number | null)[] = [];
-
-  if (Object.prototype.hasOwnProperty.call(validation.data, "category")) {
-    updates.push("category = ?");
-    params.push(validation.data.category ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "items")) {
-    updates.push("items_json = ?");
-    params.push(mapJsonField(validation.data.items));
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "published")) {
-    updates.push("published = ?");
-    params.push(validation.data.published === false ? 0 : 1);
-  }
+  const { sets: updates, params } = patchAssignments(validation.data, {
+    category: true,
+    items: { column: "items_json", to: mapJsonField },
+    published: { to: publishedFlag },
+  });
 
   const updatedAt = nowIso();
   updates.push("updated_at = ?");
@@ -246,24 +216,22 @@ app.patch("/:id", async (c) => {
   const result = await c.env.DB.prepare(sql).bind(...params).run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Skill not found" }, 404);
+    return notFound(c, "Skill");
   }
 
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.delete("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const result = await c.env.DB.prepare("DELETE FROM skills WHERE id = ?")
     .bind(id)
     .run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Skill not found" }, 404);
+    return notFound(c, "Skill");
   }
 
   return c.json({ ok: true, id, deleted_at: nowIso() });

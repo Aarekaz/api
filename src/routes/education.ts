@@ -1,8 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
 import { nowIso } from "../utils/date";
-import { parseJson } from "../utils/json";
-import { validateBody } from "../utils/validation";
+import { readBody, idParam, badId, notFound } from "../lib/site-http";
 import { educationSchema } from "../schemas/profile";
 import { educationListResponseSchema } from "../schemas/responses";
 import { listQuerySchema } from "../schemas/common";
@@ -25,7 +24,8 @@ import {
   addPublishedFilter,
   buildWhereClause,
   parseSort,
-  parseId,
+  patchAssignments,
+  publishedFlag,
 } from "../utils/query";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -113,10 +113,8 @@ app.get("/", async (c) => {
 });
 
 app.get("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const query = c.req.query();
   const filters = createFilterBuilder();
@@ -129,19 +127,14 @@ app.get("/:id", async (c) => {
     .all();
 
   if (!row.results || row.results.length === 0) {
-    return c.json({ error: "Education not found" }, 404);
+    return notFound(c, "Education");
   }
 
   return c.json(row.results[0]);
 });
 
 app.post("/", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(educationSchema, body);
+  const validation = await readBody(c, educationSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -168,17 +161,10 @@ app.post("/", async (c) => {
 });
 
 app.put("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(educationSchema, body);
+  const validation = await readBody(c, educationSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -203,59 +189,30 @@ app.put("/:id", async (c) => {
     .run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Education not found" }, 404);
+    return notFound(c, "Education");
   }
 
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.patch("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(educationPatchSchema, body);
+  const validation = await readBody(c, educationPatchSchema);
   if (!validation.ok) {
     return validation.response;
   }
 
-  const updates: string[] = [];
-  const params: (string | number | null)[] = [];
-
-  if (Object.prototype.hasOwnProperty.call(validation.data, "institution")) {
-    updates.push("institution = ?");
-    params.push(validation.data.institution ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "degree")) {
-    updates.push("degree = ?");
-    params.push(validation.data.degree ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "field")) {
-    updates.push("field = ?");
-    params.push(validation.data.field ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "start_date")) {
-    updates.push("start_date = ?");
-    params.push(validation.data.start_date ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "end_date")) {
-    updates.push("end_date = ?");
-    params.push(validation.data.end_date ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "description")) {
-    updates.push("description = ?");
-    params.push(validation.data.description ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "published")) {
-    updates.push("published = ?");
-    params.push(validation.data.published === false ? 0 : 1);
-  }
+  const { sets: updates, params } = patchAssignments(validation.data, {
+    institution: true,
+    degree: true,
+    field: true,
+    start_date: true,
+    end_date: true,
+    description: true,
+    published: { to: publishedFlag },
+  });
 
   const updatedAt = nowIso();
   updates.push("updated_at = ?");
@@ -267,24 +224,22 @@ app.patch("/:id", async (c) => {
   const result = await c.env.DB.prepare(sql).bind(...params).run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Education not found" }, 404);
+    return notFound(c, "Education");
   }
 
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.delete("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const result = await c.env.DB.prepare("DELETE FROM education WHERE id = ?")
     .bind(id)
     .run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Education not found" }, 404);
+    return notFound(c, "Education");
   }
 
   return c.json({ ok: true, id, deleted_at: nowIso() });

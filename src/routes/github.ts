@@ -1,8 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
 import { dateOnly, addDays, daysBetween } from "../utils/date";
-import { parseJson } from "../utils/json";
-import { validateBody } from "../utils/validation";
+import { readBody } from "../lib/site-http";
 import { backfillSchema } from "../schemas/common";
 import { githubResponseSchema } from "../schemas/responses";
 import { refreshGitHub } from "../services/github";
@@ -88,12 +87,7 @@ app.post("/refresh", async (c) => {
 });
 
 app.post("/backfill", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(backfillSchema, body);
+  const validation = await readBody(c, backfillSchema);
   if (!validation.ok) {
     return validation.response;
   }

@@ -152,3 +152,28 @@ export function parseId(value: string): number | null {
   }
   return parsed;
 }
+
+/** How a PATCH field is written: to a column of another name, and/or through a transform. */
+export type PatchColumn = true | string | { column?: string; to?: (value: any) => unknown };
+
+/**
+ * The `SET` assignments for the fields a PATCH body carries (present, even if
+ * null), in the order `columns` lists them. A field maps to the column of its
+ * own name, written as `value ?? null`, unless its entry names another column
+ * or a transform. Fields not listed are ignored.
+ */
+export function patchAssignments(data: Record<string, unknown>, columns: Record<string, PatchColumn>): { sets: string[]; params: unknown[] } {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  for (const [field, spec] of Object.entries(columns)) {
+    if (!Object.prototype.hasOwnProperty.call(data, field)) continue;
+    const column = typeof spec === "string" ? spec : spec === true ? field : spec.column ?? field;
+    const to = typeof spec === "object" && spec.to ? spec.to : (value: unknown) => value ?? null;
+    sets.push(`${column} = ?`);
+    params.push(to(data[field]));
+  }
+  return { sets, params };
+}
+
+/** `published` as the 0/1 column: anything but an explicit false is published. */
+export const publishedFlag = (value: unknown) => (value === false ? 0 : 1);

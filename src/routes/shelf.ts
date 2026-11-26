@@ -4,7 +4,7 @@ import type { Env } from "../types/env";
 import type { JsonRecord } from "../types/common";
 import { nowIso } from "../utils/date";
 import { parseJson, mapJsonField } from "../utils/json";
-import { validateBody } from "../utils/validation";
+import { readBody, idParam, badId, notFound } from "../lib/site-http";
 import { normalizeShelfItem } from "../utils/normalizers";
 import {
   SHELF_MEDIA_TYPES,
@@ -43,6 +43,8 @@ import {
   buildWhereClause,
   parseSort,
   parseId,
+  patchAssignments,
+  publishedFlag,
 } from "../utils/query";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -412,11 +414,9 @@ app.get("/diary", async (c) => {
 });
 
 app.patch("/log/:logId", async (c) => {
-  const logId = parseId(c.req.param("logId"));
-  if (!logId) return c.json({ error: "Invalid id" }, 400);
-  const body = await parseJson(c.req.raw);
-  if (body === null) return c.json({ error: "Invalid JSON" }, 400);
-  const validation = validateBody(shelfLogPatchSchema, body);
+  const logId = idParam(c, "logId");
+  if (!logId) return badId(c);
+  const validation = await readBody(c, shelfLogPatchSchema);
   if (!validation.ok) return validation.response;
 
   const updates: string[] = [];
@@ -445,15 +445,15 @@ app.patch("/log/:logId", async (c) => {
   const result = await c.env.DB.prepare(`UPDATE shelf_log SET ${updates.join(", ")} WHERE id = ?`)
     .bind(...params)
     .run();
-  if (result.meta.changes === 0) return c.json({ error: "Diary entry not found" }, 404);
+  if (result.meta.changes === 0) return notFound(c, "Diary entry");
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.delete("/log/:logId", async (c) => {
-  const logId = parseId(c.req.param("logId"));
-  if (!logId) return c.json({ error: "Invalid id" }, 400);
+  const logId = idParam(c, "logId");
+  if (!logId) return badId(c);
   const result = await c.env.DB.prepare("DELETE FROM shelf_log WHERE id = ?").bind(logId).run();
-  if (result.meta.changes === 0) return c.json({ error: "Diary entry not found" }, 404);
+  if (result.meta.changes === 0) return notFound(c, "Diary entry");
   return c.json({ ok: true, id: logId, deleted_at: nowIso() });
 });
 
@@ -463,16 +463,14 @@ app.delete("/log/:logId", async (c) => {
  * site (which reads shelf_items) updates by itself.
  */
 app.post("/:id/log", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) return c.json({ error: "Invalid id" }, 400);
-  const body = await parseJson(c.req.raw);
-  if (body === null) return c.json({ error: "Invalid JSON" }, 400);
-  const validation = validateBody(shelfLogSchema, body);
+  const id = idParam(c);
+  if (!id) return badId(c);
+  const validation = await readBody(c, shelfLogSchema);
   if (!validation.ok) return validation.response;
   const data = validation.data;
 
   const existing = await c.env.DB.prepare("SELECT * FROM shelf_items WHERE id = ?").bind(id).first<JsonRecord>();
-  if (!existing) return c.json({ error: "Shelf item not found" }, 404);
+  if (!existing) return notFound(c, "Shelf item");
 
   const type = String(existing.type ?? "");
   if (!DIARY_TYPES.includes(shelfKind(type))) {
@@ -577,10 +575,8 @@ function parseStoredRecord(value: unknown): JsonRecord {
 }
 
 app.post("/:id/enrich", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const body = await parseJson(c.req.raw);
   const validation = body === null ? shelfEnrichSchema.safeParse({}) : shelfEnrichSchema.safeParse(body);
@@ -592,7 +588,7 @@ app.post("/:id/enrich", async (c) => {
     .bind(id)
     .all();
   if (!row.results || row.results.length === 0) {
-    return c.json({ error: "Shelf item not found" }, 404);
+    return notFound(c, "Shelf item");
   }
 
   const item = normalizeShelfItem(row.results[0] as JsonRecord);
@@ -664,10 +660,8 @@ app.post("/:id/enrich", async (c) => {
 });
 
 app.get("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const query = c.req.query();
   const filters = createFilterBuilder();
@@ -680,19 +674,14 @@ app.get("/:id", async (c) => {
     .all();
 
   if (!row.results || row.results.length === 0) {
-    return c.json({ error: "Shelf item not found" }, 404);
+    return notFound(c, "Shelf item");
   }
 
   return c.json(normalizeShelfItem(row.results[0] as JsonRecord));
 });
 
 app.post("/", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(shelfItemSchema, body);
+  const validation = await readBody(c, shelfItemSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -735,17 +724,10 @@ app.post("/", async (c) => {
 });
 
 app.put("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(shelfItemSchema, body);
+  const validation = await readBody(c, shelfItemSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -781,24 +763,17 @@ app.put("/:id", async (c) => {
     .run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Shelf item not found" }, 404);
+    return notFound(c, "Shelf item");
   }
 
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.patch("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(shelfPatchSchema, body);
+  const validation = await readBody(c, shelfPatchSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -812,7 +787,7 @@ app.patch("/:id", async (c) => {
       .first<JsonRecord>();
 
     if (!existing) {
-      return c.json({ error: "Shelf item not found" }, 404);
+      return notFound(c, "Shelf item");
     }
 
     const nextType = validation.data.type ?? String(existing.type ?? "");
@@ -825,133 +800,39 @@ app.patch("/:id", async (c) => {
     }
   }
 
-  const updates: string[] = [];
-  const params: (string | number | null)[] = [];
-
-  if (Object.prototype.hasOwnProperty.call(validation.data, "type")) {
-    updates.push("type = ?");
-    params.push(validation.data.type ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "title")) {
-    updates.push("title = ?");
-    params.push(validation.data.title ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "quote")) {
-    updates.push("quote = ?");
-    params.push(validation.data.quote ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "author")) {
-    updates.push("author = ?");
-    params.push(validation.data.author ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "source")) {
-    updates.push("source = ?");
-    params.push(validation.data.source ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "url")) {
-    updates.push("url = ?");
-    params.push(validation.data.url ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "note")) {
-    updates.push("note = ?");
-    params.push(validation.data.note ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "image_url")) {
-    updates.push("image_url = ?");
-    params.push(validation.data.image_url ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "drawer")) {
-    updates.push("drawer = ?");
-    params.push(validation.data.drawer ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "tags")) {
-    updates.push("tags_json = ?");
-    params.push(mapJsonField(validation.data.tags));
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "date_added")) {
-    updates.push("date_added = ?");
-    params.push(validation.data.date_added ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "published")) {
-    updates.push("published = ?");
-    params.push(validation.data.published === false ? 0 : 1);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "status")) {
-    updates.push("status = ?");
-    params.push(validation.data.status ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "rating")) {
-    updates.push("rating = ?");
-    params.push(validation.data.rating ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "rating_scale")) {
-    updates.push("rating_scale = ?");
-    params.push(validation.data.rating_scale ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "started_at")) {
-    updates.push("started_at = ?");
-    params.push(validation.data.started_at ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "completed_at")) {
-    updates.push("completed_at = ?");
-    params.push(validation.data.completed_at ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "last_watched_at")) {
-    updates.push("last_watched_at = ?");
-    params.push(validation.data.last_watched_at ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "progress_current")) {
-    updates.push("progress_current = ?");
-    params.push(validation.data.progress_current ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "progress_total")) {
-    updates.push("progress_total = ?");
-    params.push(validation.data.progress_total ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "progress_unit")) {
-    updates.push("progress_unit = ?");
-    params.push(validation.data.progress_unit ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "favorite_rank")) {
-    updates.push("favorite_rank = ?");
-    params.push(validation.data.favorite_rank ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "showcase")) {
-    updates.push("showcase = ?");
-    params.push(validation.data.showcase === true ? 1 : 0);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "metadata")) {
-    updates.push("metadata_json = ?");
-    params.push(mapJsonField(validation.data.metadata));
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "shelf_group")) {
-    updates.push("shelf_group = ?");
-    params.push(validation.data.shelf_group ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "display_order")) {
-    updates.push("display_order = ?");
-    params.push(validation.data.display_order ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "cover_override_url")) {
-    updates.push("cover_override_url = ?");
-    params.push(validation.data.cover_override_url ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "spine_image_url")) {
-    updates.push("spine_image_url = ?");
-    params.push(validation.data.spine_image_url ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "goodreads_id")) {
-    updates.push("goodreads_id = ?");
-    params.push(validation.data.goodreads_id ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "isbn")) {
-    updates.push("isbn = ?");
-    params.push(validation.data.isbn ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "apple_books_id")) {
-    updates.push("apple_books_id = ?");
-    params.push(validation.data.apple_books_id ?? null);
-  }
+  const { sets: updates, params } = patchAssignments(validation.data, {
+    type: true,
+    title: true,
+    quote: true,
+    author: true,
+    source: true,
+    url: true,
+    note: true,
+    image_url: true,
+    drawer: true,
+    tags: { column: "tags_json", to: mapJsonField },
+    date_added: true,
+    published: { to: publishedFlag },
+    status: true,
+    rating: true,
+    rating_scale: true,
+    started_at: true,
+    completed_at: true,
+    last_watched_at: true,
+    progress_current: true,
+    progress_total: true,
+    progress_unit: true,
+    favorite_rank: true,
+    showcase: { to: (value) => value === true ? 1 : 0 },
+    metadata: { column: "metadata_json", to: mapJsonField },
+    shelf_group: true,
+    display_order: true,
+    cover_override_url: true,
+    spine_image_url: true,
+    goodreads_id: true,
+    isbn: true,
+    apple_books_id: true,
+  });
 
   const updatedAt = nowIso();
   updates.push("updated_at = ?");
@@ -963,24 +844,22 @@ app.patch("/:id", async (c) => {
   const result = await c.env.DB.prepare(sql).bind(...params).run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Shelf item not found" }, 404);
+    return notFound(c, "Shelf item");
   }
 
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.delete("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const result = await c.env.DB.prepare("DELETE FROM shelf_items WHERE id = ?")
     .bind(id)
     .run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Shelf item not found" }, 404);
+    return notFound(c, "Shelf item");
   }
 
   // Its diary goes with it (the diary only lists entries whose item exists anyway).

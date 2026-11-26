@@ -2,8 +2,8 @@ import { Hono } from "hono";
 import type { Env } from "../types/env";
 import type { JsonRecord } from "../types/common";
 import { nowIso } from "../utils/date";
-import { parseJson, mapJsonField } from "../utils/json";
-import { validateBody } from "../utils/validation";
+import { mapJsonField } from "../utils/json";
+import { readBody } from "../lib/site-http";
 import { normalizeProfile } from "../utils/normalizers";
 import { profileSchema } from "../schemas/profile";
 import { profileResponseSchema } from "../schemas/responses";
@@ -44,12 +44,7 @@ app.get("/", async (c) => {
 });
 
 app.put("/", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(profileSchema, body);
+  const validation = await readBody(c, profileSchema);
   if (!validation.ok) {
     return validation.response;
   }

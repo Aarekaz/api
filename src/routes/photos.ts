@@ -2,10 +2,10 @@ import { Hono } from "hono";
 import type { Env } from "../types/env";
 import type { JsonRecord } from "../types/common";
 import { nowIso } from "../utils/date";
-import { parseJson, mapJsonField } from "../utils/json";
-import { validateBody } from "../utils/validation";
+import { mapJsonField } from "../utils/json";
+import { readBody, idParam, badId, notFound } from "../lib/site-http";
 import { normalizePhoto } from "../utils/normalizers";
-import { fileExtensionForContentType } from "../utils/response";
+import { fileExtensionForContentType } from "../utils/content-type";
 import { photoSchema } from "../schemas/content";
 import { photosResponseSchema } from "../schemas/responses";
 import { listQuerySchema } from "../schemas/common";
@@ -37,7 +37,8 @@ import {
   addPublishedFilter,
   buildWhereClause,
   parseSort,
-  parseId,
+  patchAssignments,
+  publishedFlag,
 } from "../utils/query";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -231,10 +232,8 @@ app.get("/", async (c) => {
 });
 
 app.get("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const query = c.req.query();
   const filters = createFilterBuilder();
@@ -247,19 +246,14 @@ app.get("/:id", async (c) => {
     .all();
 
   if (!row.results || row.results.length === 0) {
-    return c.json({ error: "Photo not found" }, 404);
+    return notFound(c, "Photo");
   }
 
   return c.json(normalizePhoto(row.results[0] as JsonRecord));
 });
 
 app.post("/", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(photoSchema, body);
+  const validation = await readBody(c, photoSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -339,17 +333,10 @@ app.put("/upload-presigned", async (c) => {
 });
 
 app.put("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(photoSchema, body);
+  const validation = await readBody(c, photoSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -380,83 +367,36 @@ app.put("/:id", async (c) => {
     .run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Photo not found" }, 404);
+    return notFound(c, "Photo");
   }
 
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.patch("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(photoPatchSchema, body);
+  const validation = await readBody(c, photoPatchSchema);
   if (!validation.ok) {
     return validation.response;
   }
 
-  const updates: string[] = [];
-  const params: (string | number | null)[] = [];
-
-  if (Object.prototype.hasOwnProperty.call(validation.data, "title")) {
-    updates.push("title = ?");
-    params.push(validation.data.title ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "description")) {
-    updates.push("description = ?");
-    params.push(validation.data.description ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "url")) {
-    updates.push("url = ?");
-    params.push(validation.data.url ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "thumb_url")) {
-    updates.push("thumb_url = ?");
-    params.push(validation.data.thumb_url ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "width")) {
-    updates.push("width = ?");
-    params.push(validation.data.width ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "height")) {
-    updates.push("height = ?");
-    params.push(validation.data.height ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "shot_at")) {
-    updates.push("shot_at = ?");
-    params.push(validation.data.shot_at ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "camera")) {
-    updates.push("camera = ?");
-    params.push(validation.data.camera ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "lens")) {
-    updates.push("lens = ?");
-    params.push(validation.data.lens ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "settings")) {
-    updates.push("settings = ?");
-    params.push(validation.data.settings ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "location")) {
-    updates.push("location = ?");
-    params.push(validation.data.location ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "tags")) {
-    updates.push("tags_json = ?");
-    params.push(mapJsonField(validation.data.tags));
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "published")) {
-    updates.push("published = ?");
-    params.push(validation.data.published === false ? 0 : 1);
-  }
+  const { sets: updates, params } = patchAssignments(validation.data, {
+    title: true,
+    description: true,
+    url: true,
+    thumb_url: true,
+    width: true,
+    height: true,
+    shot_at: true,
+    camera: true,
+    lens: true,
+    settings: true,
+    location: true,
+    tags: { column: "tags_json", to: mapJsonField },
+    published: { to: publishedFlag },
+  });
 
   const updatedAt = nowIso();
   updates.push("updated_at = ?");
@@ -468,24 +408,22 @@ app.patch("/:id", async (c) => {
   const result = await c.env.DB.prepare(sql).bind(...params).run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Photo not found" }, 404);
+    return notFound(c, "Photo");
   }
 
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.delete("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const result = await c.env.DB.prepare("DELETE FROM photos WHERE id = ?")
     .bind(id)
     .run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Photo not found" }, 404);
+    return notFound(c, "Photo");
   }
 
   return c.json({ ok: true, id, deleted_at: nowIso() });
