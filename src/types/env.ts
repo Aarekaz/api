@@ -1,7 +1,7 @@
 export interface Env {
   DB: D1Database;
   R2_BUCKET: R2Bucket;
-  /** Private bucket (no public domain): journal photos. */
+  /** Private bucket (no public domain): journal photos, note photos (notes/), backups. */
   R2_PRIVATE?: R2Bucket;
   API_TOKEN: string;
   /** Optional read-only token for the website: GETs of the routes it reads only (lib/site-reads.ts). */

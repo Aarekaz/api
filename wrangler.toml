@@ -40,7 +40,8 @@ binding = "R2_BUCKET"
 bucket_name = "api-media"
 
 # Private: never on a public domain, read only through the signed-in API.
-# journal/ (journal photos).
+# journal/ (journal photos), notes/ (photos in notes; a published piece gets
+# public copies under blog/notes/ in api-media, services/note-photos.ts).
 [[r2_buckets]]
 binding = "R2_PRIVATE"
 bucket_name = "api-private"

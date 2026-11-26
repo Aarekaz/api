@@ -1,4 +1,5 @@
 import type { Env } from "../types/env";
+import { publishNotePhotos } from "./note-photos";
 import {
   type DocumentKind,
   type DocumentStatus,
@@ -206,13 +207,15 @@ export function postContent(body: string): string {
  */
 async function postWrites(env: Env, doc: DocumentRow, published: boolean, now: Date) {
   const stamp = now.toISOString();
+  // Photos from notes are private; what goes on the site points at public copies.
+  const content = published ? await publishNotePhotos(env, postContent(doc.body)) : postContent(doc.body);
   const live = doc.post_id ? await env.DB.prepare("SELECT id FROM posts WHERE id = ?").bind(doc.post_id).first<{ id: number }>() : null;
   if (live) {
     return {
       statements: [env.DB.prepare(
         `UPDATE posts SET title = ?, summary = COALESCE(?, summary), content = ?,
            published_at = CASE WHEN ? THEN COALESCE(published_at, ?) ELSE NULL END, updated_at = ? WHERE id = ?`,
-      ).bind(doc.title, summarize(doc.body), postContent(doc.body), published ? 1 : 0, stamp, stamp, live.id)],
+      ).bind(doc.title, summarize(doc.body), content, published ? 1 : 0, stamp, stamp, live.id)],
       postId: { sql: "?", args: [live.id] as unknown[] },
     };
   }
@@ -223,7 +226,7 @@ async function postWrites(env: Env, doc: DocumentRow, published: boolean, now: D
     statements: [env.DB.prepare(
       `INSERT INTO posts (slug, title, summary, content, tags_json, published_at, pinned, created_at, updated_at)
        VALUES (?, ?, ?, ?, NULL, ?, 0, ?, ?)`,
-    ).bind(slug, doc.title, summarize(doc.body), postContent(doc.body), published ? stamp : null, stamp, stamp)],
+    ).bind(slug, doc.title, summarize(doc.body), content, published ? stamp : null, stamp, stamp)],
     postId: { sql: "(SELECT id FROM posts WHERE slug = ?)", args: [slug] as unknown[] },
   };
 }
@@ -272,14 +275,27 @@ export const INBOX_FOLDER = "Inbox";
 /**
  * A capture becomes its own note in the Inbox section: the first line is the
  * title, the rest is the body. Sort it, move it or turn it into writing later.
+ * Shared photos (their addresses, from POST /v1/documents/photos) follow the
+ * words, one to a paragraph. With no words to name it, or only a link, the
+ * note is called "Photo" ("3 photos") and the link stays in its body.
  */
-export async function captureToInbox(env: Env, text: string, now = new Date()): Promise<DocumentRow> {
+export async function captureToInbox(env: Env, text: string, now = new Date(),
+  options: { photos?: string[]; textIsLink?: boolean } = {}): Promise<DocumentRow> {
   const trimmed = text.trim();
-  if (!trimmed) throw new DocumentError("text is required", 400);
-  const [first, ...rest] = trimmed.split("\n");
-  const line = first.replace(/^#+\s*/, "").trim();
-  const title = line.length > 80 ? line.slice(0, 77).trimEnd() + "…" : line;
-  const remainder = (line.length > 80 ? trimmed : rest.join("\n")).trim();
-  const body = `# ${title}\n\n${remainder}${remainder ? "\n" : ""}`;
+  const photos = options.photos ?? [];
+  if (!trimmed && photos.length === 0) throw new DocumentError("text is required", 400);
+  let title: string;
+  let remainder: string;
+  if (trimmed && !(photos.length > 0 && options.textIsLink)) {
+    const [first, ...rest] = trimmed.split("\n");
+    const line = first.replace(/^#+\s*/, "").trim();
+    title = line.length > 80 ? line.slice(0, 77).trimEnd() + "…" : line;
+    remainder = (line.length > 80 ? trimmed : rest.join("\n")).trim();
+  } else {
+    title = photos.length === 1 ? "Photo" : `${photos.length} photos`;
+    remainder = trimmed;
+  }
+  const content = [remainder, ...photos.map((url) => `![](${url})`)].filter(Boolean).join("\n\n");
+  const body = `# ${title}\n\n${content}${content ? "\n" : ""}`;
   return createDocument(env, { kind: "note", title, body, folder: INBOX_FOLDER }, now);
 }
