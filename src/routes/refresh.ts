@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
 import type { JsonRecord } from "../types/common";
-import { dateOnly, addDays } from "../utils/date";
+import { dateOnly, addDays, isDay } from "../utils/date";
 import { fetchLanyardStatus, saveStatusSnapshot } from "../services/lanyard";
 import { refreshWakaTime, refreshWakaTimeHourly, markRefreshed } from "../services/wakatime";
 import { refreshGitHub } from "../services/github";
@@ -56,7 +56,7 @@ app.post("/", async (c) => {
     try {
       // ?wakatime_start=YYYY-MM-DD backfills a gap (up to 60 days back); else the last week.
       const asked = c.req.query("wakatime_start");
-      const start = asked && /^\d{4}-\d{2}-\d{2}$/.test(asked) && asked >= lastSixty && asked < lastWeek ? asked : lastWeek;
+      const start = isDay(asked) && asked >= lastSixty && asked < lastWeek ? asked : lastWeek;
       await refreshWakaTime(c.env, start, today);
       await markRefreshed(c.env, "wakatime_daily");
       results.wakatime = { ok: true, start, end: today };

@@ -20,6 +20,7 @@ import {
   structuredOkResponses,
 } from "../schemas/openapi";
 import { createDocument, deleteDocument, DocumentError, getDocument, saveDocument, type DocumentRow } from "../services/documents";
+import { DAY, dayAtOffset, dayInZone, shiftDay } from "../utils/date";
 
 // /v1/journal: your journal as a timeline of moments. Each entry is a locked
 // `journal` document (so search, versions, sync and the nightly backup keep
@@ -188,24 +189,20 @@ const LIVE = "kind = 'journal' AND deleted_at IS NULL";
 
 // MARK: Days in your time zone
 
-const DAY = /^\d{4}-\d{2}-\d{2}$/;
-
 /** A function from an instant to its local day ("2026-11-24"): IANA `tz`, else `offset` minutes, else UTC. */
 export function dayIn(tz?: string, offset?: string): (at: string) => string {
   if (tz) {
     try {
-      const format = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" });
-      return (at) => format.format(new Date(at));
+      return dayInZone(tz);
     } catch { /* unknown zone: fall through */ }
   }
   const minutes = Number(offset);
-  const shift = Number.isFinite(minutes) && Math.abs(minutes) <= 14 * 60 ? minutes * 60_000 : 0;
-  return (at) => new Date(Date.parse(at) + shift).toISOString().slice(0, 10);
+  const shift = Number.isFinite(minutes) && Math.abs(minutes) <= 14 * 60 ? minutes : 0;
+  return (at) => dayAtOffset(at, shift);
 }
 
 const dayNumber = (day: string) => Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10))) / 86_400_000;
-const dayFromNumber = (n: number) => new Date(n * 86_400_000).toISOString().slice(0, 10);
-const addDays = (day: string, n: number) => dayFromNumber(dayNumber(day) + n);
+const addDays = shiftDay;
 /** Monday of the day's week, as a day number. */
 const weekOf = (day: string) => { const n = dayNumber(day); return n - ((new Date(n * 86_400_000).getUTCDay() + 6) % 7); };
 

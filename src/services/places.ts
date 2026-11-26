@@ -1,6 +1,7 @@
 import { applySaved, buildChapters, type MonthCount, type MonthMode, type MonthPlace, type SavedPlace } from "./chapters";
 import { bumpDataVersion } from "./data-versions";
 import type { Env } from "../types/env";
+import { dayAtOffset, dayInZone, shiftDay } from "../utils/date";
 
 /**
  * Places: visits, the journeys between them, names looked up on a device and
@@ -36,17 +37,14 @@ export type CleanVisit = {
  * with its summer time; scripts/backfill-local-date.mjs uses the same.
  */
 export const HOME_TIME_ZONE = "America/New_York";
-const homeDate = new Intl.DateTimeFormat("en-US", { timeZone: HOME_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" });
+const homeDay = dayInZone(HOME_TIME_ZONE);
 
 /**
  * The local date (YYYY-MM-DD) of a UTC instant where it happened: shifted by
  * the row's own utc_offset (minutes), or in HOME_TIME_ZONE when it has none.
  */
 export function localDate(at: string, utcOffset: number | null): string {
-  const ms = Date.parse(at);
-  if (utcOffset !== null) return new Date(ms + utcOffset * 60_000).toISOString().slice(0, 10);
-  const part = (type: string) => homeDate.formatToParts(new Date(ms)).find((p) => p.type === type)!.value;
-  return `${part("year")}-${part("month")}-${part("day")}`;
+  return utcOffset !== null ? dayAtOffset(at, utcOffset) : homeDay(at);
 }
 
 export function cleanVisit(v: VisitInput): CleanVisit | null {
@@ -153,8 +151,7 @@ const local = (col: string, param: string, prefix = "") =>
  */
 const dayOf = (col: string, param: string, prefix = "") => `COALESCE(${prefix}local_date, date(${local(col, param, prefix)}))`;
 
-/** `days` before or after a YYYY-MM-DD date. */
-const shiftDate = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+const shiftDate = shiftDay;
 
 const WITH_NAME = `SELECT v.*, ${KEY_V} AS key, n.name AS place_name, n.city AS place_city
      FROM shown_visits AS v LEFT JOIN place_names AS n ON n.key = ${KEY_V}`;

@@ -19,6 +19,7 @@ import {
   fetchArticle, getLink, linkTags, listLinks, markRead, presentLink, readingOf, readingStats, saveLink, saveProgress, setLinkNote, updateLink,
   type LinkListState,
 } from "../services/links";
+import { DAY, dateOnly, isDay } from "../utils/date";
 
 // /v1/links: read later. Every link lands in the Inbox; archiving it (when
 // you've finished) moves it to the Archive. Progress and a note per article
@@ -45,7 +46,7 @@ const Progress = z.object({
   updated_at: z.string().datetime({ offset: true }).optional(),
   device: z.string().trim().max(60).nullish(),
   /** The device's local date, so time read lands on the day you read it. */
-  day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+  day: z.string().regex(DAY).nullish(),
   seconds: z.number().min(0).max(86_400).nullish().openapi({
     description: "Active reading seconds since this device's last report. Credited to time read (at most the time since the previous progress plus 30 s, and 10 minutes a report), even when progress didn't move.",
   }),
@@ -154,8 +155,8 @@ openApiRegistry.registerPath({
   summary: "Reading stats: minutes and articles per day, finished per month, favourite sites",
   security: authSecurity,
   request: { query: z.object({
-    since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().openapi({ description: "First day (default: a year ago)" }),
-    day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().openapi({ description: "Also list the articles read on this day, with their minutes" }),
+    since: z.string().regex(DAY).optional().openapi({ description: "First day (default: a year ago)" }),
+    day: z.string().regex(DAY).optional().openapi({ description: "Also list the articles read on this day, with their minutes" }),
   }) },
   responses: structuredOkResponses(ReadingStats),
 });
@@ -233,9 +234,9 @@ app.post("/", async (c) => {
 
 app.get("/stats", async (c) => {
   const since = c.req.query("since");
-  const day = since && /^\d{4}-\d{2}-\d{2}$/.test(since) ? since : new Date(Date.now() - 366 * 86_400_000).toISOString().slice(0, 10);
+  const day = isDay(since) ? since : dateOnly(new Date(Date.now() - 366 * 86_400_000));
   const on = c.req.query("day");
-  const date = on && /^\d{4}-\d{2}-\d{2}$/.test(on) ? on : undefined;
+  const date = isDay(on) ? on : undefined;
   // D1 resets the whole database when any query (a backup tick, a sync) runs
   // out of CPU, failing these cheap reads with it; one retry nearly always lands.
   return c.json(await retryD1Read(() => readingStats(c.env, day, date)));

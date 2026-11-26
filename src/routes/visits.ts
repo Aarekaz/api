@@ -17,6 +17,7 @@ import {
   onThisDay, PLACE_KEY, saveNames, str, TRAVEL_MODES, updateSaved, visitDay, visitDays, visitMonths, visitSources,
   visitsAt, visitYears, type CleanJourney, type CleanVisit, type JourneyInput, type VisitInput,
 } from "../services/places";
+import { isDay } from "../utils/date";
 
 export { cleanJourney, cleanSaved, cleanVisit, findTrips, TRAVEL_MODES, type AwayDay } from "../services/places";
 
@@ -648,7 +649,7 @@ app.get("/days", async (c) => {
 /** One day: its visits and the journeys between them, in order. ?date=2024-05-01&offset=-240 */
 app.get("/day", async (c) => {
   const date = c.req.query("date") ?? "";
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return fail(c, 400, "date must look like 2024-05-01");
+  if (!isDay(date)) return fail(c, 400, "date must look like 2024-05-01");
   return ok(c, await visitDay(c.env, date, offsetOf(c.req.query("offset"))));
 });
 

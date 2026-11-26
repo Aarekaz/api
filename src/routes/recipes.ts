@@ -20,6 +20,7 @@ import {
   structuredOkResponses,
 } from "../schemas/openapi";
 import { cleanIngredients, cleanSteps, extractRecipe, type Ingredient, type Step } from "../services/recipe-import";
+import { DAY } from "../utils/date";
 
 // /v1/recipes: the Cookbook. Recipes saved from a link or written by hand,
 // with ingredients that know their amounts (so servings scale), steps, times,
@@ -58,7 +59,7 @@ const Fields = {
 const CreateRecipe = z.object(Fields);
 const UpdateRecipe = z.object(Fields).partial();
 const LogEntry = z.object({
-  cooked_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  cooked_on: z.string().regex(DAY).optional(),
   rating: z.number().int().min(1).max(5).nullish(),
   note: z.string().max(2000).nullish(),
   servings: z.number().positive().max(999).nullish(),

@@ -1,6 +1,7 @@
 import type { Env } from "../../types/env";
 import { DocumentError } from "../documents";
 import { getLink, type LinkRow } from "./store";
+import { isDay } from "../../utils/date";
 
 // Your reading state on a link: where you are, read or not, stars, tags, title, note.
 
@@ -60,7 +61,7 @@ export async function saveProgress(env: Env, id: string, input: ProgressInput, n
   const applied = (result.meta?.changes ?? 0) === 1;
   const minutesLong = await raiseReadingMinutes(env, id, before.reading_minutes, input.words);
   // The day you read it: the phone's own date when it sends one.
-  const day = typeof input.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input.day) ? input.day : at.slice(0, 10);
+  const day = isDay(input.day) ? input.day : at.slice(0, 10);
   try {
     if (typeof input.seconds === "number") {
       const seconds = creditedSeconds(input.seconds, before.progress_updated_at ?? null, now);
