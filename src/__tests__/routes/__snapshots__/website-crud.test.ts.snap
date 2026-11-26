@@ -1,0 +1,1724 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`'education' (website CRUD characterisation) > answers every bad request with the website's error bodies 1`] = `
+{
+  "createBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "createInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"institution":["Required"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "deleteBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "deleteMissing": {
+    "body": "{"error":"Education not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "getMissing": {
+    "body": "{"error":"Education not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getZeroId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchEmpty": {
+    "body": "{"error":"Validation error","details":{"formErrors":["At least one field must be provided"],"fieldErrors":{}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "patchMissing": {
+    "body": "{"error":"Education not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "putBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"institution":["Required"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "putMissing": {
+    "body": "{"error":"Education not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'education' (website CRUD characterisation) > creates, reads, replaces, patches and deletes 1`] = `
+{
+  "afterDelete": {
+    "body": "{"error":"Education not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "afterPatch": {
+    "body": "{"id":1,"institution":"School","degree":"MS","field":"Maths","start_date":null,"end_date":null,"description":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":1}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "afterReplace": {
+    "body": "{"id":1,"institution":"School","degree":"MS","field":null,"start_date":null,"end_date":null,"description":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":0}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "create": {
+    "body": "{"ok":true,"created_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 201,
+    "type": "application/json",
+  },
+  "delete": {
+    "body": "{"ok":true,"id":1,"deleted_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "get": {
+    "body": "{"id":1,"institution":"School","degree":"BS","field":"CS","start_date":"2018-09-01","end_date":null,"description":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":1}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "list": {
+    "body": "[{"id":1,"institution":"School","degree":"BS","field":"CS","start_date":"2018-09-01","end_date":null,"description":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":1}]",
+    "status": 200,
+    "type": "application/json",
+  },
+  "patch": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "replace": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'education' (website CRUD characterisation) > pages and bounds ?limit= and ?offset= 1`] = `
+{
+  "junk": 5,
+  "negativeOffset": 2,
+  "none": 5,
+  "offset": 1,
+  "two": 2,
+  "zero": 5,
+}
+`;
+
+exports[`'experience' (website CRUD characterisation) > answers every bad request with the website's error bodies 1`] = `
+{
+  "createBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "createInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"company":["String must contain at least 1 character(s)"],"role":["Required"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "deleteBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "deleteMissing": {
+    "body": "{"error":"Experience not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "getMissing": {
+    "body": "{"error":"Experience not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getZeroId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchEmpty": {
+    "body": "{"error":"Validation error","details":{"formErrors":["At least one field must be provided"],"fieldErrors":{}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "patchMissing": {
+    "body": "{"error":"Experience not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "putBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"company":["String must contain at least 1 character(s)"],"role":["Required"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "putMissing": {
+    "body": "{"error":"Experience not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'experience' (website CRUD characterisation) > creates, reads, replaces, patches and deletes 1`] = `
+{
+  "afterDelete": {
+    "body": "{"error":"Experience not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "afterPatch": {
+    "body": "{"id":1,"company":"Acme","role":"Principal","location":null,"start_date":null,"end_date":"2026-01-01","employment_type":null,"description":"More","created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":1}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "afterReplace": {
+    "body": "{"id":1,"company":"Acme","role":"Staff","location":null,"start_date":null,"end_date":null,"employment_type":null,"description":"More","created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":0}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "create": {
+    "body": "{"ok":true,"created_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 201,
+    "type": "application/json",
+  },
+  "delete": {
+    "body": "{"ok":true,"id":1,"deleted_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "get": {
+    "body": "{"id":1,"company":"Acme","role":"Engineer","location":"NYC","start_date":"2024-01-01","end_date":null,"employment_type":null,"description":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":1}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "list": {
+    "body": "[{"id":1,"company":"Acme","role":"Engineer","location":"NYC","start_date":"2024-01-01","end_date":null,"employment_type":null,"description":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":1}]",
+    "status": 200,
+    "type": "application/json",
+  },
+  "patch": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "replace": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'experience' (website CRUD characterisation) > pages and bounds ?limit= and ?offset= 1`] = `
+{
+  "junk": 5,
+  "negativeOffset": 2,
+  "none": 5,
+  "offset": 1,
+  "two": 2,
+  "zero": 5,
+}
+`;
+
+exports[`'location' (website CRUD characterisation) > answers every bad request with the website's error bodies 1`] = `
+{
+  "createBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "createInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"latitude":["Number must be less than or equal to 90"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "deleteBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "deleteMissing": {
+    "body": "{"error":"Location not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "getMissing": {
+    "body": "{"error":"Location not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getZeroId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchEmpty": {
+    "body": "{"error":"Validation error","details":{"formErrors":["At least one field must be provided"],"fieldErrors":{}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "patchMissing": {
+    "body": "{"error":"Location not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "putBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"latitude":["Number must be less than or equal to 90"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "putMissing": {
+    "body": "{"error":"Location not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'location' (website CRUD characterisation) > creates, reads, replaces, patches and deletes 1`] = `
+{
+  "afterDelete": {
+    "body": "{"error":"Location not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "afterPatch": {
+    "body": "{"id":1,"latitude":40.8,"longitude":-73.9,"altitude":null,"accuracy":5,"speed":null,"heading":null,"recorded_at":"2026-11-20T11:00:00.000Z","address":null,"city":null,"state":null,"country":null,"postal_code":null,"label":"work","notes":"moved","source":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "afterReplace": {
+    "body": "{"id":1,"latitude":40.8,"longitude":-73.9,"altitude":null,"accuracy":null,"speed":null,"heading":null,"recorded_at":"2026-11-20T11:00:00.000Z","address":null,"city":null,"state":null,"country":null,"postal_code":null,"label":null,"notes":"moved","source":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "create": {
+    "body": "{"ok":true,"id":1,"recorded_at":"2026-11-20T10:00:00.000Z","created_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 201,
+    "type": "application/json",
+  },
+  "delete": {
+    "body": "{"ok":true,"id":1,"deleted_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "get": {
+    "body": "{"id":1,"latitude":40.7,"longitude":-74,"altitude":null,"accuracy":null,"speed":null,"heading":null,"recorded_at":"2026-11-20T10:00:00.000Z","address":null,"city":"New York","state":null,"country":null,"postal_code":null,"label":"home","notes":null,"source":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "list": {
+    "body": "{"start":"2026-10-21T12:00:00.000Z","end":"2026-11-20T12:00:00.000Z","label":null,"limit":1000,"offset":0,"count":1,"locations":[{"id":1,"latitude":40.7,"longitude":-74,"altitude":null,"accuracy":null,"speed":null,"heading":null,"recorded_at":"2026-11-20T10:00:00.000Z","address":null,"city":"New York","state":null,"country":null,"postal_code":null,"label":"home","notes":null,"source":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z"}]}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "patch": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "replace": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'location' (website CRUD characterisation) > pages and bounds ?limit= and ?offset= 1`] = `
+{
+  "junk": {
+    "count": 5,
+    "end": "2026-11-20T12:00:00.000Z",
+    "label": null,
+    "limit": 1000,
+    "locations": [
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 1,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 2,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 3,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 4,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 5,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+    ],
+    "offset": 0,
+    "start": "2026-10-21T12:00:00.000Z",
+  },
+  "negativeOffset": {
+    "count": 2,
+    "end": "2026-11-20T12:00:00.000Z",
+    "label": null,
+    "limit": 2,
+    "locations": [
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 1,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 2,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+    ],
+    "offset": 0,
+    "start": "2026-10-21T12:00:00.000Z",
+  },
+  "none": {
+    "count": 5,
+    "end": "2026-11-20T12:00:00.000Z",
+    "label": null,
+    "limit": 1000,
+    "locations": [
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 1,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 2,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 3,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 4,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 5,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+    ],
+    "offset": 0,
+    "start": "2026-10-21T12:00:00.000Z",
+  },
+  "offset": {
+    "count": 1,
+    "end": "2026-11-20T12:00:00.000Z",
+    "label": null,
+    "limit": 2,
+    "locations": [
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 5,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+    ],
+    "offset": 4,
+    "start": "2026-10-21T12:00:00.000Z",
+  },
+  "two": {
+    "count": 2,
+    "end": "2026-11-20T12:00:00.000Z",
+    "label": null,
+    "limit": 2,
+    "locations": [
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 1,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 2,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+    ],
+    "offset": 0,
+    "start": "2026-10-21T12:00:00.000Z",
+  },
+  "zero": {
+    "count": 5,
+    "end": "2026-11-20T12:00:00.000Z",
+    "label": null,
+    "limit": 1000,
+    "locations": [
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 1,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 2,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 3,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 4,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+      {
+        "accuracy": null,
+        "address": null,
+        "altitude": null,
+        "city": "New York",
+        "country": null,
+        "created_at": "2026-11-20T12:00:00.000Z",
+        "heading": null,
+        "id": 5,
+        "label": "home",
+        "latitude": 40.7,
+        "longitude": -74,
+        "notes": null,
+        "postal_code": null,
+        "recorded_at": "2026-11-20T10:00:00.000Z",
+        "source": null,
+        "speed": null,
+        "state": null,
+        "updated_at": "2026-11-20T12:00:00.000Z",
+      },
+    ],
+    "offset": 0,
+    "start": "2026-10-21T12:00:00.000Z",
+  },
+}
+`;
+
+exports[`'photos' (website CRUD characterisation) > answers every bad request with the website's error bodies 1`] = `
+{
+  "createBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "createInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"url":["Invalid url"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "deleteBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "deleteMissing": {
+    "body": "{"error":"Photo not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "getMissing": {
+    "body": "{"error":"Photo not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getZeroId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchEmpty": {
+    "body": "{"error":"Validation error","details":{"formErrors":["At least one field must be provided"],"fieldErrors":{}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "patchMissing": {
+    "body": "{"error":"Photo not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "putBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"url":["Invalid url"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "putMissing": {
+    "body": "{"error":"Photo not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'photos' (website CRUD characterisation) > creates, reads, replaces, patches and deletes 1`] = `
+{
+  "afterDelete": {
+    "body": "{"error":"Photo not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "afterPatch": {
+    "body": "{"id":1,"title":"Sea at dusk","description":null,"url":"https://media.example.com/sea.jpg","thumb_url":null,"width":null,"height":null,"shot_at":null,"camera":null,"lens":null,"settings":null,"location":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":1,"tags":["dusk"]}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "afterReplace": {
+    "body": "{"id":1,"title":"Sea","description":null,"url":"https://media.example.com/sea.jpg","thumb_url":null,"width":null,"height":null,"shot_at":null,"camera":null,"lens":null,"settings":null,"location":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":0,"tags":null}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "create": {
+    "body": "{"ok":true,"created_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 201,
+    "type": "application/json",
+  },
+  "delete": {
+    "body": "{"ok":true,"id":1,"deleted_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "get": {
+    "body": "{"id":1,"title":"Sky","description":null,"url":"https://media.example.com/sky.jpg","thumb_url":null,"width":100,"height":50,"shot_at":"2025-06-01T12:00:00Z","camera":null,"lens":null,"settings":null,"location":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":1,"tags":["blue"]}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "list": {
+    "body": "[{"id":1,"title":"Sky","description":null,"url":"https://media.example.com/sky.jpg","thumb_url":null,"width":100,"height":50,"shot_at":"2025-06-01T12:00:00Z","camera":null,"lens":null,"settings":null,"location":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":1,"tags":["blue"]}]",
+    "status": 200,
+    "type": "application/json",
+  },
+  "patch": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "replace": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'photos' (website CRUD characterisation) > pages and bounds ?limit= and ?offset= 1`] = `
+{
+  "junk": 5,
+  "negativeOffset": 2,
+  "none": 5,
+  "offset": 1,
+  "two": 2,
+  "zero": 5,
+}
+`;
+
+exports[`'posts' (website CRUD characterisation) > answers every bad request with the website's error bodies 1`] = `
+{
+  "createBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "createInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"slug":["String must contain at least 1 character(s)"],"title":["Required"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "deleteBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "deleteMissing": {
+    "body": "{"error":"Post not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "getMissing": {
+    "body": "{"error":"Post not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getZeroId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchEmpty": {
+    "body": "{"error":"Validation error","details":{"formErrors":["At least one field must be provided"],"fieldErrors":{}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "patchMissing": {
+    "body": "{"error":"Post not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "putBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"slug":["String must contain at least 1 character(s)"],"title":["Required"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "putMissing": {
+    "body": "{"error":"Post not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'posts' (website CRUD characterisation) > creates, reads, replaces, patches and deletes 1`] = `
+{
+  "afterDelete": {
+    "body": "{"error":"Post not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "afterPatch": {
+    "body": "{"id":1,"slug":"hello","title":"Hello again","summary":"Changed","content":null,"updated_at":"2026-11-20T12:00:00.000Z","created_at":"2026-11-20T12:00:00.000Z","tags":null,"pinned":false,"published_at":null,"published":false}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "afterReplace": {
+    "body": "{"id":1,"slug":"hello","title":"Hello again","summary":null,"content":null,"updated_at":"2026-11-20T12:00:00.000Z","created_at":"2026-11-20T12:00:00.000Z","tags":null,"pinned":true,"published_at":null,"published":false}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "create": {
+    "body": "{"ok":true,"created_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 201,
+    "type": "application/json",
+  },
+  "delete": {
+    "body": "{"ok":true,"id":1,"deleted_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "get": {
+    "body": "{"id":1,"slug":"hello","title":"Hello","summary":"Hi","content":null,"updated_at":"2026-11-20T12:00:00.000Z","created_at":"2026-11-20T12:00:00.000Z","tags":["intro"],"pinned":false,"published_at":"2026-01-01T00:00:00.000Z","published":true}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "list": {
+    "body": "[{"id":1,"slug":"hello","title":"Hello","summary":"Hi","content":null,"updated_at":"2026-11-20T12:00:00.000Z","created_at":"2026-11-20T12:00:00.000Z","tags":["intro"],"pinned":false,"published_at":"2026-01-01T00:00:00.000Z","published":true}]",
+    "status": 200,
+    "type": "application/json",
+  },
+  "patch": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "replace": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'posts' (website CRUD characterisation) > pages and bounds ?limit= and ?offset= 1`] = `
+{
+  "junk": 5,
+  "negativeOffset": 2,
+  "none": 5,
+  "offset": 1,
+  "two": 2,
+  "zero": 5,
+}
+`;
+
+exports[`'projects' (website CRUD characterisation) > answers every bad request with the website's error bodies 1`] = `
+{
+  "createBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "createInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"title":["Expected string, received number"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "deleteBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "deleteMissing": {
+    "body": "{"error":"Project not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "getMissing": {
+    "body": "{"error":"Project not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getZeroId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchEmpty": {
+    "body": "{"error":"Validation error","details":{"formErrors":["At least one field must be provided"],"fieldErrors":{}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "patchMissing": {
+    "body": "{"error":"Project not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "putBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"title":["Expected string, received number"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "putMissing": {
+    "body": "{"error":"Project not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'projects' (website CRUD characterisation) > creates, reads, replaces, patches and deletes 1`] = `
+{
+  "afterDelete": {
+    "body": "{"error":"Project not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "afterPatch": {
+    "body": "{"id":1,"title":"Thing 2","description":"Changed","status":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","sort_order":0,"published":1,"links":null,"tags":["c"],"featured":true,"highlight":null,"listings":[]}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "afterReplace": {
+    "body": "{"id":1,"title":"Thing 2","description":null,"status":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","sort_order":0,"published":0,"links":null,"tags":["c"],"featured":true,"highlight":"Best","listings":[]}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "create": {
+    "body": "{"ok":true,"created_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 201,
+    "type": "application/json",
+  },
+  "delete": {
+    "body": "{"ok":true,"id":1,"deleted_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "get": {
+    "body": "{"id":1,"title":"Thing","description":"A thing","status":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","sort_order":2,"published":1,"links":["https://example.com"],"tags":["a","b"],"featured":false,"highlight":null,"listings":[]}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "list": {
+    "body": "[{"id":1,"title":"Thing","description":"A thing","status":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","sort_order":2,"published":1,"links":["https://example.com"],"tags":["a","b"],"featured":false,"highlight":null,"listings":[]}]",
+    "status": 200,
+    "type": "application/json",
+  },
+  "patch": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "replace": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'projects' (website CRUD characterisation) > pages and bounds ?limit= and ?offset= 1`] = `
+{
+  "junk": 5,
+  "negativeOffset": 2,
+  "none": 5,
+  "offset": 1,
+  "two": 2,
+  "zero": 5,
+}
+`;
+
+exports[`'shelf' (website CRUD characterisation) > answers every bad request with the website's error bodies 1`] = `
+{
+  "createBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "createInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"status":["Invalid book shelf status: watching"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "deleteBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "deleteMissing": {
+    "body": "{"error":"Shelf item not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "getMissing": {
+    "body": "{"error":"Shelf item not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getZeroId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchEmpty": {
+    "body": "{"error":"Validation error","details":{"formErrors":["At least one field must be provided"],"fieldErrors":{}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "patchMissing": {
+    "body": "{"error":"Shelf item not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "putBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"status":["Invalid book shelf status: watching"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "putMissing": {
+    "body": "{"error":"Shelf item not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'shelf' (website CRUD characterisation) > creates, reads, replaces, patches and deletes 1`] = `
+{
+  "afterDelete": {
+    "body": "{"error":"Shelf item not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "afterPatch": {
+    "body": "{"id":1,"type":"book","title":"Dune Messiah","quote":null,"author":null,"source":null,"url":null,"note":"Reread","image_url":null,"drawer":null,"date_added":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","status":"completed","rating":5,"rating_scale":null,"started_at":null,"completed_at":null,"last_watched_at":null,"progress_current":null,"progress_total":null,"progress_unit":null,"favorite_rank":null,"shelf_group":null,"display_order":null,"cover_override_url":null,"spine_image_url":null,"goodreads_id":null,"isbn":null,"apple_books_id":null,"tags":null,"metadata":null,"showcase":false,"published":true}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "afterReplace": {
+    "body": "{"id":1,"type":"book","title":"Dune Messiah","quote":null,"author":null,"source":null,"url":null,"note":null,"image_url":null,"drawer":null,"date_added":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","status":"completed","rating":null,"rating_scale":null,"started_at":null,"completed_at":null,"last_watched_at":null,"progress_current":null,"progress_total":null,"progress_unit":null,"favorite_rank":null,"shelf_group":null,"display_order":null,"cover_override_url":null,"spine_image_url":null,"goodreads_id":null,"isbn":null,"apple_books_id":null,"tags":null,"metadata":null,"showcase":false,"published":false}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "create": {
+    "body": "{"ok":true,"id":1,"created_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 201,
+    "type": "application/json",
+  },
+  "delete": {
+    "body": "{"ok":true,"id":1,"deleted_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "get": {
+    "body": "{"id":1,"type":"book","title":"Dune","quote":null,"author":"Herbert","source":null,"url":null,"note":null,"image_url":null,"drawer":null,"date_added":"2026-11-20T12:00:00.000Z","created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","status":"reading","rating":4,"rating_scale":5,"started_at":null,"completed_at":null,"last_watched_at":null,"progress_current":null,"progress_total":null,"progress_unit":null,"favorite_rank":null,"shelf_group":null,"display_order":null,"cover_override_url":null,"spine_image_url":null,"goodreads_id":null,"isbn":null,"apple_books_id":null,"tags":["scifi"],"metadata":null,"showcase":false,"published":true}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "list": {
+    "body": "[{"id":1,"type":"book","title":"Dune","quote":null,"author":"Herbert","source":null,"url":null,"note":null,"image_url":null,"drawer":null,"date_added":"2026-11-20T12:00:00.000Z","created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","status":"reading","rating":4,"rating_scale":5,"started_at":null,"completed_at":null,"last_watched_at":null,"progress_current":null,"progress_total":null,"progress_unit":null,"favorite_rank":null,"shelf_group":null,"display_order":null,"cover_override_url":null,"spine_image_url":null,"goodreads_id":null,"isbn":null,"apple_books_id":null,"tags":["scifi"],"metadata":null,"showcase":false,"published":true}]",
+    "status": 200,
+    "type": "application/json",
+  },
+  "patch": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "replace": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'shelf' (website CRUD characterisation) > pages and bounds ?limit= and ?offset= 1`] = `
+{
+  "junk": 5,
+  "negativeOffset": 2,
+  "none": 5,
+  "offset": 1,
+  "two": 2,
+  "zero": 5,
+}
+`;
+
+exports[`'skills' (website CRUD characterisation) > answers every bad request with the website's error bodies 1`] = `
+{
+  "createBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "createInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"category":["Required"],"items":["Expected array, received string"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "deleteBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "deleteMissing": {
+    "body": "{"error":"Skill not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "getMissing": {
+    "body": "{"error":"Skill not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getZeroId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchEmpty": {
+    "body": "{"error":"Validation error","details":{"formErrors":["At least one field must be provided"],"fieldErrors":{}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "patchMissing": {
+    "body": "{"error":"Skill not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "putBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"category":["Required"],"items":["Expected array, received string"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "putMissing": {
+    "body": "{"error":"Skill not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'skills' (website CRUD characterisation) > creates, reads, replaces, patches and deletes 1`] = `
+{
+  "afterDelete": {
+    "body": "{"error":"Skill not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "afterPatch": {
+    "body": "{"id":1,"category":"Languages","updated_at":"2026-11-20T12:00:00.000Z","created_at":"2026-11-20T12:00:00.000Z","published":1,"items":["Go"]}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "afterReplace": {
+    "body": "{"id":1,"category":"Languages","updated_at":"2026-11-20T12:00:00.000Z","created_at":"2026-11-20T12:00:00.000Z","published":0,"items":["Rust"]}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "create": {
+    "body": "{"ok":true,"created_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 201,
+    "type": "application/json",
+  },
+  "delete": {
+    "body": "{"ok":true,"id":1,"deleted_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "get": {
+    "body": "{"id":1,"category":"Languages","updated_at":"2026-11-20T12:00:00.000Z","created_at":"2026-11-20T12:00:00.000Z","published":1,"items":["TypeScript","Swift"]}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "list": {
+    "body": "[{"id":1,"category":"Languages","updated_at":"2026-11-20T12:00:00.000Z","created_at":"2026-11-20T12:00:00.000Z","published":1,"items":["TypeScript","Swift"]}]",
+    "status": 200,
+    "type": "application/json",
+  },
+  "patch": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "replace": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'skills' (website CRUD characterisation) > pages and bounds ?limit= and ?offset= 1`] = `
+{
+  "junk": 5,
+  "negativeOffset": 2,
+  "none": 5,
+  "offset": 1,
+  "two": 2,
+  "zero": 5,
+}
+`;
+
+exports[`'uses' (website CRUD characterisation) > answers every bad request with the website's error bodies 1`] = `
+{
+  "createBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "createInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"url":["Invalid url"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "deleteBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "deleteMissing": {
+    "body": "{"error":"Uses item not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "getMissing": {
+    "body": "{"error":"Uses item not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "getZeroId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "patchEmpty": {
+    "body": "{"error":"Validation error","details":{"formErrors":["At least one field must be provided"],"fieldErrors":{}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "patchMissing": {
+    "body": "{"error":"Uses item not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "putBadId": {
+    "body": "{"error":"Invalid id"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putBadJson": {
+    "body": "{"error":"Invalid JSON"}",
+    "status": 400,
+    "type": "application/json",
+  },
+  "putInvalid": {
+    "body": "{"error":"Validation error","details":{"formErrors":[],"fieldErrors":{"url":["Invalid url"]}}}",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+  },
+  "putMissing": {
+    "body": "{"error":"Uses item not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'uses' (website CRUD characterisation) > creates, reads, replaces, patches and deletes 1`] = `
+{
+  "afterDelete": {
+    "body": "{"error":"Uses item not found"}",
+    "status": 404,
+    "type": "application/json",
+  },
+  "afterPatch": {
+    "body": "{"id":1,"category":"Desk","name":"Stool","url":null,"note":"Less comfy","created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":1}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "afterReplace": {
+    "body": "{"id":1,"category":"Desk","name":"Stool","url":null,"note":null,"created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":0}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "create": {
+    "body": "{"ok":true,"created_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 201,
+    "type": "application/json",
+  },
+  "delete": {
+    "body": "{"ok":true,"id":1,"deleted_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "get": {
+    "body": "{"id":1,"category":"Desk","name":"Chair","url":"https://example.com/chair","note":"Comfy","created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":1}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "list": {
+    "body": "[{"id":1,"category":"Desk","name":"Chair","url":"https://example.com/chair","note":"Comfy","created_at":"2026-11-20T12:00:00.000Z","updated_at":"2026-11-20T12:00:00.000Z","published":1}]",
+    "status": 200,
+    "type": "application/json",
+  },
+  "patch": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+  "replace": {
+    "body": "{"ok":true,"updated_at":"2026-11-20T12:00:00.000Z"}",
+    "status": 200,
+    "type": "application/json",
+  },
+}
+`;
+
+exports[`'uses' (website CRUD characterisation) > pages and bounds ?limit= and ?offset= 1`] = `
+{
+  "junk": 5,
+  "negativeOffset": 2,
+  "none": 5,
+  "offset": 1,
+  "two": 2,
+  "zero": 5,
+}
+`;
