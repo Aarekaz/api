@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
 import { dateOnly } from "../utils/date";
+import { limitBody } from "../middleware/body-limit";
 import {
   openApiRegistry,
   genericObjectSchema,
@@ -15,6 +16,9 @@ import {
 const app = new Hono<{ Bindings: Env }>();
 
 const HOUR_MS = 60 * 60 * 1000;
+// A visit is `{ "id": "<a few dozen characters>" }`. A body without a length
+// that runs past this is cut off, and the visit falls back to network identity.
+const MAX_BODY_BYTES = 8 * 1024;
 
 // OpenAPI registrations (public — no security)
 openApiRegistry.registerPath({
@@ -39,15 +43,18 @@ async function sha256Hex(input: string): Promise<string> {
     .join("");
 }
 
-// tending = distinct visitors active in the last hour; total = all-time distinct.
+// tending = distinct visitors active in the last hour; total = all-time
+// distinct, kept by migration 0054's trigger so it isn't counted per request.
+// Before 0054 is applied the total is counted as it always was.
 async function readCrowd(env: Env, now: number) {
-  const row = await env.DB.prepare(
-    `SELECT
-       (SELECT COUNT(DISTINCT visitor_hash) FROM crowd_visits) AS total,
-       (SELECT COUNT(DISTINCT visitor_hash) FROM crowd_visits WHERE ts > ?1) AS tending`
-  )
+  const tending = "(SELECT COUNT(DISTINCT visitor_hash) FROM crowd_visits WHERE ts > ?1)";
+  const read = (total: string) => env.DB.prepare(`SELECT ${total} AS total, ${tending} AS tending`)
     .bind(now - HOUR_MS)
-    .first<{ total: number; tending: number }>();
+    .first<{ total: number | null; tending: number }>();
+  const row = await read("(SELECT visitors FROM crowd_totals WHERE id = 1)").catch((error: unknown) => {
+    if (!/no such table/i.test(String(error))) throw error;
+    return read("(SELECT COUNT(DISTINCT visitor_hash) FROM crowd_visits)");
+  });
   return { tending: row?.tending ?? 0, total: row?.total ?? 0 };
 }
 
@@ -57,7 +64,7 @@ app.get("/", async (c) => {
 });
 
 // Record this visitor (one row per visitor per day), then return fresh counts.
-app.post("/", async (c) => {
+app.post("/", limitBody(MAX_BODY_BYTES), async (c) => {
   const now = Date.now();
   const day = dateOnly(new Date(now));
 
