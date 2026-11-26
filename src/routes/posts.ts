@@ -19,6 +19,7 @@ import {
   createdResponses,
   authSecurity,
 } from "../schemas/openapi";
+import { isSiteCaller } from "../middleware/auth";
 import {
   parseListQuery,
   createFilterBuilder,
@@ -98,6 +99,8 @@ app.get("/", async (c) => {
   addSearchFilter(filters, search, ["slug", "title", "summary", "content"]);
   addTagsFilter(filters, tags);
   addDateRangeFilter(filters, "published_at", start, end);
+  // The website's token never sees a draft (a post with no published_at).
+  if (isSiteCaller(c)) filters.clauses.push("published_at IS NOT NULL");
 
   const orderBy = parseSort(
     sort,

@@ -12,6 +12,15 @@ const AUTH_SKIP_PATHS = [
   "/v1/crowd",
 ];
 
+// Requests made with the website's token, so a route can narrow what it shows
+// (drafts stay out). Keyed by the request itself: nothing to clean up.
+const siteRequests = new WeakSet<Request>();
+
+/** True when the website's read-only token made this request. */
+export function isSiteCaller(c: Context): boolean {
+  return siteRequests.has(c.req.raw);
+}
+
 /**
  * Who may call what (docs/adr/0014-401-and-403.md). No credentials, or ones
  * this API doesn't know, is 401 with a Bearer challenge: sign in again. A
@@ -46,7 +55,10 @@ export async function requireAuth(c: Context<{ Bindings: Env }>, next: Next) {
   // The website's token (optional): only the GETs the website makes.
   if (site) {
     // Published rows only: ?include_unpublished is for the owner's apps, never the site's token.
-    if (isSiteRead(c.req.method, c.req.path) && c.req.query("include_unpublished") === undefined) return next();
+    if (isSiteRead(c.req.method, c.req.path) && c.req.query("include_unpublished") === undefined) {
+      siteRequests.add(c.req.raw);
+      return next();
+    }
     return refuse(c, 403, "This token can only read the website's data", 'Bearer error="insufficient_scope"');
   }
   // A device session from Sign in with GitHub in the apps.
