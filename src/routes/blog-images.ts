@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
-import { fileExtensionForContentType } from "../utils/content-type";
 import {
   openApiRegistry,
   openApiResponse,
@@ -14,22 +13,14 @@ import {
   presignHeadersSchema,
   uploadTokenHeadersSchema,
 } from "../schemas/openapi";
-import { declaresMoreThan, signUploadToken, UPLOAD_LIMITS, verifyUploadToken } from "../services/upload-token";
+import { directUpload, presign, presignedPut } from "../lib/uploads";
 
 const app = new Hono<{ Bindings: Env }>();
 
 // Blog images are embedded in markdown — no DB metadata, just R2 storage.
-// Mirrors the photos presign/upload-presigned/upload flow but with:
-//   - key prefix: blog/ (keeps photography and blog-image lifecycles separate)
-//   - smaller size caps (screenshots, not DSLR raws; UPLOAD_LIMITS)
-//   - restricted content types (no SVG — XSS risk when rendered as <img>)
-
-const ALLOWED_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-  "image/webp",
-]);
+// The same presign / upload-presigned / upload flow as photos (lib/uploads.ts),
+// with its own key prefix (blog/), smaller caps and PNG, JPEG or WebP only
+// (UPLOAD_KINDS in services/upload-token.ts).
 
 /* ── OpenAPI ─────────────────────────────────────────────────────────── */
 
@@ -65,7 +56,8 @@ openApiRegistry.registerPath({
     201: openApiResponse(photoUploadResponseSchema, "Created"),
     400: openApiResponse(errorSchema, "Missing body"),
     401: openApiResponse(errorSchema, "Missing upload token"),
-    403: openApiResponse(errorSchema, "Invalid or expired upload token"),
+    403: openApiResponse(errorSchema, "Invalid, expired or already used upload token (each token stores one file)"),
+    411: openApiResponse(errorSchema, "Length required (no Content-Length)"),
     413: openApiResponse(errorSchema, "File too large"),
   },
 });
@@ -79,6 +71,7 @@ openApiRegistry.registerPath({
   responses: {
     201: openApiResponse(photoUploadResponseSchema, "Created"),
     ...errorResponses,
+    411: openApiResponse(errorSchema, "Length required (no Content-Length)"),
     413: openApiResponse(errorSchema, "File too large"),
     415: openApiResponse(errorSchema, "Unsupported content type"),
   },
@@ -86,84 +79,8 @@ openApiRegistry.registerPath({
 
 /* ── Routes ──────────────────────────────────────────────────────────── */
 
-app.post("/presign", async (c) => {
-  const contentType = (c.req.header("x-content-type") || "image/png").toLowerCase();
-  if (!ALLOWED_TYPES.has(contentType)) {
-    return c.json({ error: "Unsupported content type" }, 415);
-  }
-
-  const ext = fileExtensionForContentType(contentType);
-  const key = `blog/${crypto.randomUUID()}.${ext}`;
-
-  const uploadToken = await signUploadToken(key, contentType, c.env.API_TOKEN);
-  const apiBase = c.env.API_BASE_URL?.replace(/\/$/, "") || "https://api.anuragd.me";
-
-  return c.json({
-    ok: true,
-    key,
-    uploadToken,
-    uploadUrl: `${apiBase}/v1/blog-images/upload-presigned`,
-    expiresIn: 300,
-  });
-});
-
-app.put("/upload-presigned", async (c) => {
-  const token = c.req.header("x-upload-token");
-  if (!token) {
-    return c.json({ error: "Missing upload token" }, 401);
-  }
-
-  const claim = await verifyUploadToken(token, c.env.API_TOKEN, "blog/");
-  if (!claim) {
-    return c.json({ error: "Invalid or expired upload token" }, 403);
-  }
-
-  if (declaresMoreThan(c.req.header("content-length"), UPLOAD_LIMITS.blogPresigned)) {
-    return c.json({ error: "File too large" }, 413);
-  }
-
-  if (!c.req.raw.body) {
-    return c.json({ error: "Missing body" }, 400);
-  }
-
-  await c.env.R2_BUCKET.put(claim.key, c.req.raw.body, {
-    httpMetadata: { contentType: claim.contentType },
-  });
-
-  const baseUrl = c.env.R2_PUBLIC_BASE_URL?.replace(/\/$/, "");
-  const url = baseUrl ? `${baseUrl}/${claim.key}` : claim.key;
-
-  return c.json(
-    { ok: true, key: claim.key, url, content_type: claim.contentType },
-    201,
-  );
-});
-
-app.post("/upload", async (c) => {
-  const contentType = (c.req.header("content-type") ?? "").toLowerCase();
-  if (!ALLOWED_TYPES.has(contentType)) {
-    return c.json({ error: "Unsupported content type" }, 415);
-  }
-
-  if (declaresMoreThan(c.req.header("content-length"), UPLOAD_LIMITS.blogDirect)) {
-    return c.json({ error: "File too large" }, 413);
-  }
-
-  if (!c.req.raw.body) {
-    return c.json({ error: "Missing body" }, 400);
-  }
-
-  const ext = fileExtensionForContentType(contentType);
-  const key = `blog/${crypto.randomUUID()}.${ext}`;
-
-  await c.env.R2_BUCKET.put(key, c.req.raw.body, {
-    httpMetadata: { contentType },
-  });
-
-  const baseUrl = c.env.R2_PUBLIC_BASE_URL?.replace(/\/$/, "");
-  const url = baseUrl ? `${baseUrl}/${key}` : key;
-
-  return c.json({ ok: true, key, url, content_type: contentType }, 201);
-});
+app.post("/presign", presign("blog"));
+app.put("/upload-presigned", presignedPut("blog"));
+app.post("/upload", directUpload("blog"));
 
 export default app;

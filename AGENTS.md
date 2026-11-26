@@ -46,8 +46,12 @@ The website reads these GETs, and their bodies must stay byte-compatible:
 - `src/utils/`: pure helpers. `date.ts` is the one place for calendar days
   (`DAY`, `isDay`, `dayAtOffset`, `dayInZone`, `shiftDay`; ADR 0008);
   `query.ts` has the list filters and `clampLimit` (the one `?limit=` rule).
-- `services/upload-token.ts`: presigned upload tokens (photos, blog images)
-  and `UPLOAD_LIMITS`, every upload's size cap (ADR 0011).
+- `services/upload-token.ts`: presigned upload tokens (photos, blog images):
+  scoped to their kind, spent by their first PUT (`upload_tokens`, 0056),
+  signed with `UPLOAD_TOKEN_SECRET` or else `API_TOKEN`; `UPLOAD_KINDS` (raster
+  types only, never SVG) and `UPLOAD_LIMITS`, every upload's size cap (ADR
+  0011). `lib/uploads.ts` has the presign, presigned PUT and direct upload
+  handlers both routes mount.
 - `middleware/body-limit.ts`: `limitBody(bytes)` for any route that reads a
   body without the bearer token (the WHOOP webhook, the crowd).
 - `utils/json.ts` `parseJsonAs(request, schema)`: a body as a Zod schema for
@@ -149,7 +153,7 @@ journal, sections, recipes, training, music history) use `src/lib/http.ts`:
   `WHOOP_SYNC_QUEUE`), vars, the five-minute cron, `compatibility_date`
   (raise it only after `wrangler dev` starts and a local smoke test passes).
 - Secrets are set with `wrangler secret put` (`API_TOKEN`, WakaTime, GitHub,
-  Spotify, WHOOP, analytics). Never commit them; `.dev.vars` is local only.
+  Spotify, WHOOP, analytics, optional `UPLOAD_TOKEN_SECRET`). Never commit them; `.dev.vars` is local only.
 - `SITE_TOKEN` (optional): the website's read-only token, GET/HEAD of the
   routes in `lib/site-reads.ts` only (`docs/adr/0004-site-token.md`). A route
   the website starts reading goes there too.
