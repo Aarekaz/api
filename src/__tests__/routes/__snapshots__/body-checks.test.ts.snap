@@ -1,0 +1,1631 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`body checks > POST /v1/capture 1`] = `
+{
+  "answers": [
+    {
+      "body": undefined,
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "not json",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "null",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "true",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "0",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "1",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": ""text"",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "[]",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "[1]",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"a":1}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"text":"   "}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"text":12}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"text":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… (20012)",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 20000 characters)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"text":"  Buy milk  "}",
+      "json": [
+        "document",
+        "ok",
+      ],
+      "status": 200,
+    },
+  ],
+  "github": [],
+  "stored": {
+    "documents": [
+      {
+        "body": "# Buy milk
+
+",
+        "folder": "Inbox",
+        "kind": "note",
+        "title": "Buy milk",
+        "visibility": "private",
+      },
+    ],
+    "picks": [],
+    "routines": [],
+    "sets": [],
+  },
+}
+`;
+
+exports[`body checks > POST /v1/documents 1`] = `
+{
+  "answers": [
+    {
+      "body": undefined,
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Invalid JSON",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Invalid JSON",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "not json",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Invalid JSON",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "null",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Invalid JSON",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "true",
+      "json": [
+        "body",
+        "created_at",
+        "folder",
+        "frontmatter",
+        "id",
+        "kind",
+        "post_id",
+        "slug",
+        "source",
+        "status",
+        "title",
+        "updated_at",
+        "version",
+        "visibility",
+      ],
+      "status": 201,
+    },
+    {
+      "body": "0",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Invalid JSON",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "1",
+      "json": [
+        "body",
+        "created_at",
+        "folder",
+        "frontmatter",
+        "id",
+        "kind",
+        "post_id",
+        "slug",
+        "source",
+        "status",
+        "title",
+        "updated_at",
+        "version",
+        "visibility",
+      ],
+      "status": 201,
+    },
+    {
+      "body": ""text"",
+      "json": [
+        "body",
+        "created_at",
+        "folder",
+        "frontmatter",
+        "id",
+        "kind",
+        "post_id",
+        "slug",
+        "source",
+        "status",
+        "title",
+        "updated_at",
+        "version",
+        "visibility",
+      ],
+      "status": 201,
+    },
+    {
+      "body": "[]",
+      "json": [
+        "body",
+        "created_at",
+        "folder",
+        "frontmatter",
+        "id",
+        "kind",
+        "post_id",
+        "slug",
+        "source",
+        "status",
+        "title",
+        "updated_at",
+        "version",
+        "visibility",
+      ],
+      "status": 201,
+    },
+    {
+      "body": "[1]",
+      "json": [
+        "body",
+        "created_at",
+        "folder",
+        "frontmatter",
+        "id",
+        "kind",
+        "post_id",
+        "slug",
+        "source",
+        "status",
+        "title",
+        "updated_at",
+        "version",
+        "visibility",
+      ],
+      "status": 201,
+    },
+    {
+      "body": "{}",
+      "json": [
+        "body",
+        "created_at",
+        "folder",
+        "frontmatter",
+        "id",
+        "kind",
+        "post_id",
+        "slug",
+        "source",
+        "status",
+        "title",
+        "updated_at",
+        "version",
+        "visibility",
+      ],
+      "status": 201,
+    },
+    {
+      "body": "{"a":1}",
+      "json": [
+        "body",
+        "created_at",
+        "folder",
+        "frontmatter",
+        "id",
+        "kind",
+        "post_id",
+        "slug",
+        "source",
+        "status",
+        "title",
+        "updated_at",
+        "version",
+        "visibility",
+      ],
+      "status": 201,
+    },
+    {
+      "body": "{"title":"A note","body":"Hello"}",
+      "json": [
+        "body",
+        "created_at",
+        "folder",
+        "frontmatter",
+        "id",
+        "kind",
+        "post_id",
+        "slug",
+        "source",
+        "status",
+        "title",
+        "updated_at",
+        "version",
+        "visibility",
+      ],
+      "status": 201,
+    },
+    {
+      "body": "{"kind":"nope"}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Unknown kind",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"title":5}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "title must be a string under 300 characters",
+        },
+      },
+      "status": 400,
+    },
+  ],
+  "github": [],
+  "stored": {
+    "documents": [
+      {
+        "body": "Hello",
+        "folder": "",
+        "kind": "note",
+        "title": "A note",
+        "visibility": "private",
+      },
+      {
+        "body": "",
+        "folder": "",
+        "kind": "note",
+        "title": "Untitled",
+        "visibility": "private",
+      },
+      {
+        "body": "",
+        "folder": "",
+        "kind": "note",
+        "title": "Untitled",
+        "visibility": "private",
+      },
+      {
+        "body": "",
+        "folder": "",
+        "kind": "note",
+        "title": "Untitled",
+        "visibility": "private",
+      },
+      {
+        "body": "",
+        "folder": "",
+        "kind": "note",
+        "title": "Untitled",
+        "visibility": "private",
+      },
+      {
+        "body": "",
+        "folder": "",
+        "kind": "note",
+        "title": "Untitled",
+        "visibility": "private",
+      },
+      {
+        "body": "",
+        "folder": "",
+        "kind": "note",
+        "title": "Untitled",
+        "visibility": "private",
+      },
+      {
+        "body": "",
+        "folder": "",
+        "kind": "note",
+        "title": "Untitled",
+        "visibility": "private",
+      },
+    ],
+    "picks": [],
+    "routines": [],
+    "sets": [],
+  },
+}
+`;
+
+exports[`body checks > POST /v1/training/sets 1`] = `
+{
+  "answers": [
+    {
+      "body": undefined,
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "not json",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "null",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "true",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "0",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "1",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": ""text"",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "[]",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "[1]",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"a":1}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"day":"2026-11-24","exercise":"Squat"}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"day":"2026-11-24","exercise":"Squat","set_number":"1"}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"day":"2026-11-24","exercise":"  ","set_number":1}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"day":"2026-11-2","exercise":"Squat","set_number":1}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day, exercise and set_number",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"day":"2026-11-24","exercise":" Squat ","set_number":1.6,"reps":8,"weight":60.5,"unit":"kilograms","routine_id":"legs"}",
+      "json": {
+        "ok": true,
+      },
+      "status": 200,
+    },
+    {
+      "body": "{"day":"2026-11-24","exercise":"Squat","set_number":1,"reps":"8","weight":null,"unit":3}",
+      "json": {
+        "ok": true,
+      },
+      "status": 200,
+    },
+  ],
+  "github": [],
+  "stored": {
+    "documents": [],
+    "picks": [],
+    "routines": [],
+    "sets": [
+      {
+        "day": "2026-11-24",
+        "exercise": "Squat",
+        "reps": null,
+        "routine_id": null,
+        "set_number": 1,
+        "unit": null,
+        "weight": null,
+      },
+      {
+        "day": "2026-11-24",
+        "exercise": "Squat",
+        "reps": 8,
+        "routine_id": "legs",
+        "set_number": 2,
+        "unit": "kilogram",
+        "weight": 60.5,
+      },
+    ],
+  },
+}
+`;
+
+exports[`body checks > POST /v1/vault/blobs 1`] = `
+{
+  "answers": [
+    {
+      "body": undefined,
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "not json",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "null",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "true",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "0",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "1",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": ""text"",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "[]",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "[1]",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{}",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"a":1}",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"shas":[]}",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"shas":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"shas":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","abc"]}",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"shas":["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]}",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"shas":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaa… (4353)",
+      "json": {
+        "error": "Send "shas": 1 to 100 blob shas",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"shas":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}",
+      "json": {
+        "error": "Read blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: GitHub answered 502",
+      },
+      "status": 502,
+    },
+  ],
+  "github": [
+    [
+      "https://api.github.com/repos/Aarekaz/vault/git/blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      null,
+    ],
+  ],
+  "stored": {
+    "documents": [],
+    "picks": [],
+    "routines": [],
+    "sets": [],
+  },
+}
+`;
+
+exports[`body checks > POST /v1/vault/capture 1`] = `
+{
+  "answers": [
+    {
+      "body": undefined,
+      "json": {
+        "error": "text is required (up to 2000 characters)",
+      },
+      "status": 400,
+    },
+    {
+      "body": "",
+      "json": {
+        "error": "text is required (up to 2000 characters)",
+      },
+      "status": 400,
+    },
+    {
+      "body": "not json",
+      "json": {
+        "error": "text is required (up to 2000 characters)",
+      },
+      "status": 400,
+    },
+    {
+      "body": "null",
+      "json": {
+        "error": "text is required (up to 2000 characters)",
+      },
+      "status": 400,
+    },
+    {
+      "body": "true",
+      "json": {
+        "error": "text is required (up to 2000 characters)",
+      },
+      "status": 400,
+    },
+    {
+      "body": "0",
+      "json": {
+        "error": "text is required (up to 2000 characters)",
+      },
+      "status": 400,
+    },
+    {
+      "body": "1",
+      "json": {
+        "error": "text is required (up to 2000 characters)",
+      },
+      "status": 400,
+    },
+    {
+      "body": ""text"",
+      "json": {
+        "error": "text is required (up to 2000 characters)",
+      },
+      "status": 400,
+    },
+    {
+      "body": "[]",
+      "json": {
+        "error": "text is required (up to 2000 characters)",
+      },
+      "status": 400,
+    },
+    {
+      "body": "[1]",
+      "json": {
+        "error": "text is required (up to 2000 characters)",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{}",
+      "json": {
+        "error": "text is required (up to 2000 characters)",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"a":1}",
+      "json": {
+        "error": "text is required (up to 2000 characters)",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"text":"   "}",
+      "json": {
+        "error": "text is required (up to 2000 characters)",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"text":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… (2012)",
+      "json": {
+        "error": "text is required (up to 2000 characters)",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"text":" An idea "}",
+      "json": {
+        "error": "Read Dump.md: GitHub answered 502",
+      },
+      "status": 502,
+    },
+  ],
+  "github": [
+    [
+      "https://api.github.com/repos/Aarekaz/vault/contents/Dump.md",
+      null,
+    ],
+  ],
+  "stored": {
+    "documents": [],
+    "picks": [],
+    "routines": [],
+    "sets": [],
+  },
+}
+`;
+
+exports[`body checks > PUT /v1/training/pick 1`] = `
+{
+  "answers": [
+    {
+      "body": undefined,
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "not json",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "null",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "true",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "0",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "1",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": ""text"",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "[]",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "[1]",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"a":1}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"day":"2026-11-24"}",
+      "json": {
+        "day": "2026-11-24",
+        "ok": true,
+        "routine_id": null,
+      },
+      "status": 200,
+    },
+    {
+      "body": "{"day":"2026-11-24","routine_id":"  push  "}",
+      "json": {
+        "day": "2026-11-24",
+        "ok": true,
+        "routine_id": "push",
+      },
+      "status": 200,
+    },
+    {
+      "body": "{"day":"2026-11-24","routine_id":"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"}",
+      "json": {
+        "day": "2026-11-24",
+        "ok": true,
+        "routine_id": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+      },
+      "status": 200,
+    },
+    {
+      "body": "{"day":"2026-11-24","routine_id":7}",
+      "json": {
+        "day": "2026-11-24",
+        "ok": true,
+        "routine_id": null,
+      },
+      "status": 200,
+    },
+    {
+      "body": "{"day":"2026-11-24","routine_id":"   "}",
+      "json": {
+        "day": "2026-11-24",
+        "ok": true,
+        "routine_id": null,
+      },
+      "status": 200,
+    },
+    {
+      "body": "{"day":"2026-11-24","routine_id":null}",
+      "json": {
+        "day": "2026-11-24",
+        "ok": true,
+        "routine_id": null,
+      },
+      "status": 200,
+    },
+    {
+      "body": "{"day":"24-11-2026","routine_id":"push"}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"day":20261124}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "[{"day":"2026-11-24"}]",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "Send day (2026-11-24) and routine_id (or null for the plan)",
+        },
+      },
+      "status": 400,
+    },
+  ],
+  "github": [],
+  "stored": {
+    "documents": [],
+    "picks": [],
+    "routines": [],
+    "sets": [],
+  },
+}
+`;
+
+exports[`body checks > PUT /v1/training/routines/legs 1`] = `
+{
+  "answers": [
+    {
+      "body": undefined,
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "A routine needs a name",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "A routine needs a name",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "not json",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "A routine needs a name",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "null",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "A routine needs a name",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "true",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "A routine needs a name",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "0",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "A routine needs a name",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "1",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "A routine needs a name",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": ""text"",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "A routine needs a name",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "[]",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "A routine needs a name",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "[1]",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "A routine needs a name",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "A routine needs a name",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"a":1}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "A routine needs a name",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"name":"  "}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "A routine needs a name",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"name":5}",
+      "json": {
+        "error": {
+          "code": "invalid",
+          "message": "A routine needs a name",
+        },
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"name":"Legs"}",
+      "json": {
+        "exercises": [],
+        "id": "legs",
+        "name": "Legs",
+        "position": 0,
+        "updated_at": "2026-11-24T10:00:00.000Z",
+        "weekdays": [],
+      },
+      "status": 200,
+    },
+    {
+      "body": "{"name":" LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL ","weekdays":"3,1,9,1","position":2.6}",
+      "json": {
+        "exercises": [],
+        "id": "legs",
+        "name": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+        "position": 3,
+        "updated_at": "2026-11-24T10:00:00.000Z",
+        "weekdays": [
+          1,
+          3,
+        ],
+      },
+      "status": 200,
+    },
+    {
+      "body": "{"name":"Legs","weekdays":[7,"2",2,0,1.5],"position":"4","exercises":"squats"}",
+      "json": {
+        "exercises": [],
+        "id": "legs",
+        "name": "Legs",
+        "position": 0,
+        "updated_at": "2026-11-24T10:00:00.000Z",
+        "weekdays": [
+          2,
+          7,
+        ],
+      },
+      "status": 200,
+    },
+    {
+      "body": "{"name":"Legs","weekdays":[1],"exercises":[{"name":"Squat","… (368)",
+      "json": {
+        "exercises": [
+          {
+            "name": "Squat",
+            "note": "deep",
+            "per_side": false,
+            "reps": 1,
+            "reps_max": 12,
+            "rest": 0,
+            "seconds": null,
+            "seconds_max": null,
+            "sets": 20,
+            "unit": "kilogram",
+            "weight": 60,
+          },
+          {
+            "name": "Plank",
+            "note": null,
+            "per_side": false,
+            "reps": 10,
+            "reps_max": null,
+            "rest": 90,
+            "seconds": 30,
+            "seconds_max": null,
+            "sets": 3,
+            "unit": "kg",
+            "weight": null,
+          },
+          {
+            "name": "Lunge",
+            "note": null,
+            "per_side": true,
+            "reps": 10,
+            "reps_max": null,
+            "rest": 900,
+            "seconds": 45,
+            "seconds_max": 60,
+            "sets": 3,
+            "unit": "lb",
+            "weight": null,
+          },
+        ],
+        "id": "legs",
+        "name": "Legs",
+        "position": 0,
+        "updated_at": "2026-11-24T10:00:00.000Z",
+        "weekdays": [
+          1,
+        ],
+      },
+      "status": 200,
+    },
+  ],
+  "github": [],
+  "stored": {
+    "documents": [],
+    "picks": [],
+    "routines": [
+      {
+        "archived": 0,
+        "exercises_json": "[{"name":"Squat","sets":20,"reps":1,"reps_max":12,"per_side":false,"seconds":null,"seconds_max":null,"weight":60,"unit":"kilogram","rest":0,"note":"deep"},{"name":"Plank","sets":3,"reps":10,"reps_max":null,"per_side":false,"seconds":30,"seconds_max":null,"weight":null,"unit":"kg","rest":90,"note":null},{"name":"Lunge","sets":3,"reps":10,"reps_max":null,"per_side":true,"seconds":45,"seconds_max":60,"weight":null,"unit":"lb","rest":900,"note":null}]",
+        "id": "legs",
+        "name": "Legs",
+        "position": 0,
+        "weekdays": "1",
+      },
+    ],
+    "sets": [],
+  },
+}
+`;
+
+exports[`body checks > PUT /v1/vault/file 1`] = `
+{
+  "answers": [
+    {
+      "body": undefined,
+      "json": {
+        "error": "Invalid vault path",
+      },
+      "status": 400,
+    },
+    {
+      "body": "",
+      "json": {
+        "error": "Invalid vault path",
+      },
+      "status": 400,
+    },
+    {
+      "body": "not json",
+      "json": {
+        "error": "Invalid vault path",
+      },
+      "status": 400,
+    },
+    {
+      "body": "null",
+      "json": {
+        "error": "Invalid vault path",
+      },
+      "status": 400,
+    },
+    {
+      "body": "true",
+      "json": {
+        "error": "Invalid vault path",
+      },
+      "status": 400,
+    },
+    {
+      "body": "0",
+      "json": {
+        "error": "Invalid vault path",
+      },
+      "status": 400,
+    },
+    {
+      "body": "1",
+      "json": {
+        "error": "Invalid vault path",
+      },
+      "status": 400,
+    },
+    {
+      "body": ""text"",
+      "json": {
+        "error": "Invalid vault path",
+      },
+      "status": 400,
+    },
+    {
+      "body": "[]",
+      "json": {
+        "error": "Invalid vault path",
+      },
+      "status": 400,
+    },
+    {
+      "body": "[1]",
+      "json": {
+        "error": "Invalid vault path",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{}",
+      "json": {
+        "error": "Invalid vault path",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"a":1}",
+      "json": {
+        "error": "Invalid vault path",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"path":"../x.md","content":5,"sha":"nope"}",
+      "json": {
+        "error": "Invalid vault path",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"path":"Dump.md"}",
+      "json": {
+        "error": "content must be a string under 1 MB",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"path":"Dump.md","content":5,"sha":"nope"}",
+      "json": {
+        "error": "content must be a string under 1 MB",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"path":"Dump.md","content":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… (1000032)",
+      "json": {
+        "error": "content must be a string under 1 MB",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"path":"Dump.md","content":"hi","sha":"nope"}",
+      "json": {
+        "error": "sha must be the blob sha you loaded, or null for a new file",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"path":"Dump.md","content":"hi","sha":5}",
+      "json": {
+        "error": "sha must be the blob sha you loaded, or null for a new file",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"path":"Dump.md","content":"hi","sha":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}",
+      "json": {
+        "error": "sha must be the blob sha you loaded, or null for a new file",
+      },
+      "status": 400,
+    },
+    {
+      "body": "{"path":"Dump.md","content":"hi","sha":null,"message":"  tidy  "}",
+      "json": {
+        "error": "Save Dump.md: GitHub answered 502",
+      },
+      "status": 502,
+    },
+    {
+      "body": "{"path":"Dump.md","content":"hi","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","message":5}",
+      "json": {
+        "error": "Save Dump.md: GitHub answered 502",
+      },
+      "status": 502,
+    },
+    {
+      "body": "{"path":"Dump.md","content":"","message":"mmmmmmmmmmmmmmmmmm… (244)",
+      "json": {
+        "error": "Save Dump.md: GitHub answered 502",
+      },
+      "status": 502,
+    },
+  ],
+  "github": [
+    [
+      "https://api.github.com/repos/Aarekaz/vault/contents/Dump.md",
+      {
+        "branch": "main",
+        "content": "aGk=",
+        "message": "anurag.os: tidy",
+      },
+    ],
+    [
+      "https://api.github.com/repos/Aarekaz/vault/contents/Dump.md",
+      {
+        "branch": "main",
+        "content": "aGk=",
+        "message": "anurag.os: edit Dump.md",
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
+    ],
+    [
+      "https://api.github.com/repos/Aarekaz/vault/contents/Dump.md",
+      {
+        "branch": "main",
+        "content": "",
+        "message": "anurag.os: mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm",
+      },
+    ],
+  ],
+  "stored": {
+    "documents": [],
+    "picks": [],
+    "routines": [],
+    "sets": [],
+  },
+}
+`;
