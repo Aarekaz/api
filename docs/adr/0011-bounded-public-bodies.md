@@ -31,5 +31,9 @@ whole body before it checked the signature.
 
 - A new unauthenticated route that reads a body uses `limitBody`.
 - Raising a cap is a one-line change in `UPLOAD_LIMITS`.
-- Still open (owner): SVG uploads, single-use tokens and a signing secret of
-  their own (audit 7.4).
+- ~~Still open (owner): SVG uploads, single-use tokens and a signing secret of
+  their own (audit 7.4).~~ Done on branch `standards`: raster types only
+  (`UPLOAD_KINDS`), tokens scoped to their kind and spent by their first PUT
+  (`upload_tokens`, migration 0056; given back when R2 fails), a missing
+  Content-Length is 411 (R2 can't store a body of unknown length, which was a
+  500), and `UPLOAD_TOKEN_SECRET` signs tokens once the owner sets it.

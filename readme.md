@@ -71,7 +71,9 @@ sequenceDiagram
     
     alt No Auth Header
         A-->>C: 401 Unauthorized
-    else Invalid Token
+    else Unknown Token
+        A-->>C: 401 Unauthorized
+    else Site token off the website's reads
         A-->>C: 403 Forbidden
     else Valid Token
         A->>R: Proceed
