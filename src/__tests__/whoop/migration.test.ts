@@ -13,6 +13,9 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
+// Each test starts wrangler a dozen times or so (about 2 s each on 4.168), and
+// the full suite runs beside it.
+const WRANGLER_TIMEOUT = 120_000;
 
 const wranglerEnvironment = {
   ...process.env,
@@ -211,7 +214,7 @@ describe("WHOOP fresh D1 migration", () => {
       const columns = parseWranglerRows(result.stdout).map((row) => row.name);
       expect(columns, table).toEqual(expect.arrayContaining([...expected]));
     }
-  }, 30_000);
+  }, WRANGLER_TIMEOUT);
 
   it("enforces representative WHOOP constraints and has no foreign-key violations", async () => {
     await wrangler(
@@ -235,7 +238,7 @@ describe("WHOOP fresh D1 migration", () => {
       "--command", "PRAGMA foreign_key_check", "--json",
     );
     expect(parseWranglerRows(foreignKeys.stdout)).toEqual([]);
-  }, 30_000);
+  }, WRANGLER_TIMEOUT);
 
   it("keeps focused WHOOP verification in the package and CI contracts", async () => {
     const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
