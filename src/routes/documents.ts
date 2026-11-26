@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
-import { parseJson } from "../utils/json";
+import { parseJson, parseJsonAs } from "../utils/json";
 import { cursorFrom, fail as failWithMessage, appErrors, later, limitFrom, list, page } from "../lib/http";
 import {
   DocumentError,
@@ -265,12 +265,14 @@ searchRoute.get("/", async (c) => {
   return c.json({ results: await searchDocuments(c.env, q, limitFrom(c, 30, 100)) });
 });
 
+const CaptureBody = z.object({ text: z.string().transform((t) => t.trim()).pipe(z.string().min(1).max(20000)) });
+
 /** POST /v1/capture { text } → a new note in Inbox (a bare URL goes to Read later). */
 export const captureRoute = appErrors(new Hono<{ Bindings: Env }>(), "Documents request");
 captureRoute.post("/", async (c) => {
-  const body = (await parseJson(c.req.raw)) as { text?: unknown } | null;
-  const text = typeof body?.text === "string" ? body.text.trim() : "";
-  if (!text || text.length > 20000) return failWithMessage(c, 400, "text is required (up to 20000 characters)");
+  const parsed = await parseJsonAs(c.req.raw, CaptureBody);
+  if (!parsed.success) return failWithMessage(c, 400, "text is required (up to 20000 characters)");
+  const { text } = parsed.data;
   // A bare URL is something to read later, not a line in the inbox.
   if (isSingleUrl(text)) return c.json({ ok: true, link: presentLink(await saveLink(c.env, text, new Date(), later(c))) });
   const note = await captureToInbox(c.env, text);
