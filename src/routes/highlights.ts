@@ -1,9 +1,7 @@
 import { Hono } from "hono";
-import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
-import { cursorFrom, appErrors, fail as failWithStatus, limitFrom, list, page } from "../lib/http";
-import { parseJson } from "../utils/json";
+import { body, cursorFrom, appErrors, limitFrom, list, objectBody, page } from "../lib/http";
 import {
   authSecurity,
   cursorQuery,
@@ -103,8 +101,6 @@ openApiRegistry.registerPath({
 
 /** One error shape, { error: { code, message } } (lib/http.ts). */
 
-const invalidJson = (c: Context<{ Bindings: Env }>) => failWithStatus(c, 400, "Invalid JSON");
-
 app.get("/", async (c) => {
   const limit = limitFrom(c, 500, 2000);
   const rows = await listHighlights(c.env, c.req.query("document_id") || undefined, limit, cursorFrom(c, 2) as [string, string] | null);
@@ -113,17 +109,14 @@ app.get("/", async (c) => {
 });
 
 app.post("/", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) return invalidJson(c);
-  return c.json(presentHighlight(await createHighlight(c.env, CreateHighlight.parse(body))), 201);
+  return c.json(presentHighlight(await createHighlight(c.env, await body(c, CreateHighlight))), 201);
 });
 
 app.patch("/:id", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) return invalidJson(c);
+  const raw = await objectBody(c);
   // Only the fields that were sent change ("note": null clears the note).
-  const input = UpdateHighlight.parse(body);
-  const sent = Object.fromEntries(Object.entries(input).filter(([key]) => key in (body as object)));
+  const input = UpdateHighlight.parse(raw);
+  const sent = Object.fromEntries(Object.entries(input).filter(([key]) => key in raw));
   return c.json(presentHighlight(await updateHighlight(c.env, c.req.param("id"), sent)));
 });
 

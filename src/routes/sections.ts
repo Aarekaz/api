@@ -1,9 +1,7 @@
 import { Hono } from "hono";
-import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
-import { appErrors } from "../lib/http";
-import { parseJson } from "../utils/json";
+import { appErrors, objectBody } from "../lib/http";
 import {
   authSecurity,
   openApiJsonRequestBody,
@@ -13,7 +11,7 @@ import {
   structuredErrorSchema,
   structuredOkResponses,
 } from "../schemas/openapi";
-import { MAX_PATH, SectionError, createSection, deleteSection, listSections, updateSection } from "../services/sections";
+import { MAX_PATH, createSection, deleteSection, listSections, updateSection } from "../services/sections";
 
 // /v1/sections: Writing's folders, as a tree (Library › Agent Skills).
 // A folder is named by its path, the string pages already keep in
@@ -104,14 +102,6 @@ openApiRegistry.registerPath({
   responses: structuredOkResponses(SectionDeleted),
 });
 
-/** One error shape, { error: { code, message } } (lib/http.ts). */
-
-async function body(c: Context<{ Bindings: Env }>) {
-  const json = await parseJson(c.req.raw);
-  if (json === null || typeof json !== "object") throw new SectionError("Send a JSON object", 400, "invalid");
-  return json;
-}
-
 /** GET /v1/sections → { items (depth first), unsorted, server_time } */
 app.get("/", async (c) => {
   const { items, unsorted } = await listSections(c.env);
@@ -120,14 +110,14 @@ app.get("/", async (c) => {
 
 /** POST /v1/sections { name, parent? } → 201 { section } */
 app.post("/", async (c) => {
-  const input = CreateSection.parse(await body(c));
+  const input = CreateSection.parse(await objectBody(c));
   const section = await createSection(c.env, input);
   return c.json({ section: SectionSchema.parse(section) }, 201);
 });
 
 /** PATCH /v1/sections { path, name?, parent?, sort_order? }: rename, nest or reorder. */
 app.patch("/", async (c) => {
-  const input = UpdateSection.parse(await body(c));
+  const input = UpdateSection.parse(await objectBody(c));
   return c.json(SectionChange.parse(await updateSection(c.env, input)));
 });
 
@@ -137,7 +127,7 @@ app.patch("/", async (c) => {
  */
 app.delete("/", async (c) => {
   const query = c.req.query("path");
-  const input = DeleteSection.parse(query !== undefined ? { path: query } : await body(c));
+  const input = DeleteSection.parse(query !== undefined ? { path: query } : await objectBody(c));
   return c.json(SectionDeleted.parse(await deleteSection(c.env, input.path)));
 });
 

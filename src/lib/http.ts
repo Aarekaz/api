@@ -109,6 +109,17 @@ export async function body<S extends z.ZodTypeAny = z.ZodUnknown>(c: AnyContext,
 }
 
 /**
+ * The request's JSON body when it is an object, for handlers that read its
+ * fields themselves. Unreadable JSON (or none, or `null`) is "Invalid JSON";
+ * an array, a string, a number or a boolean is "Send a JSON object"; both 400.
+ */
+export async function objectBody(c: AnyContext): Promise<Record<string, unknown>> {
+  const json = await body(c);
+  if (typeof json !== "object" || json === null || Array.isArray(json)) throw new HttpError(400, "Send a JSON object", "invalid");
+  return json as Record<string, unknown>;
+}
+
+/**
  * The request's waitUntil, to finish work after the reply, or undefined where
  * there is no execution context (tests, `app.request`). Callers then do the
  * work before replying.

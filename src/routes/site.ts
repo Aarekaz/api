@@ -1,10 +1,10 @@
-import { Hono, type Context } from "hono";
+import { Hono } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
 import type { JsonRecord } from "../types/common";
 import { nowIso } from "../utils/date";
-import { parseJson, parseStoredJson } from "../utils/json";
-import { appErrors } from "../lib/http";
+import { parseStoredJson } from "../utils/json";
+import { appErrors, body } from "../lib/http";
 import { normalizeProfile } from "../utils/normalizers";
 import {
   authSecurity,
@@ -22,20 +22,8 @@ import { profileResponseSchema, shelfConfigResponseSchema } from "../schemas/res
 // PATCH /v1/site/profile         change some profile fields, keep the rest
 // PATCH /v1/site/shelf-sections  show or hide /shelf sections, all seven of them
 
-// Errors in the one shape (lib/http.ts); a SiteError carries its own code and status.
+// Errors in the one shape (lib/http.ts).
 const app = appErrors(new Hono<{ Bindings: Env }>(), "Site request");
-
-class SiteError extends Error {
-  constructor(readonly code: string, message: string, readonly status: 400 | 404 = 400) {
-    super(message);
-  }
-}
-
-async function body(c: Context<{ Bindings: Env }>): Promise<unknown> {
-  const value = await parseJson(c.req.raw);
-  if (value === null) throw new SiteError("invalid_json", "Body must be JSON");
-  return value;
-}
 
 // MARK: Profile
 
@@ -78,7 +66,7 @@ const PROFILE_COLUMNS = {
 } as const;
 
 app.patch("/profile", async (c) => {
-  const patch = profilePatchSchema.parse(await body(c));
+  const patch = await body(c, profilePatchSchema);
   const existing = (await c.env.DB.prepare("SELECT * FROM profile WHERE id = 1").first<JsonRecord>()) ?? {};
   const row: JsonRecord = { ...existing };
   for (const [key, column] of Object.entries(PROFILE_COLUMNS)) {
@@ -122,7 +110,7 @@ const DEFAULT_SHELF_CONFIG = {
 };
 
 app.patch("/shelf-sections", async (c) => {
-  const patch = shelfSectionsPatchSchema.parse(await body(c));
+  const patch = await body(c, shelfSectionsPatchSchema);
   const row = await c.env.DB.prepare("SELECT * FROM settings WHERE id = 1").first<JsonRecord>();
   const stored = row ? parseStoredJson(row.shelf_config_json) : structuredClone(DEFAULT_SHELF_CONFIG);
   // Keep everything else in the config (hiddenItems, future keys) exactly as it was.

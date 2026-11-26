@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
-import { parseJson, parseJsonAs } from "../utils/json";
-import { cursorFrom, fail as failWithMessage, appErrors, later, limitFrom, list, page } from "../lib/http";
+import { parseJsonAs } from "../utils/json";
+import { cursorFrom, fail as failWithMessage, appErrors, later, limitFrom, list, objectBody, page } from "../lib/http";
 import {
   DocumentError,
   captureToInbox,
@@ -184,7 +184,7 @@ openApiRegistry.registerPath({
   summary: "Capture text to the Inbox (a bare URL is saved to Read later)",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(z.object({ text: z.string().min(1).max(20000) })) },
-  responses: structuredOkResponses(z.object({
+  responses: structuredCreatedResponses(z.object({
     ok: z.boolean(),
     document: documentSummarySchema.optional().openapi({ description: "The new Inbox note" }),
     link: linkSchema.optional().openapi({ description: "The saved link, when text was a single URL" }),
@@ -192,8 +192,6 @@ openApiRegistry.registerPath({
 });
 
 // App-only: errors are { error: { code, message } } (lib/http.ts).
-const invalidJson = (c: Parameters<typeof failWithMessage>[0]) => failWithMessage(c, 400, "Invalid JSON");
-
 app.get("/", async (c) => {
   const limit = limitFrom(c, 2000, 5000);
   const rows = await listDocuments(c.env, {
@@ -222,15 +220,14 @@ app.get("/:id/versions", async (c) => {
   return c.json({ versions: results });
 });
 
+// A body that isn't an object (true, [1], "text") is a 400; it used to make an Untitled note.
 app.post("/", async (c) => {
-  const body = (await parseJson(c.req.raw)) as DocumentInput | null;
-  if (!body) return invalidJson(c);
+  const body = (await objectBody(c)) as DocumentInput;
   return c.json(present(await createDocument(c.env, body)), 201);
 });
 
 app.put("/:id", async (c) => {
-  const body = (await parseJson(c.req.raw)) as DocumentInput | null;
-  if (!body) return invalidJson(c);
+  const body = (await objectBody(c)) as DocumentInput;
   try {
     return c.json(present(await saveDocument(c.env, c.req.param("id"), body)));
   } catch (error) {
@@ -272,9 +269,10 @@ captureRoute.post("/", async (c) => {
   if (!parsed.success) return failWithMessage(c, 400, "text is required (up to 20000 characters)");
   const { text } = parsed.data;
   // A bare URL is something to read later, not a line in the inbox.
-  if (isSingleUrl(text)) return c.json({ ok: true, link: presentLink(await saveLink(c.env, text, new Date(), later(c))) });
+  // Either way something new is made (as POST /v1/links and POST /v1/documents answer): 201.
+  if (isSingleUrl(text)) return c.json({ ok: true, link: presentLink(await saveLink(c.env, text, new Date(), later(c))) }, 201);
   const note = await captureToInbox(c.env, text);
-  return c.json({ ok: true, document: present(note, false) });
+  return c.json({ ok: true, document: present(note, false) }, 201);
 });
 
 export default app;

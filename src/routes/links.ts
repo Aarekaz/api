@@ -1,8 +1,7 @@
 import { Hono } from "hono";
-import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
-import { cursorFrom, appErrors, fail as failWithStatus, later, limitFrom, list, page } from "../lib/http";
+import { body, cursorFrom, appErrors, fail as failWithStatus, later, limitFrom, list, objectBody, page } from "../lib/http";
 import { retryD1Read } from "../lib/d1-retry";
 import { parseJson } from "../utils/json";
 import {
@@ -73,7 +72,6 @@ const SaveLink = z.object({ url: z.string().min(1).max(4000) });
 
 /** One error shape, { error: { code, message } } (lib/http.ts). */
 
-const invalidJson = (c: Context<{ Bindings: Env }>) => failWithStatus(c, 400, "Invalid JSON");
 
 // OpenAPI registrations
 const idParams = z.object({ id: z.string().openapi({ description: "The link's document id" }) });
@@ -223,9 +221,9 @@ app.get("/tags", async (c) => {
 });
 
 app.post("/", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) return failWithStatus(c, 400, "url is required");
-  const { url } = SaveLink.parse(body);
+  const json = await parseJson(c.req.raw);
+  if (json === null) return failWithStatus(c, 400, "url is required");
+  const { url } = SaveLink.parse(json);
   // The page is read after the reply (fetched_at null until then), so saving is instant.
   const link = await saveLink(c.env, url, new Date(), later(c));
   return c.json(presentLink(link, link.fetched_at !== null), 201);
@@ -247,10 +245,8 @@ app.get("/:id", async (c) => {
 
 /** PATCH /v1/links/:id { starred?, tags?, title?, state?, note? } */
 app.patch("/:id", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) return invalidJson(c);
   const id = c.req.param("id");
-  const input = UpdateLink.parse(body);
+  const input = await body(c, UpdateLink);
   const current = await getLink(c.env, id);
   if (input.starred !== undefined || input.tags !== undefined || input.title !== undefined) {
     await updateLink(c.env, id, { starred: input.starred, tags: input.tags, title: input.title });
@@ -272,9 +268,7 @@ app.get("/:id/progress", async (c) => {
  * last write wins by updated_at; seconds count as time read either way.
  */
 app.on(["PUT", "POST"], "/:id/progress", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) return invalidJson(c);
-  return c.json(await saveProgress(c.env, c.req.param("id"), Progress.parse(body)));
+  return c.json(await saveProgress(c.env, c.req.param("id"), await body(c, Progress)));
 });
 
 // Archive when you've finished; bring it back to the Inbox. /read and /unread are the older names.
@@ -286,10 +280,10 @@ for (const [path, archived] of [["archive", true], ["read", true], ["unarchive",
 
 /** POST /v1/links/:id/page {html, url}: the page as the device fetched it, for sites that turn the server away. */
 app.post("/:id/page", async (c) => {
-  const body = await c.req.json().catch(() => null) as { html?: unknown; url?: unknown } | null;
-  if (!body || typeof body.html !== "string" || body.html.length < 200) return failWithStatus(c, 400, "html is required");
-  const url = typeof body.url === "string" ? body.url : undefined;
-  return c.json(presentLink(await fetchArticle(c.env, c.req.param("id"), new Date(), { html: body.html, url }), true));
+  const sent = await objectBody(c).catch(() => null);
+  if (!sent || typeof sent.html !== "string" || sent.html.length < 200) return failWithStatus(c, 400, "html is required");
+  const url = typeof sent.url === "string" ? sent.url : undefined;
+  return c.json(presentLink(await fetchArticle(c.env, c.req.param("id"), new Date(), { html: sent.html, url }), true));
 });
 
 app.post("/:id/refetch", async (c) => {

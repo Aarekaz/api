@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
-import { cursorFrom, appErrors, limitFrom, list, page } from "../lib/http";
+import { body, cursorFrom, appErrors, limitFrom, list, page } from "../lib/http";
 import { parseJson } from "../utils/json";
 import { ulid } from "../services/documents-core";
 import {
@@ -409,7 +409,7 @@ app.get("/log", async (c) => {
  * Some sites refuse servers; then the app loads the page itself and sends it as `html`.
  */
 app.post("/import", async (c) => {
-  const input = Import.parse(await parseJson(c.req.raw));
+  const input = await body(c, Import);
   const url = input.url;
   let html = input.html, finalUrl = url;
   if (html === undefined) {
@@ -451,7 +451,7 @@ app.get("/:id", async (c) => {
 
 /** POST /v1/recipes { title, ingredients: ["2 cups flour", …], steps: […], … } */
 app.post("/", async (c) => {
-  const input = CreateRecipe.parse(await parseJson(c.req.raw));
+  const input = await body(c, CreateRecipe);
   const cols = columns(input);
   cols.image_url = await keepImage(c.env, (cols.image_url as string | null | undefined) ?? null);
   const now = new Date().toISOString();
@@ -466,7 +466,7 @@ app.post("/", async (c) => {
 /** PATCH /v1/recipes/:id { any fields } : only what's sent changes. */
 app.patch("/:id", async (c) => {
   const id = c.req.param("id");
-  const input = UpdateRecipe.parse(await parseJson(c.req.raw));
+  const input = await body(c, UpdateRecipe);
   await load(c.env, id, false);
   const cols = columns(input);
   if ("image_url" in cols) cols.image_url = await keepImage(c.env, (cols.image_url as string | null) ?? null);

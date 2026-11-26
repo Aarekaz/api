@@ -6,9 +6,10 @@ import {
   dateSchema,
   openApiJsonRequestBody,
   openApiRegistry,
+  structuredCreatedResponses,
   structuredOkResponses,
 } from "../schemas/openapi";
-import { cursorFrom, fail, failWith, limitFrom, list, notModified, ok, page, shortHash, body as readBody } from "../lib/http";
+import { appErrors, cursorFrom, fail, failWith, limitFrom, list, notModified, objectBody, ok, page, shortHash } from "../lib/http";
 import { dataVersion } from "../services/data-versions";
 import { derived, type DerivedSpec } from "../services/derived-cache";
 import {
@@ -25,7 +26,8 @@ export { cleanJourney, cleanSaved, cleanVisit, findTrips, TRAVEL_MODES, type Awa
 // imports (photos, Google Timeline) post them in batches. Safe to repeat.
 // The SQL is in services/places.ts. App-only: errors are { error: { code, message } },
 // and every GET carries an ETag from the "places" data version (304 when unchanged).
-const app = new Hono<{ Bindings: Env }>();
+// Anything a handler doesn't catch itself is a JSON 500 in the one shape.
+const app = appErrors(new Hono<{ Bindings: Env }>(), "Visits request");
 
 // OpenAPI registrations. Posted visits and journeys are cleaned, not
 // validated: invalid items are skipped and counted in `valid`.
@@ -335,7 +337,7 @@ openApiRegistry.registerPath({
   summary: "Save a place of your own: visits inside its circle, in its months, count as it",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(savedPlaceInput) },
-  responses: structuredOkResponses(savedPlace),
+  responses: structuredCreatedResponses(savedPlace),
 });
 
 openApiRegistry.registerPath({
@@ -520,7 +522,10 @@ async function derivedReply(
 
 const isoOr = (v: string | undefined, fallback: string) => (isDate(v) ? new Date(v!).toISOString() : fallback);
 const YEAR = /^\d{4}$/;
-const cleanAll = <I, O>(items: I[], clean: (item: I) => O | null) => items.map(clean).filter((v): v is O => v !== null);
+/** Each item cleaned; one that isn't an object (null, 3, "x") is dropped like any invalid one. */
+const cleanAll = <I, O>(items: I[], clean: (item: I) => O | null) =>
+  items.map((item) => (isObject(item) ? clean(item) : null)).filter((v): v is O => v !== null);
+const isObject = (value: unknown): boolean => typeof value === "object" && value !== null && !Array.isArray(value);
 
 app.get("/", async (c) => {
   try {
@@ -539,7 +544,7 @@ app.get("/", async (c) => {
 /** POST { visits: [...] } up to 500 at a time. Repeats are ignored, but can fill in a missing departure. */
 app.post("/", async (c) => {
   try {
-    const b = (await readBody(c)) as { visits?: unknown };
+    const b = (await objectBody(c)) as { visits?: unknown };
     const items = Array.isArray(b?.visits) ? (b.visits as VisitInput[]) : null;
     if (!items || items.length === 0 || items.length > 500) return fail(c, 400, "Send visits: 1 to 500 items");
     const clean = cleanAll<VisitInput, CleanVisit>(items, cleanVisit);
@@ -554,7 +559,7 @@ app.patch("/journeys/:id", async (c) => {
   try {
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return fail(c, 400, "Invalid id");
-    const b = (await readBody(c)) as { mode?: unknown };
+    const b = (await objectBody(c)) as { mode?: unknown };
     const mode = typeof b?.mode === "string" ? b.mode : "";
     if (!(TRAVEL_MODES as readonly string[]).includes(mode)) return fail(c, 400, `mode must be one of: ${TRAVEL_MODES.join(", ")}`);
     const row = await correctJourneyMode(c.env, id, mode);
@@ -573,7 +578,7 @@ app.patch("/:id", async (c) => {
   try {
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return fail(c, 400, "Invalid id");
-    const b = (await readBody(c).catch(() => null)) as { hidden?: unknown; note?: unknown; move_to?: { latitude?: unknown; longitude?: unknown } } | null;
+    const b = (await objectBody(c).catch(() => null)) as { hidden?: unknown; note?: unknown; move_to?: { latitude?: unknown; longitude?: unknown } } | null;
     if (!b) return fail(c, 400, "Send hidden, note or move_to");
     let moveTo: { latitude: number; longitude: number } | undefined;
     if (b.move_to) {
@@ -676,15 +681,15 @@ app.get("/trips", (c) => {
 app.get("/saved", async (c) => ok(c, { places: await listSaved(c.env) }));
 
 app.post("/saved", async (c) => {
-  const b = (await readBody(c).catch(() => null)) as Record<string, unknown> | null;
+  const b = await objectBody(c).catch(() => null);
   const p = b && cleanSaved(b);
   if (!p) return fail(c, 400, "Send name, latitude and longitude");
-  return ok(c, await addSaved(c.env, p));
+  return ok(c, await addSaved(c.env, p), 201);
 });
 
 app.patch("/saved/:id", async (c) => {
   const id = Number(c.req.param("id"));
-  const b = (await readBody(c).catch(() => null)) as Record<string, unknown> | null;
+  const b = await objectBody(c).catch(() => null);
   const p = b && cleanSaved(b, true);
   if (!Number.isInteger(id) || !p) return fail(c, 400, "Invalid place");
   const row = await updateSaved(c.env, id, p);
@@ -703,10 +708,10 @@ app.delete("/saved/:id", async (c) => {
  * fields keep what's already there.
  */
 app.post("/names", async (c) => {
-  const b = (await readBody(c).catch(() => null)) as { names?: unknown } | null;
+  const b = (await objectBody(c).catch(() => null)) as { names?: unknown } | null;
   const items = Array.isArray(b?.names) ? (b!.names as Array<Record<string, unknown>>) : null;
   if (!items || items.length === 0 || items.length > 500) return fail(c, 400, "Send names: 1 to 500 items");
-  const valid = items.filter((n): n is Record<string, unknown> & { key: string } => typeof n.key === "string" && PLACE_KEY.test(n.key));
+  const valid = items.filter((n): n is Record<string, unknown> & { key: string } => isObject(n) && typeof n.key === "string" && PLACE_KEY.test(n.key));
   await saveNames(c.env, valid);
   return ok(c, { received: items.length, saved: valid.length });
 });
@@ -730,7 +735,7 @@ app.get("/journeys", async (c) => {
 /** POST { journeys: [...] } up to 500 at a time. Repeats are ignored. */
 app.post("/journeys", async (c) => {
   try {
-    const b = (await readBody(c)) as { journeys?: unknown };
+    const b = (await objectBody(c)) as { journeys?: unknown };
     const items = Array.isArray(b?.journeys) ? (b.journeys as JourneyInput[]) : null;
     if (!items || items.length === 0 || items.length > 500) return fail(c, 400, "Send journeys: 1 to 500 items");
     const clean = cleanAll<JourneyInput, CleanJourney>(items, cleanJourney);

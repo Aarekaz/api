@@ -1,8 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
-import { cursorFrom, appErrors, fail, later, limitFrom, list, page } from "../lib/http";
-import { parseJson } from "../utils/json";
+import { body, cursorFrom, appErrors, fail, later, limitFrom, list, page } from "../lib/http";
 import { ulid } from "../services/documents-core";
 import {
   authSecurity,
@@ -364,7 +363,7 @@ app.get("/:id", async (c) => {
 
 /** POST /v1/journal { body, happened_at?, place?, mood? | state_of_mind?, attachments?, prompt?, source?, external_id? } */
 app.post("/", async (c) => {
-  const input = CreateEntry.parse(await parseJson(c.req.raw));
+  const input = await body(c, CreateEntry);
   const source = input.source ?? "native";
   if (input.external_id) {
     const existing = await c.env.DB.prepare(
@@ -386,7 +385,7 @@ app.post("/", async (c) => {
 
 /** PATCH /v1/journal/:id { version, body?, happened_at?, place?, mood? | state_of_mind?, attachments?, prompt? } */
 app.patch("/:id", async (c) => {
-  const input = UpdateEntry.parse(await parseJson(c.req.raw));
+  const input = await body(c, UpdateEntry);
   const current = await getDocument(c.env, c.req.param("id"));
   if (current.kind !== "journal") throw new DocumentError("Not a journal entry", 404);
   const m = meta(current);

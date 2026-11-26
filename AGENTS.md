@@ -83,8 +83,10 @@ and Spotify integrations, app sign-in) use `src/lib/http.ts`:
 - `ok(c, data)`; `fail(c, status, message, { code?, details?, extra? })`;
   `failWith(c, error, "Links request")` for anything thrown (HttpError, Zod
   errors, service errors carrying `status` and maybe `code`; anything else is
-  logged and becomes a 500); `body(c, schema?)` and `parse(schema, value)`
-  throw a 400 on bad input.
+  logged and becomes a 500); `body(c, schema?)`, `objectBody(c)` (a JSON
+  object or a 400: "Invalid JSON", "Send a JSON object") and `parse(schema,
+  value)` throw a 400 on bad input. Never read `parseJson` by hand in an app
+  route. A POST that makes something answers 201.
 - One error shape: `{ "error": { "code", "message", "details"? } }`. Codes
   follow the status (`invalid`, `not_found`, `conflict`, `too_large`,
   `server`, …) unless a service names its own (`exists`). Extra top-level
