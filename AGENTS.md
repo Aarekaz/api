@@ -46,7 +46,13 @@ The website reads these GETs, and their bodies must stay byte-compatible:
 - `src/utils/`: pure helpers. `date.ts` is the one place for calendar days
   (`DAY`, `isDay`, `dayAtOffset`, `dayInZone`, `shiftDay`; ADR 0008);
   `query.ts` has the list filters and `clampLimit` (the one `?limit=` rule).
-- `services/upload-token.ts`: presigned upload tokens (photos, blog images).
+- `services/upload-token.ts`: presigned upload tokens (photos, blog images)
+  and `UPLOAD_LIMITS`, every upload's size cap (ADR 0011).
+- `middleware/body-limit.ts`: `limitBody(bytes)` for any route that reads a
+  body without the bearer token (the WHOOP webhook, the crowd).
+- `utils/json.ts` `parseJsonAs(request, schema)`: a body as a Zod schema for
+  routes that answer a bad body with their own fixed message (training,
+  capture, vault; ADR 0013).
 - `src/services/data-versions.ts`: per-kind data versions for ETags.
 - `src/schemas/`: Zod schemas (validation and OpenAPI). `openapi.ts` has the
   shared response helpers (`structuredOkResponses`, `cursorQuery`, `pageFields`).
@@ -101,6 +107,13 @@ journal, sections, recipes, training, music history) use `src/lib/http.ts`:
   at ingest, indexed); `?offset=` is deprecated and only places a row without
   one (`docs/adr/0001-local-date-reads.md`). Rows written straight into D1 must
   set `local_date`.
+- Queries that don't depend on each other go in one `env.DB.batch` (one round
+  trip, one transaction; ADR 0012). Counts a read would recompute from every
+  row are stored beside their source with a fallback until the migration is
+  applied: the crowd total (trigger, 0054) and journal word counts per
+  document version (0055; ADR 0010).
+- WHOOP collection reads compare `isoInstant(time)` (ISO text of the instant),
+  indexed by 0053; never `julianday()` in a read that pages (ADR 0009).
 - Work that can finish after the reply goes in `later(c)` (waitUntil); a saved
   link's page is fetched that way, so `POST /v1/links` returns at once with
   `fetched_at: null` and no `body`.
