@@ -46,6 +46,15 @@ const Progress = z.object({
   device: z.string().trim().max(60).nullish(),
   /** The device's local date, so time read lands on the day you read it. */
   day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+  seconds: z.number().min(0).max(86_400).nullish().openapi({
+    description: "Active reading seconds since this device's last report. Credited to time read (at most the time since the previous progress plus 30 s, and 10 minutes a report), even when progress didn't move.",
+  }),
+  words: z.number().int().min(0).max(5_000_000).nullish().openapi({
+    description: "Words in the text the app rendered; raises the link's reading_minutes (230 words a minute) when it says more.",
+  }),
+  report_id: z.string().uuid().nullish().openapi({
+    description: "The app's id for this report, so a retried request counts its seconds once.",
+  }),
 });
 
 const ReadingStats = z.object({
@@ -152,16 +161,18 @@ openApiRegistry.registerPath({
   responses: structuredOkResponses(ReadingStats),
 });
 
-openApiRegistry.registerPath({
-  method: "put",
-  path: "/v1/links/{id}/progress",
-  summary: "Save reading progress (last write wins by updated_at)",
-  security: authSecurity,
-  request: { params: idParams, body: openApiJsonRequestBody(Progress) },
-  responses: structuredOkResponses(linkReadingSchema.extend({
-    applied: z.boolean().openapi({ description: "Whether this write won" }),
-  })),
-});
+for (const method of ["put", "post"] as const) {
+  openApiRegistry.registerPath({
+    method,
+    path: "/v1/links/{id}/progress",
+    summary: method === "put" ? "Save reading progress (last write wins by updated_at)" : "Save reading progress (same as PUT)",
+    security: authSecurity,
+    request: { params: idParams, body: openApiJsonRequestBody(Progress) },
+    responses: structuredOkResponses(linkReadingSchema.extend({
+      applied: z.boolean().openapi({ description: "Whether this write won" }),
+    })),
+  });
+}
 
 for (const [action, summary] of [
   ["archive", "Archive a link"],
@@ -285,8 +296,11 @@ app.get("/:id/progress", async (c) => {
   }
 });
 
-/** PUT /v1/links/:id/progress { progress, anchor?, updated_at?, device? }: last write wins by updated_at. */
-app.put("/:id/progress", async (c) => {
+/**
+ * PUT (or POST) /v1/links/:id/progress { progress, anchor?, updated_at?, device?, day?, seconds?, words?, report_id? }:
+ * last write wins by updated_at; seconds count as time read either way.
+ */
+app.on(["PUT", "POST"], "/:id/progress", async (c) => {
   const body = await parseJson(c.req.raw);
   if (body === null) return invalidJson(c);
   try {
