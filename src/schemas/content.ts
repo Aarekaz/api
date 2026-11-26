@@ -59,18 +59,6 @@ export const projectSchema = z.object({
   listings: projectListingsSchema.optional(),
 });
 
-export const noteSchema = z.object({
-  title: z.string().optional(),
-  body: z.string().optional(),
-  tags: z.array(z.string()).optional(),
-});
-
-export const eventSchema = z.object({
-  type: z.string().min(1),
-  payload: z.record(z.unknown()).optional(),
-  occurred_at: dateString.optional(),
-});
-
 export const postSchema = z.object({
   slug: z.string().min(1),
   title: z.string().min(1),

@@ -1,32 +1,14 @@
 import { Hono } from "hono";
-import { z } from "zod";
 import type { Env } from "../types/env";
-import type { JsonRecord } from "../types/common";
 import { nowIso, dateOnly, addDays } from "../utils/date";
 import { readBody } from "../lib/site-http";
 import {
   appleHealthDailySchema,
-  appleHealthHeartRateSchema,
-  appleHealthHeartRateBatchSchema,
-  appleHealthSleepSessionSchema,
-  appleHealthWorkoutSchema,
 } from "../schemas/health";
 import {
   openApiRegistry,
-  genericObjectSchema,
-  okUpdatedSchema,
-  okDeletedSchema,
   healthDailyRangeResponseSchema,
   healthDailyUpdateResponseSchema,
-  healthDailyDeleteResponseSchema,
-  healthHeartRateRangeResponseSchema,
-  healthHeartRateBatchResponseSchema,
-  healthSleepRangeResponseSchema,
-  healthWorkoutsRangeResponseSchema,
-  healthSummaryResponseSchema,
-  dateSchema,
-  errorSchema,
-  openApiResponse,
   openApiJsonRequestBody,
   okResponses,
   createdResponses,
@@ -34,12 +16,6 @@ import {
 } from "../schemas/openapi";
 
 const app = new Hono<{ Bindings: Env }>();
-
-const workoutPatchSchema = appleHealthWorkoutSchema
-  .partial()
-  .refine((data) => Object.keys(data).length > 0, {
-    message: "At least one field must be provided",
-  });
 
 // OpenAPI registrations
 openApiRegistry.registerPath({

@@ -66,22 +66,6 @@ export function splitFrontmatter(text: string): { frontmatter: Record<string, st
   return { frontmatter, body: after };
 }
 
-export function titleFrom(path: string, frontmatter: Record<string, string>, body: string): string {
-  if (frontmatter.title?.trim()) return frontmatter.title.trim();
-  for (const line of body.split("\n").slice(0, 8)) {
-    if (line.startsWith("# ")) return line.slice(2).trim();
-  }
-  return (path.split("/").pop() ?? path).replace(/\.md$/, "");
-}
-
-const IGNORED_PREFIXES = [".obsidian", ".trash", ".git", ".claude", "Utilities/Archive", "Utilities/Attachments", "Excalidraw"];
-const IGNORED_FILES = new Set(["AGENTS.md", "README.md", "CLAUDE.md"]);
-
-export function shouldImport(path: string): boolean {
-  if (!path.endsWith(".md")) return false;
-  if (IGNORED_FILES.has(path.split("/").pop() ?? "")) return false;
-  return !IGNORED_PREFIXES.some((prefix) => path === prefix || path.startsWith(prefix + "/"));
-}
 
 /** Same rules the apps used for the vault, so nothing changes meaning on import. */
 export function classify(path: string, frontmatter: Record<string, string>): {

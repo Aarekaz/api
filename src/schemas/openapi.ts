@@ -30,8 +30,6 @@ export const okDeletedSchema = z.object({
   deleted_at: dateTimeSchema,
   id: z.number().optional(),
 });
-export const okOccurredSchema = z.object({ ok: z.boolean(), occurred_at: dateTimeSchema });
-export const okDateAddedSchema = z.object({ ok: z.boolean(), date_added: dateTimeSchema });
 export const okDateRangeSchema = z.object({
   ok: z.boolean(),
   start: dateSchema,
@@ -71,40 +69,6 @@ export const healthDailyUpdateResponseSchema = z.object({
   date: dateSchema,
   updated_at: dateTimeSchema,
 });
-
-export const healthDailyDeleteResponseSchema = z.object({
-  ok: z.boolean(),
-  deleted: dateSchema,
-});
-
-export const healthHeartRateRangeResponseSchema = z.object({
-  start: dateTimeSchema,
-  end: dateTimeSchema,
-  count: z.number(),
-  samples: genericArraySchema,
-});
-
-export const healthHeartRateBatchResponseSchema = z.object({
-  ok: z.boolean(),
-  inserted: z.number(),
-  created_at: dateTimeSchema,
-});
-
-export const healthSleepRangeResponseSchema = z.object({
-  start: dateTimeSchema,
-  end: dateTimeSchema,
-  count: z.number(),
-  sessions: genericArraySchema,
-});
-
-export const healthWorkoutsRangeResponseSchema = z.object({
-  start: dateTimeSchema,
-  end: dateTimeSchema,
-  count: z.number(),
-  workouts: genericArraySchema,
-});
-
-export const healthSummaryResponseSchema = genericObjectSchema;
 
 export const whoopAuthorizationUrlResponseSchema = z.object({
   authorization_url: z.string().url(),
@@ -489,10 +453,6 @@ export const pageFields = (item: z.ZodTypeAny) => ({
   items: z.array(item),
   next_cursor: z.string().nullable().openapi({ description: "Pass as ?cursor= for the next page; null on the last page" }),
 });
-
-export const notFoundResponse = {
-  404: openApiResponse(errorSchema, "Not found"),
-};
 
 /** POST …/presign: a short-lived token for PUT …/upload-presigned. */
 export const presignResponseSchema = z.object({

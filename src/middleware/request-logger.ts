@@ -1,5 +1,4 @@
 import { Context, Next } from "hono";
-import { getRequestId, setRequestId } from "../types/errors";
 import { nowIso } from "../utils/date";
 
 /**
@@ -10,7 +9,6 @@ import { nowIso } from "../utils/date";
  */
 export async function requestLogger(c: Context, next: Next) {
   const requestId = crypto.randomUUID();
-  setRequestId(c, requestId);
 
   const start = Date.now();
   const method = c.req.method;

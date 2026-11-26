@@ -59,7 +59,5 @@ export const spotifyRecentlyPlayedSchema = z.object({
 }).passthrough();
 
 export type SpotifyTokenResponse = z.infer<typeof spotifyTokenResponseSchema>;
-export type SpotifyTrack = z.infer<typeof spotifyTrackSchema>;
-export type SpotifyEpisode = z.infer<typeof spotifyEpisodeSchema>;
 export type SpotifyCurrentlyPlaying = z.infer<typeof spotifyCurrentlyPlayingSchema>;
 export type SpotifyRecentlyPlayed = z.infer<typeof spotifyRecentlyPlayedSchema>;
