@@ -190,3 +190,32 @@ describe("an error nothing catches", () => {
     spy.mockRestore();
   });
 });
+
+describe("limit bounds on the website's lists", () => {
+  // `?limit=-1` used to reach SQL as LIMIT -1 (no limit at all), and
+  // `?limit=1.5` as a REAL (a 500). Now: rounded down, at least 1.
+  it.each(CASES.filter((t) => t.name !== "location"))("$name", async (t) => {
+    for (let i = 0; i < 3; i++) {
+      const body = typeof t.create.slug === "string" ? { ...t.create, slug: `${t.create.slug}-${i}` } : t.create;
+      await t.route.request("/", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, env);
+    }
+    const rows = async (query: string) => {
+      const res = await t.route.request(`/${query}`, {}, env);
+      expect(res.status, query).toBe(200);
+      return (await res.json() as unknown[]).length;
+    };
+    expect(await rows("?limit=-1")).toBe(1);
+    expect(await rows("?limit=1.5")).toBe(1);
+    expect(await rows("?limit=2.9")).toBe(2);
+    expect(await rows("?limit=2&offset=1.5")).toBe(2);
+  });
+});
+
+describe("clampLimit", () => {
+  it("is limitFrom's rule: floor, at least 1, at most max, fallback for 0 or junk", async () => {
+    const { clampLimit, clampOffset } = await import("../../utils/query");
+    expect([undefined, "", "abc", "0", "-1", "-0.5", "0.5", "1.9", "50", "5000", "Infinity"].map((v) => clampLimit(v, 100, 1000)))
+      .toEqual([100, 100, 100, 100, 1, 1, 100, 1, 50, 1000, 1000]);
+    expect([undefined, "-3", "2.7", "abc"].map(clampOffset)).toEqual([0, 0, 2, 0]);
+  });
+});

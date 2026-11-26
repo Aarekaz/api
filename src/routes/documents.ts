@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
-import { cursorFrom, fail as failWithMessage, failWith, later, list, page } from "../lib/http";
+import { cursorFrom, fail as failWithMessage, failWith, later, limitFrom, list, page } from "../lib/http";
 import {
   DocumentError,
   captureToInbox,
@@ -198,7 +198,7 @@ const invalidJson = (c: Parameters<typeof failWith>[0]) => failWithMessage(c, 40
 
 app.get("/", async (c) => {
   try {
-    const limit = Math.min(Math.max(Number(c.req.query("limit")) || 2000, 1), 5000);
+    const limit = limitFrom(c, 2000, 5000);
     const rows = await listDocuments(c.env, {
       kind: c.req.query("kind"),
       folder: c.req.query("folder"),
@@ -288,7 +288,7 @@ searchRoute.get("/", async (c) => {
   const q = c.req.query("q")?.trim() ?? "";
   if (!q) return c.json({ results: [] });
   try {
-    return c.json({ results: await searchDocuments(c.env, q, Number(c.req.query("limit")) || 30) });
+    return c.json({ results: await searchDocuments(c.env, q, limitFrom(c, 30, 100)) });
   } catch (error) {
     return fail(c, error);
   }

@@ -18,14 +18,29 @@ type ListQueryOptions = {
   maxLimit?: number;
 };
 
+/**
+ * A page size from `?limit=`: whole numbers only (rounded down), at least 1,
+ * at most `max`; missing, zero or not a number is `fallback`. The one rule for
+ * every list (lib/http.ts limitFrom uses it too). A negative limit used to
+ * reach SQL, where LIMIT -1 means no limit.
+ */
+export function clampLimit(raw: unknown, fallback: number, max: number): number {
+  return Math.min(Math.max(Math.floor(Number(raw)) || fallback, 1), max);
+}
+
+/** `?offset=` as a whole number, at least 0. */
+export function clampOffset(raw: unknown): number {
+  return Math.max(Math.floor(Number(raw)) || 0, 0);
+}
+
 export function parseListQuery(
   query: Record<string, string | undefined>,
   options: ListQueryOptions = {}
 ): ListQuery {
   const defaultLimit = options.defaultLimit ?? 100;
   const maxLimit = options.maxLimit ?? 1000;
-  const limit = Math.min(Number(query.limit) || defaultLimit, maxLimit);
-  const offset = Math.max(Number(query.offset) || 0, 0);
+  const limit = clampLimit(query.limit, defaultLimit, maxLimit);
+  const offset = clampOffset(query.offset);
   const search = query.search?.trim() || null;
   const sort = query.sort?.trim() || null;
   const start = query.start?.trim() || null;

@@ -18,7 +18,7 @@ import {
   authSecurity,
   errorResponses,
 } from "../schemas/openapi";
-import { patchAssignments } from "../utils/query";
+import { clampLimit, clampOffset, patchAssignments } from "../utils/query";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -134,8 +134,8 @@ app.get("/", async (c) => {
       validation.data.start ??
       new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     label = validation.data.label ?? null;
-    limit = Math.min(Number(validation.data.limit) || 1000, 10000);
-    offset = Math.max(Number(validation.data.offset) || 0, 0);
+    limit = clampLimit(validation.data.limit, 1000, 10000);
+    offset = clampOffset(validation.data.offset);
   } else {
     end = nowIso();
     start = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
