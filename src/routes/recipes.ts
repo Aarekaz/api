@@ -1,8 +1,7 @@
 import { Hono } from "hono";
-import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
-import { cursorFrom, failWith, limitFrom, list, page } from "../lib/http";
+import { cursorFrom, appErrors, limitFrom, list, page } from "../lib/http";
 import { parseJson } from "../utils/json";
 import { ulid } from "../services/documents-core";
 import {
@@ -27,7 +26,7 @@ import { cleanIngredients, cleanSteps, extractRecipe, type Ingredient, type Step
 // collections, notes, and a log of every time you cooked one.
 // Private: nothing here is shown on anuragd.me.
 
-const app = new Hono<{ Bindings: Env }>();
+const app = appErrors(new Hono<{ Bindings: Env }>(), "Recipe request");
 
 class RecipeError extends Error {
   constructor(message: string, readonly status: 400 | 404 | 413 | 415 | 422 | 502, readonly code = status === 404 ? "not_found" : "invalid") { super(message); }
@@ -96,7 +95,6 @@ export function presentRecipe(row: Row, log?: LogRow[]) {
 const presentLog = (l: LogRow) => ({ id: l.id, recipe_id: l.recipe_id, cooked_on: l.cooked_on, rating: l.rating, note: l.note, servings: l.servings, created_at: l.created_at });
 
 /** One error shape, { error: { code, message } } (lib/http.ts). */
-const fail = (c: Context<{ Bindings: Env }>, error: unknown) => failWith(c, error, "Recipe request");
 
 // Each recipe with how often it was cooked, when last, and its average rating.
 const SELECT = `SELECT r.*, (SELECT COUNT(*) FROM recipe_log l WHERE l.recipe_id = r.id) AS cooked_count,
@@ -360,58 +358,46 @@ openApiRegistry.registerPath({
 
 /** GET /v1/recipes?q=&tag=&favorite=1&limit= : every recipe, most recently changed first. */
 app.get("/", async (c) => {
-  try {
-    const where = ["r.deleted_at IS NULL"];
-    const args: unknown[] = [];
-    const q = c.req.query("q")?.trim();
-    if (q) {
-      where.push("(r.title LIKE ? OR r.ingredients_json LIKE ? OR r.tags_json LIKE ? OR r.notes LIKE ? OR r.source_name LIKE ?)");
-      const like = `%${q.replace(/[%_]/g, "")}%`;
-      args.push(like, like, like, like, like);
-    }
-    const tag = c.req.query("tag")?.trim();
-    if (tag) { where.push("EXISTS (SELECT 1 FROM json_each(r.tags_json) t WHERE lower(t.value) = lower(?))"); args.push(tag); }
-    if (c.req.query("favorite") === "1") where.push("r.favorite = 1");
-    const after = cursorFrom(c, 2);
-    if (after) { where.push("(r.updated_at < ? OR (r.updated_at = ? AND r.id < ?))"); args.push(after[0], after[0], after[1]); }
-    const limit = limitFrom(c, 1000, 2000);
-    const { results } = await c.env.DB.prepare(`${SELECT} WHERE ${where.join(" AND ")} ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`)
-      .bind(...args, limit + 1).all<Row>();
-    const { items, next_cursor } = page(results, limit, (r) => [r.updated_at, r.id]);
-    return list(c, "items", items.map((r) => presentRecipe(r)), next_cursor);
-  } catch (error) {
-    return fail(c, error);
+  const where = ["r.deleted_at IS NULL"];
+  const args: unknown[] = [];
+  const q = c.req.query("q")?.trim();
+  if (q) {
+    where.push("(r.title LIKE ? OR r.ingredients_json LIKE ? OR r.tags_json LIKE ? OR r.notes LIKE ? OR r.source_name LIKE ?)");
+    const like = `%${q.replace(/[%_]/g, "")}%`;
+    args.push(like, like, like, like, like);
   }
+  const tag = c.req.query("tag")?.trim();
+  if (tag) { where.push("EXISTS (SELECT 1 FROM json_each(r.tags_json) t WHERE lower(t.value) = lower(?))"); args.push(tag); }
+  if (c.req.query("favorite") === "1") where.push("r.favorite = 1");
+  const after = cursorFrom(c, 2);
+  if (after) { where.push("(r.updated_at < ? OR (r.updated_at = ? AND r.id < ?))"); args.push(after[0], after[0], after[1]); }
+  const limit = limitFrom(c, 1000, 2000);
+  const { results } = await c.env.DB.prepare(`${SELECT} WHERE ${where.join(" AND ")} ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`)
+    .bind(...args, limit + 1).all<Row>();
+  const { items, next_cursor } = page(results, limit, (r) => [r.updated_at, r.id]);
+  return list(c, "items", items.map((r) => presentRecipe(r)), next_cursor);
 });
 
 /** GET /v1/recipes/tags : collections with how many recipes are in each. */
 app.get("/tags", async (c) => {
-  try {
-    const { results } = await c.env.DB.prepare(
-      `SELECT t.value AS tag, COUNT(*) AS count FROM recipes r, json_each(r.tags_json) t
-       WHERE r.deleted_at IS NULL GROUP BY lower(t.value) ORDER BY count DESC, tag`,
-    ).all<{ tag: string; count: number }>();
-    return c.json({ items: results.map((r) => ({ tag: r.tag, count: Number(r.count) })) });
-  } catch (error) {
-    return fail(c, error);
-  }
+  const { results } = await c.env.DB.prepare(
+    `SELECT t.value AS tag, COUNT(*) AS count FROM recipes r, json_each(r.tags_json) t
+     WHERE r.deleted_at IS NULL GROUP BY lower(t.value) ORDER BY count DESC, tag`,
+  ).all<{ tag: string; count: number }>();
+  return c.json({ items: results.map((r) => ({ tag: r.tag, count: Number(r.count) })) });
 });
 
 /** GET /v1/recipes/log?limit= : what you cooked, newest first, across every recipe. */
 app.get("/log", async (c) => {
-  try {
-    const limit = limitFrom(c, 200, 2000);
-    const after = cursorFrom(c, 2);
-    const { results } = await c.env.DB.prepare(
-      `SELECT l.*, r.title FROM recipe_log l JOIN recipes r ON r.id = l.recipe_id WHERE r.deleted_at IS NULL
-       ${after ? "AND (l.cooked_on < ? OR (l.cooked_on = ? AND l.id < ?))" : ""}
-       ORDER BY l.cooked_on DESC, l.id DESC LIMIT ?`,
-    ).bind(...(after ? [after[0], after[0], after[1]] : []), limit + 1).all<LogRow & { title: string }>();
-    const { items, next_cursor } = page(results, limit, (l) => [l.cooked_on, l.id]);
-    return list(c, "items", items.map((l) => ({ ...presentLog(l), title: l.title })), next_cursor);
-  } catch (error) {
-    return fail(c, error);
-  }
+  const limit = limitFrom(c, 200, 2000);
+  const after = cursorFrom(c, 2);
+  const { results } = await c.env.DB.prepare(
+    `SELECT l.*, r.title FROM recipe_log l JOIN recipes r ON r.id = l.recipe_id WHERE r.deleted_at IS NULL
+     ${after ? "AND (l.cooked_on < ? OR (l.cooked_on = ? AND l.id < ?))" : ""}
+     ORDER BY l.cooked_on DESC, l.id DESC LIMIT ?`,
+  ).bind(...(after ? [after[0], after[0], after[1]] : []), limit + 1).all<LogRow & { title: string }>();
+  const { items, next_cursor } = page(results, limit, (l) => [l.cooked_on, l.id]);
+  return list(c, "items", items.map((l) => ({ ...presentLog(l), title: l.title })), next_cursor);
 });
 
 /**
@@ -422,144 +408,108 @@ app.get("/log", async (c) => {
  * Some sites refuse servers; then the app loads the page itself and sends it as `html`.
  */
 app.post("/import", async (c) => {
-  try {
-    const input = Import.parse(await parseJson(c.req.raw));
-    const url = input.url;
-    let html = input.html, finalUrl = url;
-    if (html === undefined) {
-      let response: Response;
-      try {
-        response = await fetch(url, { headers: PAGE_HEADERS, redirect: "follow", signal: AbortSignal.timeout(12_000) });
-      } catch {
-        throw new RecipeError("Couldn't reach that page", 502, "fetch_failed");
-      }
-      if (!response.ok) throw new RecipeError(`The site answered ${response.status}`, 502, "fetch_failed");
-      const type = response.headers.get("content-type") ?? "";
-      if (type && !/html|xml/i.test(type)) throw new RecipeError("That link isn't a web page", 422, "not_a_page");
-      html = (await response.text()).slice(0, 4_000_000);
-      finalUrl = response.url || url;
+  const input = Import.parse(await parseJson(c.req.raw));
+  const url = input.url;
+  let html = input.html, finalUrl = url;
+  if (html === undefined) {
+    let response: Response;
+    try {
+      response = await fetch(url, { headers: PAGE_HEADERS, redirect: "follow", signal: AbortSignal.timeout(12_000) });
+    } catch {
+      throw new RecipeError("Couldn't reach that page", 502, "fetch_failed");
     }
-    const { recipe, found } = extractRecipe(html, finalUrl);
-    recipe.source_url = url;
-    const existing = await c.env.DB.prepare("SELECT id FROM recipes WHERE source_url = ? AND deleted_at IS NULL LIMIT 1").bind(url).first<{ id: string }>();
-    return c.json({ recipe, found, existing: existing?.id ?? null });
-  } catch (error) {
-    return fail(c, error);
+    if (!response.ok) throw new RecipeError(`The site answered ${response.status}`, 502, "fetch_failed");
+    const type = response.headers.get("content-type") ?? "";
+    if (type && !/html|xml/i.test(type)) throw new RecipeError("That link isn't a web page", 422, "not_a_page");
+    html = (await response.text()).slice(0, 4_000_000);
+    finalUrl = response.url || url;
   }
+  const { recipe, found } = extractRecipe(html, finalUrl);
+  recipe.source_url = url;
+  const existing = await c.env.DB.prepare("SELECT id FROM recipes WHERE source_url = ? AND deleted_at IS NULL LIMIT 1").bind(url).first<{ id: string }>();
+  return c.json({ recipe, found, existing: existing?.id ?? null });
 });
 
 /** POST /v1/recipes/photo (raw image body) : stores a photo for a recipe and returns its link. */
 app.post("/photo", async (c) => {
-  try {
-    const type = (c.req.header("content-type") ?? "").split(";")[0].toLowerCase();
-    if (!/^image\/(jpeg|png|webp|heic|gif)$/.test(type)) throw new RecipeError("Send a JPEG, PNG, WebP, HEIC or GIF", 415);
-    const bytes = await c.req.arrayBuffer();
-    if (bytes.byteLength === 0) throw new RecipeError("No image in the request", 400);
-    if (bytes.byteLength > 15_000_000) throw new RecipeError("That photo is over 15 MB", 413);
-    const key = `recipes/${crypto.randomUUID()}.${type.split("/")[1].replace("jpeg", "jpg")}`;
-    await c.env.R2_BUCKET.put(key, bytes, { httpMetadata: { contentType: type } });
-    const base = c.env.R2_PUBLIC_BASE_URL?.replace(/\/$/, "");
-    return c.json({ url: base ? `${base}/${key}` : key, key }, 201);
-  } catch (error) {
-    return fail(c, error);
-  }
+  const type = (c.req.header("content-type") ?? "").split(";")[0].toLowerCase();
+  if (!/^image\/(jpeg|png|webp|heic|gif)$/.test(type)) throw new RecipeError("Send a JPEG, PNG, WebP, HEIC or GIF", 415);
+  const bytes = await c.req.arrayBuffer();
+  if (bytes.byteLength === 0) throw new RecipeError("No image in the request", 400);
+  if (bytes.byteLength > 15_000_000) throw new RecipeError("That photo is over 15 MB", 413);
+  const key = `recipes/${crypto.randomUUID()}.${type.split("/")[1].replace("jpeg", "jpg")}`;
+  await c.env.R2_BUCKET.put(key, bytes, { httpMetadata: { contentType: type } });
+  const base = c.env.R2_PUBLIC_BASE_URL?.replace(/\/$/, "");
+  return c.json({ url: base ? `${base}/${key}` : key, key }, 201);
 });
 
 /** GET /v1/recipes/:id : one recipe with its cooking log. */
 app.get("/:id", async (c) => {
-  try {
-    return c.json(await load(c.env, c.req.param("id")));
-  } catch (error) {
-    return fail(c, error);
-  }
+  return c.json(await load(c.env, c.req.param("id")));
 });
 
 /** POST /v1/recipes { title, ingredients: ["2 cups flour", …], steps: […], … } */
 app.post("/", async (c) => {
-  try {
-    const input = CreateRecipe.parse(await parseJson(c.req.raw));
-    const cols = columns(input);
-    cols.image_url = await keepImage(c.env, (cols.image_url as string | null | undefined) ?? null);
-    const now = new Date().toISOString();
-    const id = ulid();
-    const all = { ingredients_json: "[]", steps_json: "[]", tags_json: "[]", favorite: 0, ...cols, id, created_at: now, updated_at: now };
-    const keys = Object.keys(all);
-    await c.env.DB.prepare(`INSERT INTO recipes (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`)
-      .bind(...keys.map((k) => (all as Record<string, unknown>)[k] ?? null)).run();
-    return c.json(await load(c.env, id), 201);
-  } catch (error) {
-    return fail(c, error);
-  }
+  const input = CreateRecipe.parse(await parseJson(c.req.raw));
+  const cols = columns(input);
+  cols.image_url = await keepImage(c.env, (cols.image_url as string | null | undefined) ?? null);
+  const now = new Date().toISOString();
+  const id = ulid();
+  const all = { ingredients_json: "[]", steps_json: "[]", tags_json: "[]", favorite: 0, ...cols, id, created_at: now, updated_at: now };
+  const keys = Object.keys(all);
+  await c.env.DB.prepare(`INSERT INTO recipes (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`)
+    .bind(...keys.map((k) => (all as Record<string, unknown>)[k] ?? null)).run();
+  return c.json(await load(c.env, id), 201);
 });
 
 /** PATCH /v1/recipes/:id { any fields } : only what's sent changes. */
 app.patch("/:id", async (c) => {
-  try {
-    const id = c.req.param("id");
-    const input = UpdateRecipe.parse(await parseJson(c.req.raw));
-    await load(c.env, id, false);
-    const cols = columns(input);
-    if ("image_url" in cols) cols.image_url = await keepImage(c.env, (cols.image_url as string | null) ?? null);
-    const keys = Object.keys(cols);
-    if (keys.length) {
-      await c.env.DB.prepare(`UPDATE recipes SET ${keys.map((k) => `${k} = ?`).join(", ")}, updated_at = ? WHERE id = ?`)
-        .bind(...keys.map((k) => cols[k] ?? null), new Date().toISOString(), id).run();
-    }
-    return c.json(await load(c.env, id));
-  } catch (error) {
-    return fail(c, error);
+  const id = c.req.param("id");
+  const input = UpdateRecipe.parse(await parseJson(c.req.raw));
+  await load(c.env, id, false);
+  const cols = columns(input);
+  if ("image_url" in cols) cols.image_url = await keepImage(c.env, (cols.image_url as string | null) ?? null);
+  const keys = Object.keys(cols);
+  if (keys.length) {
+    await c.env.DB.prepare(`UPDATE recipes SET ${keys.map((k) => `${k} = ?`).join(", ")}, updated_at = ? WHERE id = ?`)
+      .bind(...keys.map((k) => cols[k] ?? null), new Date().toISOString(), id).run();
   }
+  return c.json(await load(c.env, id));
 });
 
 /** DELETE /v1/recipes/:id : soft, so it can come back (POST /:id/restore). Its log stays. */
 app.delete("/:id", async (c) => {
-  try {
-    const id = c.req.param("id");
-    await load(c.env, id, false);
-    await c.env.DB.prepare("UPDATE recipes SET deleted_at = ? WHERE id = ?").bind(new Date().toISOString(), id).run();
-    return c.json({ ok: true });
-  } catch (error) {
-    return fail(c, error);
-  }
+  const id = c.req.param("id");
+  await load(c.env, id, false);
+  await c.env.DB.prepare("UPDATE recipes SET deleted_at = ? WHERE id = ?").bind(new Date().toISOString(), id).run();
+  return c.json({ ok: true });
 });
 
 /** POST /v1/recipes/:id/restore : brings a deleted recipe back. */
 app.post("/:id/restore", async (c) => {
-  try {
-    const id = c.req.param("id");
-    const result = await c.env.DB.prepare("UPDATE recipes SET deleted_at = NULL WHERE id = ?").bind(id).run();
-    if (!result.meta.changes) throw new RecipeError("Recipe not found", 404);
-    return c.json(await load(c.env, id));
-  } catch (error) {
-    return fail(c, error);
-  }
+  const id = c.req.param("id");
+  const result = await c.env.DB.prepare("UPDATE recipes SET deleted_at = NULL WHERE id = ?").bind(id).run();
+  if (!result.meta.changes) throw new RecipeError("Recipe not found", 404);
+  return c.json(await load(c.env, id));
 });
 
 /** POST /v1/recipes/:id/log { cooked_on?, rating?, note?, servings? } : "I cooked this". Returns the recipe. */
 app.post("/:id/log", async (c) => {
-  try {
-    const id = c.req.param("id");
-    const input = LogEntry.parse((await parseJson(c.req.raw)) ?? {});
-    await load(c.env, id, false);
-    const now = new Date().toISOString();
-    await c.env.DB.prepare("INSERT INTO recipe_log (recipe_id, cooked_on, rating, note, servings, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .bind(id, input.cooked_on ?? now.slice(0, 10), input.rating ?? null, blank(input.note), input.servings ?? null, now).run();
-    return c.json(await load(c.env, id), 201);
-  } catch (error) {
-    return fail(c, error);
-  }
+  const id = c.req.param("id");
+  const input = LogEntry.parse((await parseJson(c.req.raw)) ?? {});
+  await load(c.env, id, false);
+  const now = new Date().toISOString();
+  await c.env.DB.prepare("INSERT INTO recipe_log (recipe_id, cooked_on, rating, note, servings, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+    .bind(id, input.cooked_on ?? now.slice(0, 10), input.rating ?? null, blank(input.note), input.servings ?? null, now).run();
+  return c.json(await load(c.env, id), 201);
 });
 
 /** DELETE /v1/recipes/:id/log/:logId : removes one line from the log. Returns the recipe. */
 app.delete("/:id/log/:logId", async (c) => {
-  try {
-    const id = c.req.param("id");
-    const result = await c.env.DB.prepare("DELETE FROM recipe_log WHERE id = ? AND recipe_id = ?").bind(Number(c.req.param("logId")), id).run();
-    if (!result.meta.changes) throw new RecipeError("Log entry not found", 404);
-    return c.json(await load(c.env, id));
-  } catch (error) {
-    return fail(c, error);
-  }
+  const id = c.req.param("id");
+  const result = await c.env.DB.prepare("DELETE FROM recipe_log WHERE id = ? AND recipe_id = ?").bind(Number(c.req.param("logId")), id).run();
+  if (!result.meta.changes) throw new RecipeError("Log entry not found", 404);
+  return c.json(await load(c.env, id));
 });
 
 export default app;

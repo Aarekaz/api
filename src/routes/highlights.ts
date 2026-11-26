@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
-import { cursorFrom, failWith, fail as failWithStatus, limitFrom, list, page } from "../lib/http";
+import { cursorFrom, appErrors, fail as failWithStatus, limitFrom, list, page } from "../lib/http";
 import { parseJson } from "../utils/json";
 import {
   authSecurity,
@@ -18,7 +18,7 @@ import { documentKindSchema } from "../schemas/documents";
 import { createHighlight, deleteHighlight, listHighlights, presentHighlight, updateHighlight } from "../services/highlights";
 
 // /v1/highlights: passages marked while reading, with notes.
-const app = new Hono<{ Bindings: Env }>();
+const app = appErrors(new Hono<{ Bindings: Env }>(), "Highlights request");
 
 // The apps use yellow, orange, green and blue; any short name is kept, as before.
 const Color = z.string().trim().max(20);
@@ -103,51 +103,34 @@ openApiRegistry.registerPath({
 });
 
 /** One error shape, { error: { code, message } } (lib/http.ts). */
-const fail = (c: Context<{ Bindings: Env }>, error: unknown) => failWith(c, error, "Highlights request");
 
 const invalidJson = (c: Context<{ Bindings: Env }>) => failWithStatus(c, 400, "Invalid JSON");
 
 app.get("/", async (c) => {
-  try {
-    const limit = limitFrom(c, 500, 2000);
-    const rows = await listHighlights(c.env, c.req.query("document_id") || undefined, limit, cursorFrom(c, 2) as [string, string] | null);
-    const { items, next_cursor } = page(rows, limit, (row) => [row.created_at, row.id]);
-    return list(c, "highlights", items.map(presentHighlight), next_cursor);
-  } catch (error) {
-    return fail(c, error);
-  }
+  const limit = limitFrom(c, 500, 2000);
+  const rows = await listHighlights(c.env, c.req.query("document_id") || undefined, limit, cursorFrom(c, 2) as [string, string] | null);
+  const { items, next_cursor } = page(rows, limit, (row) => [row.created_at, row.id]);
+  return list(c, "highlights", items.map(presentHighlight), next_cursor);
 });
 
 app.post("/", async (c) => {
   const body = await parseJson(c.req.raw);
   if (body === null) return invalidJson(c);
-  try {
-    return c.json(presentHighlight(await createHighlight(c.env, CreateHighlight.parse(body))), 201);
-  } catch (error) {
-    return fail(c, error);
-  }
+  return c.json(presentHighlight(await createHighlight(c.env, CreateHighlight.parse(body))), 201);
 });
 
 app.patch("/:id", async (c) => {
   const body = await parseJson(c.req.raw);
   if (body === null) return invalidJson(c);
-  try {
-    // Only the fields that were sent change ("note": null clears the note).
-    const input = UpdateHighlight.parse(body);
-    const sent = Object.fromEntries(Object.entries(input).filter(([key]) => key in (body as object)));
-    return c.json(presentHighlight(await updateHighlight(c.env, c.req.param("id"), sent)));
-  } catch (error) {
-    return fail(c, error);
-  }
+  // Only the fields that were sent change ("note": null clears the note).
+  const input = UpdateHighlight.parse(body);
+  const sent = Object.fromEntries(Object.entries(input).filter(([key]) => key in (body as object)));
+  return c.json(presentHighlight(await updateHighlight(c.env, c.req.param("id"), sent)));
 });
 
 app.delete("/:id", async (c) => {
-  try {
-    await deleteHighlight(c.env, c.req.param("id"));
-    return c.json({ ok: true });
-  } catch (error) {
-    return fail(c, error);
-  }
+  await deleteHighlight(c.env, c.req.param("id"));
+  return c.json({ ok: true });
 });
 
 export default app;

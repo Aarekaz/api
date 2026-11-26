@@ -4,6 +4,7 @@ import type { Env } from "../types/env";
 import type { JsonRecord } from "../types/common";
 import { nowIso } from "../utils/date";
 import { parseJson, parseStoredJson } from "../utils/json";
+import { appErrors } from "../lib/http";
 import { normalizeProfile } from "../utils/normalizers";
 import {
   authSecurity,
@@ -21,22 +22,13 @@ import { profileResponseSchema, shelfConfigResponseSchema } from "../schemas/res
 // PATCH /v1/site/profile         change some profile fields, keep the rest
 // PATCH /v1/site/shelf-sections  show or hide /shelf sections, all seven of them
 
-const app = new Hono<{ Bindings: Env }>();
+// Errors in the one shape (lib/http.ts); a SiteError carries its own code and status.
+const app = appErrors(new Hono<{ Bindings: Env }>(), "Site request");
 
 class SiteError extends Error {
   constructor(readonly code: string, message: string, readonly status: 400 | 404 = 400) {
     super(message);
   }
-}
-
-/** One error shape for new routes: { error: { code, message } }. */
-function fail(c: Context<{ Bindings: Env }>, error: unknown) {
-  if (error instanceof z.ZodError) {
-    return c.json({ error: { code: "invalid", message: error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ") } }, 400);
-  }
-  if (error instanceof SiteError) return c.json({ error: { code: error.code, message: error.message } }, error.status);
-  console.error("site route failed", error);
-  return c.json({ error: { code: "server", message: "Site request failed" } }, 500);
 }
 
 async function body(c: Context<{ Bindings: Env }>): Promise<unknown> {
@@ -86,29 +78,25 @@ const PROFILE_COLUMNS = {
 } as const;
 
 app.patch("/profile", async (c) => {
-  try {
-    const patch = profilePatchSchema.parse(await body(c));
-    const existing = (await c.env.DB.prepare("SELECT * FROM profile WHERE id = 1").first<JsonRecord>()) ?? {};
-    const row: JsonRecord = { ...existing };
-    for (const [key, column] of Object.entries(PROFILE_COLUMNS)) {
-      if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
-      const value = patch[key as keyof typeof patch];
-      row[column] = column.endsWith("_json") ? (value == null ? null : JSON.stringify(value)) : (value ?? null);
-    }
-    const updatedAt = nowIso();
-    row.updated_at = updatedAt;
-    const columns = [...Object.values(PROFILE_COLUMNS), "updated_at"];
-    await c.env.DB.prepare(
-      `INSERT INTO profile (id, ${columns.join(", ")}) VALUES (1, ${columns.map(() => "?").join(", ")})
-       ON CONFLICT(id) DO UPDATE SET ${columns.map((col) => `${col} = excluded.${col}`).join(", ")}`
-    )
-      .bind(...columns.map((col) => (row[col] ?? null) as string | null))
-      .run();
-    const saved = (await c.env.DB.prepare("SELECT * FROM profile WHERE id = 1").first<JsonRecord>()) ?? {};
-    return c.json({ ok: true, updated_at: updatedAt, profile: normalizeProfile(saved) });
-  } catch (error) {
-    return fail(c, error);
+  const patch = profilePatchSchema.parse(await body(c));
+  const existing = (await c.env.DB.prepare("SELECT * FROM profile WHERE id = 1").first<JsonRecord>()) ?? {};
+  const row: JsonRecord = { ...existing };
+  for (const [key, column] of Object.entries(PROFILE_COLUMNS)) {
+    if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
+    const value = patch[key as keyof typeof patch];
+    row[column] = column.endsWith("_json") ? (value == null ? null : JSON.stringify(value)) : (value ?? null);
   }
+  const updatedAt = nowIso();
+  row.updated_at = updatedAt;
+  const columns = [...Object.values(PROFILE_COLUMNS), "updated_at"];
+  await c.env.DB.prepare(
+    `INSERT INTO profile (id, ${columns.join(", ")}) VALUES (1, ${columns.map(() => "?").join(", ")})
+     ON CONFLICT(id) DO UPDATE SET ${columns.map((col) => `${col} = excluded.${col}`).join(", ")}`
+  )
+    .bind(...columns.map((col) => (row[col] ?? null) as string | null))
+    .run();
+  const saved = (await c.env.DB.prepare("SELECT * FROM profile WHERE id = 1").first<JsonRecord>()) ?? {};
+  return c.json({ ok: true, updated_at: updatedAt, profile: normalizeProfile(saved) });
 });
 
 // MARK: Shelf sections
@@ -134,36 +122,32 @@ const DEFAULT_SHELF_CONFIG = {
 };
 
 app.patch("/shelf-sections", async (c) => {
-  try {
-    const patch = shelfSectionsPatchSchema.parse(await body(c));
-    const row = await c.env.DB.prepare("SELECT * FROM settings WHERE id = 1").first<JsonRecord>();
-    const stored = row ? parseStoredJson(row.shelf_config_json) : structuredClone(DEFAULT_SHELF_CONFIG);
-    // Keep everything else in the config (hiddenItems, future keys) exactly as it was.
-    const config: JsonRecord = stored && typeof stored === "object" && !Array.isArray(stored) ? { ...(stored as JsonRecord) } : {};
-    const current = config.sections;
-    const sections: JsonRecord = current && typeof current === "object" && !Array.isArray(current) ? { ...(current as JsonRecord) } : {};
-    for (const [key, visible] of Object.entries(patch)) {
-      const previous = sections[key];
-      sections[key] = { ...(previous && typeof previous === "object" ? (previous as JsonRecord) : {}), visible };
-    }
-    config.sections = sections;
-
-    const updatedAt = nowIso();
-    if (row) {
-      await c.env.DB.prepare("UPDATE settings SET shelf_config_json = ?, updated_at = ? WHERE id = 1")
-        .bind(JSON.stringify(config), updatedAt)
-        .run();
-    } else {
-      await c.env.DB.prepare(
-        "INSERT INTO settings (id, public_fields_json, theme, flags_json, shelf_config_json, updated_at) VALUES (1, ?, NULL, ?, ?, ?)"
-      )
-        .bind("[]", "{}", JSON.stringify(config), updatedAt)
-        .run();
-    }
-    return c.json({ ok: true, updated_at: updatedAt, shelf_config: config });
-  } catch (error) {
-    return fail(c, error);
+  const patch = shelfSectionsPatchSchema.parse(await body(c));
+  const row = await c.env.DB.prepare("SELECT * FROM settings WHERE id = 1").first<JsonRecord>();
+  const stored = row ? parseStoredJson(row.shelf_config_json) : structuredClone(DEFAULT_SHELF_CONFIG);
+  // Keep everything else in the config (hiddenItems, future keys) exactly as it was.
+  const config: JsonRecord = stored && typeof stored === "object" && !Array.isArray(stored) ? { ...(stored as JsonRecord) } : {};
+  const current = config.sections;
+  const sections: JsonRecord = current && typeof current === "object" && !Array.isArray(current) ? { ...(current as JsonRecord) } : {};
+  for (const [key, visible] of Object.entries(patch)) {
+    const previous = sections[key];
+    sections[key] = { ...(previous && typeof previous === "object" ? (previous as JsonRecord) : {}), visible };
   }
+  config.sections = sections;
+
+  const updatedAt = nowIso();
+  if (row) {
+    await c.env.DB.prepare("UPDATE settings SET shelf_config_json = ?, updated_at = ? WHERE id = 1")
+      .bind(JSON.stringify(config), updatedAt)
+      .run();
+  } else {
+    await c.env.DB.prepare(
+      "INSERT INTO settings (id, public_fields_json, theme, flags_json, shelf_config_json, updated_at) VALUES (1, ?, NULL, ?, ?, ?)"
+    )
+      .bind("[]", "{}", JSON.stringify(config), updatedAt)
+      .run();
+  }
+  return c.json({ ok: true, updated_at: updatedAt, shelf_config: config });
 });
 
 // MARK: OpenAPI

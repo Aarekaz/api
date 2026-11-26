@@ -1,8 +1,7 @@
 import { Hono } from "hono";
-import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
-import { cursorFrom, failWith, limitFrom, list, page } from "../lib/http";
+import { cursorFrom, appErrors, fail, limitFrom, list, page } from "../lib/http";
 import { parseJson } from "../utils/json";
 import { ulid } from "../services/documents-core";
 import {
@@ -33,7 +32,7 @@ import { createDocument, deleteDocument, DocumentError, getDocument, saveDocumen
 // keep working: `mood` (the five weather words) is still read and written,
 // and is derived from `state_of_mind` when only that is sent.
 
-const app = new Hono<{ Bindings: Env }>();
+const app = appErrors(new Hono<{ Bindings: Env }>(), "Journal request");
 
 const Place = z.object({
   name: z.string().trim().min(1).max(200),
@@ -182,7 +181,6 @@ function feelings(
 }
 
 /** One error shape, { error: { code, message } } (lib/http.ts). */
-const fail = (c: Context<{ Bindings: Env }>, error: unknown) => failWith(c, error, "Journal request");
 
 const iso = (s: string) => new Date(s).toISOString();
 const WHEN = "COALESCE(json_extract(frontmatter_json, '$.happened_at'), created_at)";
@@ -243,12 +241,12 @@ const MAX_PHOTO = 15 * 1024 * 1024;
 app.post("/photos", async (c) => {
   const type = (c.req.header("content-type") ?? "").split(";")[0].trim().toLowerCase();
   const ext = PHOTO_TYPES[type];
-  if (!ext) return c.json({ error: { code: "invalid", message: "Send a JPEG, PNG, HEIC or WebP image" } }, 415);
+  if (!ext) return fail(c, 415, "Send a JPEG, PNG, HEIC or WebP image", { code: "invalid" });
   const length = Number(c.req.header("content-length"));
-  if (length > MAX_PHOTO) return c.json({ error: { code: "too_large", message: "Photos can be up to 15 MB" } }, 413);
+  if (length > MAX_PHOTO) return fail(c, 413, "Photos can be up to 15 MB");
   const data = await c.req.arrayBuffer();
-  if (!data.byteLength) return c.json({ error: { code: "invalid", message: "The image is empty" } }, 400);
-  if (data.byteLength > MAX_PHOTO) return c.json({ error: { code: "too_large", message: "Photos can be up to 15 MB" } }, 413);
+  if (!data.byteLength) return fail(c, 400, "The image is empty");
+  if (data.byteLength > MAX_PHOTO) return fail(c, 413, "Photos can be up to 15 MB");
   // Unguessable, and kept in the private bucket, which has no public address.
   const ref = `journal/${ulid()}-${crypto.randomUUID()}.${ext}`;
   await (c.env.R2_PRIVATE ?? c.env.R2_BUCKET).put(ref, data, { httpMetadata: { contentType: type, cacheControl: "private, max-age=31536000, immutable" } });
@@ -258,10 +256,10 @@ app.post("/photos", async (c) => {
 /** GET /v1/journal/photos/:name: the image, for the signed-in app only. */
 app.get("/photos/:name", async (c) => {
   const ref = `journal/${c.req.param("name")}`;
-  if (!PHOTO_KEY.test(ref)) return c.json({ error: { code: "not_found", message: "No such photo" } }, 404);
+  if (!PHOTO_KEY.test(ref)) return fail(c, 404, "No such photo");
   // Older photos were saved in the public bucket before the private one existed.
   const object = (await c.env.R2_PRIVATE?.get(ref)) ?? (await c.env.R2_BUCKET.get(ref));
-  if (!object) return c.json({ error: { code: "not_found", message: "No such photo" } }, 404);
+  if (!object) return fail(c, 404, "No such photo");
   return new Response(object.body, {
     headers: {
       "Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream",
@@ -278,167 +276,139 @@ app.get("/photos/:name", async (c) => {
  * and the streak over all time. Defaults to the last 365 days.
  */
 app.get("/stats", async (c) => {
-  try {
-    const local = dayIn(c.req.query("tz"), c.req.query("offset"));
-    const todayQ = c.req.query("today");
-    const today = todayQ && DAY.test(todayQ) ? todayQ : local(new Date().toISOString());
-    const toQ = c.req.query("to"), fromQ = c.req.query("from");
-    const to = toQ && DAY.test(toQ) ? toQ : today;
-    const from = fromQ && DAY.test(fromQ) ? fromQ : addDays(to, -364);
-    // Pad by a day each side for time zones; the exact cut is made on local days.
-    const { results } = await c.env.DB.prepare(
-      `SELECT ${WHEN} AS at, body FROM documents WHERE ${LIVE} AND ${WHEN} >= ? AND ${WHEN} < ?`,
-    ).bind(`${addDays(from, -1)}T00:00:00.000Z`, `${addDays(to, 2)}T00:00:00.000Z`).all<{ at: string; body: string }>();
-    const perDay = new Map<string, { entries: number; words: number }>();
-    for (const r of results) {
-      const day = local(r.at);
-      if (day < from || day > to) continue;
-      const d = perDay.get(day) ?? { entries: 0, words: 0 };
-      d.entries++; d.words += countWords(r.body);
-      perDay.set(day, d);
-    }
-    const days = [...perDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, d]) => ({ day, ...d }));
-
-    const all = await c.env.DB.prepare(`SELECT ${WHEN} AS at FROM documents WHERE ${LIVE}`).all<{ at: string }>();
-    const allDays = all.results.map((r) => local(r.at));
-    return c.json({
-      from, to, today,
-      days,
-      totals: { entries: days.reduce((n, d) => n + d.entries, 0), words: days.reduce((n, d) => n + d.words, 0), days: days.length },
-      all_time: { entries: allDays.length, days: new Set(allDays).size, first_day: allDays.length ? allDays.reduce((a, b) => (a < b ? a : b)) : null },
-      streak: streakOf(allDays, today),
-    });
-  } catch (error) {
-    return fail(c, error);
+  const local = dayIn(c.req.query("tz"), c.req.query("offset"));
+  const todayQ = c.req.query("today");
+  const today = todayQ && DAY.test(todayQ) ? todayQ : local(new Date().toISOString());
+  const toQ = c.req.query("to"), fromQ = c.req.query("from");
+  const to = toQ && DAY.test(toQ) ? toQ : today;
+  const from = fromQ && DAY.test(fromQ) ? fromQ : addDays(to, -364);
+  // Pad by a day each side for time zones; the exact cut is made on local days.
+  const { results } = await c.env.DB.prepare(
+    `SELECT ${WHEN} AS at, body FROM documents WHERE ${LIVE} AND ${WHEN} >= ? AND ${WHEN} < ?`,
+  ).bind(`${addDays(from, -1)}T00:00:00.000Z`, `${addDays(to, 2)}T00:00:00.000Z`).all<{ at: string; body: string }>();
+  const perDay = new Map<string, { entries: number; words: number }>();
+  for (const r of results) {
+    const day = local(r.at);
+    if (day < from || day > to) continue;
+    const d = perDay.get(day) ?? { entries: 0, words: 0 };
+    d.entries++; d.words += countWords(r.body);
+    perDay.set(day, d);
   }
+  const days = [...perDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, d]) => ({ day, ...d }));
+
+  const all = await c.env.DB.prepare(`SELECT ${WHEN} AS at FROM documents WHERE ${LIVE}`).all<{ at: string }>();
+  const allDays = all.results.map((r) => local(r.at));
+  return c.json({
+    from, to, today,
+    days,
+    totals: { entries: days.reduce((n, d) => n + d.entries, 0), words: days.reduce((n, d) => n + d.words, 0), days: days.length },
+    all_time: { entries: allDays.length, days: new Set(allDays).size, first_day: allDays.length ? allDays.reduce((a, b) => (a < b ? a : b)) : null },
+    streak: streakOf(allDays, today),
+  });
 });
 
 /** GET /v1/journal/on-this-day?date=YYYY-MM-DD&tz= : entries from earlier years on this month and day, newest first. */
 app.get("/on-this-day", async (c) => {
-  try {
-    const local = dayIn(c.req.query("tz"), c.req.query("offset"));
-    const dateQ = c.req.query("date");
-    const date = dateQ && DAY.test(dateQ) ? dateQ : local(new Date().toISOString());
-    const md = date.slice(5);
-    // The UTC month-day can be a day either side of the local one.
-    const near = [addDays(date, -1), date, addDays(date, 1)].map((d) => d.slice(5));
-    const { results } = await c.env.DB.prepare(
-      `SELECT * FROM documents WHERE ${LIVE} AND substr(${WHEN}, 6, 5) IN (?, ?, ?) AND ${WHEN} < ? ORDER BY ${WHEN} DESC LIMIT 200`,
-    ).bind(...near, `${date.slice(0, 4)}-01-02`).all<DocumentRow>();
-    const year = Number(date.slice(0, 4));
-    const items = results.map(presentEntry)
-      .map((e) => ({ ...e, day: local(e.happened_at) }))
-      .filter((e) => e.day.slice(5) === md && Number(e.day.slice(0, 4)) < year)
-      .map((e) => ({ ...e, years_ago: year - Number(e.day.slice(0, 4)) }));
-    return c.json({ date, items });
-  } catch (error) {
-    return fail(c, error);
-  }
+  const local = dayIn(c.req.query("tz"), c.req.query("offset"));
+  const dateQ = c.req.query("date");
+  const date = dateQ && DAY.test(dateQ) ? dateQ : local(new Date().toISOString());
+  const md = date.slice(5);
+  // The UTC month-day can be a day either side of the local one.
+  const near = [addDays(date, -1), date, addDays(date, 1)].map((d) => d.slice(5));
+  const { results } = await c.env.DB.prepare(
+    `SELECT * FROM documents WHERE ${LIVE} AND substr(${WHEN}, 6, 5) IN (?, ?, ?) AND ${WHEN} < ? ORDER BY ${WHEN} DESC LIMIT 200`,
+  ).bind(...near, `${date.slice(0, 4)}-01-02`).all<DocumentRow>();
+  const year = Number(date.slice(0, 4));
+  const items = results.map(presentEntry)
+    .map((e) => ({ ...e, day: local(e.happened_at) }))
+    .filter((e) => e.day.slice(5) === md && Number(e.day.slice(0, 4)) < year)
+    .map((e) => ({ ...e, years_ago: year - Number(e.day.slice(0, 4)) }));
+  return c.json({ date, items });
 });
 
 // MARK: Entries
 
 /** GET /v1/journal?from=&to=&q=&limit= : entries, newest first, by when they happened. `q` matches the words. */
 app.get("/", async (c) => {
-  try {
-    const from = c.req.query("from"), to = c.req.query("to"), q = c.req.query("q")?.trim();
-    const limit = limitFrom(c, 500, 2000);
-    const after = cursorFrom(c, 2);
-    const where = [LIVE];
-    const args: unknown[] = [];
-    if (after) { where.push(`(${WHEN} < ? OR (${WHEN} = ? AND id < ?))`); args.push(after[0], after[0], after[1]); }
-    if (from && !Number.isNaN(Date.parse(from))) { where.push(`${WHEN} >= ?`); args.push(iso(from)); }
-    if (to && !Number.isNaN(Date.parse(to))) { where.push(`${WHEN} < ?`); args.push(iso(to)); }
-    if (q) {
-      // Every word has to appear, in the text, the place or the prompt.
-      for (const word of q.split(/\s+/).slice(0, 8)) {
-        const like = `%${word.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
-        where.push(`(body LIKE ? ESCAPE '\\' OR json_extract(frontmatter_json, '$.place.name') LIKE ? ESCAPE '\\' OR json_extract(frontmatter_json, '$.prompt') LIKE ? ESCAPE '\\')`);
-        args.push(like, like, like);
-      }
+  const from = c.req.query("from"), to = c.req.query("to"), q = c.req.query("q")?.trim();
+  const limit = limitFrom(c, 500, 2000);
+  const after = cursorFrom(c, 2);
+  const where = [LIVE];
+  const args: unknown[] = [];
+  if (after) { where.push(`(${WHEN} < ? OR (${WHEN} = ? AND id < ?))`); args.push(after[0], after[0], after[1]); }
+  if (from && !Number.isNaN(Date.parse(from))) { where.push(`${WHEN} >= ?`); args.push(iso(from)); }
+  if (to && !Number.isNaN(Date.parse(to))) { where.push(`${WHEN} < ?`); args.push(iso(to)); }
+  if (q) {
+    // Every word has to appear, in the text, the place or the prompt.
+    for (const word of q.split(/\s+/).slice(0, 8)) {
+      const like = `%${word.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+      where.push(`(body LIKE ? ESCAPE '\\' OR json_extract(frontmatter_json, '$.place.name') LIKE ? ESCAPE '\\' OR json_extract(frontmatter_json, '$.prompt') LIKE ? ESCAPE '\\')`);
+      args.push(like, like, like);
     }
-    const { results } = await c.env.DB.prepare(
-      `SELECT *, ${WHEN} AS sort_at FROM documents WHERE ${where.join(" AND ")} ORDER BY ${WHEN} DESC, id DESC LIMIT ?`,
-    ).bind(...args, limit + 1).all<DocumentRow & { sort_at: string }>();
-    const { items, next_cursor } = page(results, limit, (row) => [row.sort_at, row.id]);
-    return list(c, "items", items.map(presentEntry), next_cursor);
-  } catch (error) {
-    return fail(c, error);
   }
+  const { results } = await c.env.DB.prepare(
+    `SELECT *, ${WHEN} AS sort_at FROM documents WHERE ${where.join(" AND ")} ORDER BY ${WHEN} DESC, id DESC LIMIT ?`,
+  ).bind(...args, limit + 1).all<DocumentRow & { sort_at: string }>();
+  const { items, next_cursor } = page(results, limit, (row) => [row.sort_at, row.id]);
+  return list(c, "items", items.map(presentEntry), next_cursor);
 });
 
 /** GET /v1/journal/:id */
 app.get("/:id", async (c) => {
-  try {
-    const row = await getDocument(c.env, c.req.param("id"));
-    if (row.kind !== "journal") throw new DocumentError("Not a journal entry", 404);
-    return c.json(presentEntry(row));
-  } catch (error) {
-    return fail(c, error);
-  }
+  const row = await getDocument(c.env, c.req.param("id"));
+  if (row.kind !== "journal") throw new DocumentError("Not a journal entry", 404);
+  return c.json(presentEntry(row));
 });
 
 /** POST /v1/journal { body, happened_at?, place?, mood? | state_of_mind?, attachments?, prompt?, source?, external_id? } */
 app.post("/", async (c) => {
-  try {
-    const input = CreateEntry.parse(await parseJson(c.req.raw));
-    const source = input.source ?? "native";
-    if (input.external_id) {
-      const existing = await c.env.DB.prepare(
-        `SELECT * FROM documents WHERE ${LIVE} AND json_extract(frontmatter_json, '$.external_id') = ? AND json_extract(frontmatter_json, '$.source') = ? LIMIT 1`,
-      ).bind(input.external_id, source).first<DocumentRow>();
-      if (existing) return c.json(presentEntry(existing), 200);
-    }
-    const happened = input.happened_at ? iso(input.happened_at) : new Date().toISOString();
-    const frontmatter: Meta = {
-      happened_at: happened, place: input.place ?? null, ...feelings(input, {}),
-      attachments: input.attachments ?? [], source, external_id: input.external_id ?? null, prompt: input.prompt ?? null,
-    };
-    const row = await createDocument(c.env, {
-      kind: "journal", title: happened.slice(0, 16).replace("T", " "), body: input.body, folder: "Journal", frontmatter,
-    });
-    return c.json(presentEntry(row), 201);
-  } catch (error) {
-    return fail(c, error);
+  const input = CreateEntry.parse(await parseJson(c.req.raw));
+  const source = input.source ?? "native";
+  if (input.external_id) {
+    const existing = await c.env.DB.prepare(
+      `SELECT * FROM documents WHERE ${LIVE} AND json_extract(frontmatter_json, '$.external_id') = ? AND json_extract(frontmatter_json, '$.source') = ? LIMIT 1`,
+    ).bind(input.external_id, source).first<DocumentRow>();
+    if (existing) return c.json(presentEntry(existing), 200);
   }
+  const happened = input.happened_at ? iso(input.happened_at) : new Date().toISOString();
+  const frontmatter: Meta = {
+    happened_at: happened, place: input.place ?? null, ...feelings(input, {}),
+    attachments: input.attachments ?? [], source, external_id: input.external_id ?? null, prompt: input.prompt ?? null,
+  };
+  const row = await createDocument(c.env, {
+    kind: "journal", title: happened.slice(0, 16).replace("T", " "), body: input.body, folder: "Journal", frontmatter,
+  });
+  return c.json(presentEntry(row), 201);
 });
 
 /** PATCH /v1/journal/:id { version, body?, happened_at?, place?, mood? | state_of_mind?, attachments?, prompt? } */
 app.patch("/:id", async (c) => {
-  try {
-    const input = UpdateEntry.parse(await parseJson(c.req.raw));
-    const current = await getDocument(c.env, c.req.param("id"));
-    if (current.kind !== "journal") throw new DocumentError("Not a journal entry", 404);
-    const m = meta(current);
-    const keep = <T>(next: T | undefined, now: T) => (next === undefined ? now : next);
-    const next: Meta = {
-      ...m,
-      happened_at: input.happened_at ? iso(input.happened_at) : m.happened_at ?? current.created_at,
-      place: keep(input.place, m.place ?? null),
-      ...feelings(input, m),
-      attachments: keep(input.attachments, m.attachments ?? []) ?? [],
-      prompt: keep(input.prompt, m.prompt ?? null),
-    };
-    const row = await saveDocument(c.env, current.id, {
-      version: input.version, body: input.body, frontmatter: next,
-      title: next.happened_at!.slice(0, 16).replace("T", " "),
-    });
-    return c.json(presentEntry(row));
-  } catch (error) {
-    return fail(c, error);
-  }
+  const input = UpdateEntry.parse(await parseJson(c.req.raw));
+  const current = await getDocument(c.env, c.req.param("id"));
+  if (current.kind !== "journal") throw new DocumentError("Not a journal entry", 404);
+  const m = meta(current);
+  const keep = <T>(next: T | undefined, now: T) => (next === undefined ? now : next);
+  const next: Meta = {
+    ...m,
+    happened_at: input.happened_at ? iso(input.happened_at) : m.happened_at ?? current.created_at,
+    place: keep(input.place, m.place ?? null),
+    ...feelings(input, m),
+    attachments: keep(input.attachments, m.attachments ?? []) ?? [],
+    prompt: keep(input.prompt, m.prompt ?? null),
+  };
+  const row = await saveDocument(c.env, current.id, {
+    version: input.version, body: input.body, frontmatter: next,
+    title: next.happened_at!.slice(0, 16).replace("T", " "),
+  });
+  return c.json(presentEntry(row));
 });
 
 /** DELETE /v1/journal/:id (soft: it can come back; its photos are kept) */
 app.delete("/:id", async (c) => {
-  try {
-    const current = await getDocument(c.env, c.req.param("id"));
-    if (current.kind !== "journal") throw new DocumentError("Not a journal entry", 404);
-    await deleteDocument(c.env, current.id);
-    return c.json({ ok: true });
-  } catch (error) {
-    return fail(c, error);
-  }
+  const current = await getDocument(c.env, c.req.param("id"));
+  if (current.kind !== "journal") throw new DocumentError("Not a journal entry", 404);
+  await deleteDocument(c.env, current.id);
+  return c.json({ ok: true });
 });
 
 // MARK: OpenAPI

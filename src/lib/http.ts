@@ -43,6 +43,17 @@ export class HttpError extends Error {
 
 type AnyContext = Context<any, any, any>;
 
+/**
+ * Every error a route app's handlers throw, answered by failWith: register
+ * once per app (`appErrors(app, "Links request")`) instead of a try/catch in
+ * each handler. Hono applies an app's onError to its routes wherever it is
+ * mounted. docs/adr/0007-one-module-per-error-dialect.md.
+ */
+export function appErrors<A extends { onError: (handler: (error: Error, c: AnyContext) => Response) => unknown }>(app: A, what: string): A {
+  app.onError((error, c) => failWith(c, error, what));
+  return app;
+}
+
 /** A successful JSON reply. */
 export function ok<T>(c: AnyContext, data: T, status: ContentfulStatusCode = 200) {
   return c.json(data as never, status);

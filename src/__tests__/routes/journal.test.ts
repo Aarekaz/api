@@ -157,6 +157,14 @@ describe("/v1/journal", () => {
     expect((await root.request("/v1/journal/photos/..%2Fsecret.jpg", {}, env)).status).toBe(404);
     const text = await root.request("/v1/journal/photos", { method: "POST", body: "hi", headers: { "Content-Type": "text/plain" } }, env);
     expect(text.status).toBe(415);
+    // The bodies the app reads: 415 keeps code "invalid" (not "unsupported").
+    expect(await text.json()).toEqual({ error: { code: "invalid", message: "Send a JPEG, PNG, HEIC or WebP image" } });
+    const empty = await root.request("/v1/journal/photos", { method: "POST", body: new Uint8Array(0), headers: { "Content-Type": "image/png" } }, env);
+    expect([empty.status, await empty.json()]).toEqual([400, { error: { code: "invalid", message: "The image is empty" } }]);
+    const big = await root.request("/v1/journal/photos", { method: "POST", body: "x", headers: { "Content-Type": "image/png", "Content-Length": String(16 * 1024 * 1024) } }, env);
+    expect([big.status, await big.json()]).toEqual([413, { error: { code: "too_large", message: "Photos can be up to 15 MB" } }]);
+    const missing = await root.request("/v1/journal/photos/01HZZZZZZZZZZZZZZZZZZZZZZZ-none.jpg", {}, env);
+    expect([missing.status, await missing.json()]).toEqual([404, { error: { code: "not_found", message: "No such photo" } }]);
   });
 
   it("still serves photos saved in the public bucket before the private one", async () => {

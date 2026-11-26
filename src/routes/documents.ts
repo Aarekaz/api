@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
-import { cursorFrom, fail as failWithMessage, failWith, later, limitFrom, list, page } from "../lib/http";
+import { cursorFrom, fail as failWithMessage, appErrors, later, limitFrom, list, page } from "../lib/http";
 import {
   DocumentError,
   captureToInbox,
@@ -40,7 +40,7 @@ import {
 } from "../schemas/documents";
 
 // /v1/documents: everything the OS writes and keeps (Cloudflare is the source of truth).
-const app = new Hono<{ Bindings: Env }>();
+const app = appErrors(new Hono<{ Bindings: Env }>(), "Documents request");
 
 // OpenAPI registrations
 const listedDocument = documentSummarySchema.extend({
@@ -193,37 +193,28 @@ openApiRegistry.registerPath({
 });
 
 // App-only: errors are { error: { code, message } } (lib/http.ts).
-const fail = (c: Parameters<typeof failWith>[0], error: unknown) => failWith(c, error, "Documents request");
-const invalidJson = (c: Parameters<typeof failWith>[0]) => failWithMessage(c, 400, "Invalid JSON");
+const invalidJson = (c: Parameters<typeof failWithMessage>[0]) => failWithMessage(c, 400, "Invalid JSON");
 
 app.get("/", async (c) => {
-  try {
-    const limit = limitFrom(c, 2000, 5000);
-    const rows = await listDocuments(c.env, {
-      kind: c.req.query("kind"),
-      folder: c.req.query("folder"),
-      updatedSince: c.req.query("updated_since"),
-      includeBody: c.req.query("include") === "body",
-      includeDeleted: c.req.query("include_deleted") === "1",
-      limit,
-      after: cursorFrom(c, 2) as [string, string] | null,
-    });
-    const includeBody = c.req.query("include") === "body";
-    const { items, next_cursor } = page(rows, limit, (row) => [row.updated_at, row.id]);
-    return list(c, "documents",
-      items.map((row) => ({ ...present(row, includeBody), ...(row.deleted_at ? { deleted_at: row.deleted_at } : {}) })),
-      next_cursor, { server_time: new Date().toISOString() });
-  } catch (error) {
-    return fail(c, error);
-  }
+  const limit = limitFrom(c, 2000, 5000);
+  const rows = await listDocuments(c.env, {
+    kind: c.req.query("kind"),
+    folder: c.req.query("folder"),
+    updatedSince: c.req.query("updated_since"),
+    includeBody: c.req.query("include") === "body",
+    includeDeleted: c.req.query("include_deleted") === "1",
+    limit,
+    after: cursorFrom(c, 2) as [string, string] | null,
+  });
+  const includeBody = c.req.query("include") === "body";
+  const { items, next_cursor } = page(rows, limit, (row) => [row.updated_at, row.id]);
+  return list(c, "documents",
+    items.map((row) => ({ ...present(row, includeBody), ...(row.deleted_at ? { deleted_at: row.deleted_at } : {}) })),
+    next_cursor, { server_time: new Date().toISOString() });
 });
 
 app.get("/:id", async (c) => {
-  try {
-    return c.json(present(await getDocument(c.env, c.req.param("id"))));
-  } catch (error) {
-    return fail(c, error);
-  }
+  return c.json(present(await getDocument(c.env, c.req.param("id"))));
 });
 
 app.get("/:id/versions", async (c) => {
@@ -236,11 +227,7 @@ app.get("/:id/versions", async (c) => {
 app.post("/", async (c) => {
   const body = (await parseJson(c.req.raw)) as DocumentInput | null;
   if (!body) return invalidJson(c);
-  try {
-    return c.json(present(await createDocument(c.env, body)), 201);
-  } catch (error) {
-    return fail(c, error);
-  }
+  return c.json(present(await createDocument(c.env, body)), 201);
 });
 
 app.put("/:id", async (c) => {
@@ -253,61 +240,41 @@ app.put("/:id", async (c) => {
       const latest = await getDocument(c.env, c.req.param("id")).catch(() => null);
       return failWithMessage(c, 409, error.message, { code: "conflict", extra: { latest: latest ? present(latest) : null } });
     }
-    return fail(c, error);
+    throw error;
   }
 });
 
 app.delete("/:id", async (c) => {
-  try {
-    await deleteDocument(c.env, c.req.param("id"));
-    return c.json({ ok: true });
-  } catch (error) {
-    return fail(c, error);
-  }
+  await deleteDocument(c.env, c.req.param("id"));
+  return c.json({ ok: true });
 });
 
 app.post("/:id/publish", async (c) => {
-  try {
-    return c.json(present(await setPublished(c.env, c.req.param("id"), true)));
-  } catch (error) {
-    return fail(c, error);
-  }
+  return c.json(present(await setPublished(c.env, c.req.param("id"), true)));
 });
 
 app.post("/:id/unpublish", async (c) => {
-  try {
-    return c.json(present(await setPublished(c.env, c.req.param("id"), false)));
-  } catch (error) {
-    return fail(c, error);
-  }
+  return c.json(present(await setPublished(c.env, c.req.param("id"), false)));
 });
 
 /** GET /v1/search?q= across titles and bodies (FTS5). */
-export const searchRoute = new Hono<{ Bindings: Env }>();
+export const searchRoute = appErrors(new Hono<{ Bindings: Env }>(), "Documents request");
 searchRoute.get("/", async (c) => {
   const q = c.req.query("q")?.trim() ?? "";
   if (!q) return c.json({ results: [] });
-  try {
-    return c.json({ results: await searchDocuments(c.env, q, limitFrom(c, 30, 100)) });
-  } catch (error) {
-    return fail(c, error);
-  }
+  return c.json({ results: await searchDocuments(c.env, q, limitFrom(c, 30, 100)) });
 });
 
 /** POST /v1/capture { text } → a new note in Inbox (a bare URL goes to Read later). */
-export const captureRoute = new Hono<{ Bindings: Env }>();
+export const captureRoute = appErrors(new Hono<{ Bindings: Env }>(), "Documents request");
 captureRoute.post("/", async (c) => {
   const body = (await parseJson(c.req.raw)) as { text?: unknown } | null;
   const text = typeof body?.text === "string" ? body.text.trim() : "";
   if (!text || text.length > 20000) return failWithMessage(c, 400, "text is required (up to 20000 characters)");
-  try {
-    // A bare URL is something to read later, not a line in the inbox.
-    if (isSingleUrl(text)) return c.json({ ok: true, link: presentLink(await saveLink(c.env, text, new Date(), later(c))) });
-    const note = await captureToInbox(c.env, text);
-    return c.json({ ok: true, document: present(note, false) });
-  } catch (error) {
-    return fail(c, error);
-  }
+  // A bare URL is something to read later, not a line in the inbox.
+  if (isSingleUrl(text)) return c.json({ ok: true, link: presentLink(await saveLink(c.env, text, new Date(), later(c))) });
+  const note = await captureToInbox(c.env, text);
+  return c.json({ ok: true, document: present(note, false) });
 });
 
 export default app;
