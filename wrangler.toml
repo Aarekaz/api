@@ -1,7 +1,7 @@
 name = "api"
 account_id = "313c4e6e881f1e07c880d7230541200a"
 main = "src/index.ts"
-compatibility_date = "2026-04-01"
+compatibility_date = "2026-11-17"
 workers_dev = false
 
 # Request logs kept in Cloudflare (the JSON logger's lines were thrown away before).
