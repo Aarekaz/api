@@ -158,6 +158,9 @@ journal, sections, recipes, training, music history) use `src/lib/http.ts`:
   routes in `lib/site-reads.ts` only (`docs/adr/0004-site-token.md`). A route
   the website starts reading goes there too.
 - `/health` requires auth and returns `API_VERSION`.
+- No or unknown credentials are 401 with `WWW-Authenticate: Bearer`; a
+  known token without permission (SITE_TOKEN off the website's reads) is 403
+  (`docs/adr/0014-401-and-403.md`).
 
 ## Commits and PRs
 

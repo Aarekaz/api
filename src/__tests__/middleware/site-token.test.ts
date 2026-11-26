@@ -39,6 +39,7 @@ describe("SITE_TOKEN", () => {
     for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
       const res = await call(method, "/v1/profile", "site-token");
       expect(res.status).toBe(403);
+      expect(res.headers.get("WWW-Authenticate")).toBe('Bearer error="insufficient_scope"');
       expect(await res.json()).toEqual({ error: "This token can only read the website's data" });
     }
   });
@@ -74,11 +75,19 @@ describe("SITE_TOKEN", () => {
     expect((await call("GET", "/v1/visits", "owner-token")).status).toBe(200);
   });
 
-  it("does nothing when unset, and a wrong token is still refused", async () => {
+  it("does nothing when unset, and a wrong token is refused with 401 (the website's old error body on its routes)", async () => {
     const res = await call("GET", "/v1/profile", "site-token", { API_TOKEN: "owner-token" });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
+    expect(res.headers.get("WWW-Authenticate")).toBe('Bearer error="invalid_token"');
     expect(await res.json()).toEqual({ error: "Invalid token" });
-    expect((await call("GET", "/v1/profile", "site-tokem")).status).toBe(403);
+    expect((await call("GET", "/v1/profile", "site-tokem")).status).toBe(401);
+    const missing = await app.request("/v1/profile", {}, env);
+    expect([missing.status, missing.headers.get("WWW-Authenticate"), await missing.json()]).toEqual([401, "Bearer", { error: "Missing authorization header" }]);
+  });
+
+  it("answers a wrong token on an app route with 401 in the one shape", async () => {
+    const res = await call("GET", "/v1/links", "nope");
+    expect([res.status, await res.json()]).toEqual([401, { error: { code: "unauthorized", message: "Invalid token" } }]);
   });
 });
 

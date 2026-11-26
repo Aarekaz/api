@@ -41,17 +41,17 @@ describe("auth middleware", () => {
     expect(body.message).toBe("success");
   });
 
-  it("rejects requests without authorization header", async () => {
+  it("answers no authorization header with 401 and a Bearer challenge", async () => {
     const res = await app.request("/protected/resource", {}, {
       API_TOKEN: "test-token",
     });
 
     expect(res.status).toBe(401);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBeDefined();
+    expect(res.headers.get("WWW-Authenticate")).toBe("Bearer");
+    expect(await res.json()).toEqual({ error: { code: "unauthorized", message: "Missing authorization header" } });
   });
 
-  it("rejects requests with invalid token", async () => {
+  it("answers an unknown token with 401 invalid_token (it was 403)", async () => {
     const res = await app.request("/protected/resource", {
       headers: {
         Authorization: "Bearer wrong-token",
@@ -60,21 +60,24 @@ describe("auth middleware", () => {
       API_TOKEN: "test-token",
     });
 
-    expect(res.status).toBe(403);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBeDefined();
+    expect(res.status).toBe(401);
+    expect(res.headers.get("WWW-Authenticate")).toBe('Bearer error="invalid_token"');
+    expect(await res.json()).toEqual({ error: { code: "unauthorized", message: "Invalid token" } });
   });
 
-  it("rejects requests with non-Bearer auth scheme", async () => {
-    const res = await app.request("/protected/resource", {
-      headers: {
-        Authorization: "Basic dGVzdDp0ZXN0",
-      },
-    }, {
-      API_TOKEN: "test-token",
-    });
+  it("answers another auth scheme, or Bearer with no token, with 401 invalid_token", async () => {
+    for (const header of ["Basic dGVzdDp0ZXN0", "Bearer", "Bearer ", "bearer test-token"]) {
+      const res = await app.request("/protected/resource", {
+        headers: {
+          Authorization: header,
+        },
+      }, {
+        API_TOKEN: "test-token",
+      });
 
-    expect(res.status).toBe(403);
+      expect(res.status, header).toBe(401);
+      expect(res.headers.get("WWW-Authenticate"), header).toBe('Bearer error="invalid_token"');
+    }
   });
 
   it("returns 500 if API_TOKEN is not configured", async () => {

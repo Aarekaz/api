@@ -119,7 +119,8 @@ describe("app sign-in", () => {
     // Signing out revokes the session.
     await root.request("/v1/app/signout", { method: "POST", headers: { Authorization: `Bearer ${token}` } }, env);
     const after = await root.request("/v1/ping", { headers: { Authorization: `Bearer ${token}` } }, env);
-    expect(after.status).toBe(403);
+    // A signed-out session is unknown, not forbidden (ADR 0014).
+    expect(after.status).toBe(401);
   });
 
   it("refuses anyone else's GitHub account", async () => {
@@ -144,7 +145,7 @@ describe("app sign-in", () => {
     const env = makeEnv(db);
     const root = app();
     expect((await root.request("/v1/ping", { headers: { Authorization: "Bearer owner-api-token" } }, env)).status).toBe(200);
-    expect((await root.request("/v1/ping", { headers: { Authorization: "Bearer nope" } }, env)).status).toBe(403);
+    expect((await root.request("/v1/ping", { headers: { Authorization: "Bearer nope" } }, env)).status).toBe(401);
     expect((await root.request("/v1/ping", {}, env)).status).toBe(401);
   });
 });
