@@ -67,3 +67,12 @@ with the migration.
 - Vault, media and the integration routes still answer `{ error: string }`
   though only the apps call them; moving them is the owner's call
   (docs/audit-2026-11.md, section 11).
+
+## Later (branch `standards`, Nov 2026)
+
+Vault, media (TMDB), the WHOOP and Spotify integrations (the webhook
+included) and app sign-in were app-only but answered in the website's
+dialect. They now use lib/http.ts (`appErrors`, `fail`), with the same
+statuses and messages. The app reads both shapes (`APIFailure`); the web OS's
+`fetchApi` prints `error` as a string, so it needs to read `error.message`
+too. The auth middleware answers in the dialect of the path asked for (ADR 0014).

@@ -1,8 +1,9 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
+import { appErrors, fail } from "../lib/http";
 import { sameSecret } from "../middleware/auth";
-import { authSecurity, errorSchema, okResponses, okSchema, openApiRegistry, openApiResponse } from "../schemas/openapi";
+import { authSecurity, structuredErrorSchema, structuredOkResponses, okSchema, openApiRegistry, openApiResponse } from "../schemas/openapi";
 import {
   appAuthConfigured,
   appRedirect,
@@ -15,10 +16,10 @@ import {
 } from "../services/app-auth";
 
 // Public routes for Sign in with GitHub in the native apps (mounted at /auth/app).
-const app = new Hono<{ Bindings: Env }>();
+const app = appErrors(new Hono<{ Bindings: Env }>(), "Sign-in request");
 
 app.get("/github/start", async (c) => {
-  if (!appAuthConfigured(c.env)) return c.json({ error: "App sign-in is not configured" }, 503);
+  if (!appAuthConfigured(c.env)) return fail(c, 503, "App sign-in is not configured");
   return c.redirect(await startSignIn(c.env, c.req.url), 302);
 });
 
@@ -57,7 +58,7 @@ openApiRegistry.registerPath({
   description: "Public. Redirects to GitHub's authorization page.",
   responses: {
     302: { description: "Redirect to GitHub" },
-    503: openApiResponse(errorSchema, "App sign-in is not configured"),
+    503: openApiResponse(structuredErrorSchema, "App sign-in is not configured"),
   },
 });
 
@@ -84,7 +85,7 @@ openApiRegistry.registerPath({
   summary: "Sign this device out",
   description: "Revokes the device session used as the bearer token. The owner API token is never revoked.",
   security: authSecurity,
-  responses: okResponses(okSchema),
+  responses: structuredOkResponses(okSchema),
 });
 
 export default app;

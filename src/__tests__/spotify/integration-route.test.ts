@@ -120,7 +120,7 @@ describe("Spotify integration routes", () => {
     );
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: "Spotify integration is not configured" });
+    expect(await response.json()).toEqual({ error: { code: "unavailable", message: "Spotify integration is not configured" } });
     expect(sqlite.prepare("SELECT COUNT(*) AS count FROM spotify_oauth_states").get()).toEqual({ count: 0 });
   });
 

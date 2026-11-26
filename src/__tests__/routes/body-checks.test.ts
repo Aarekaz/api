@@ -8,7 +8,8 @@ import { testD1, type TestD1 } from "../helpers/d1";
 
 // What training, documents and vault answer to every kind of body, good and
 // bad: status, the whole error body, and what was stored. Written before their
-// hand checks moved to Zod schemas; it must not change.
+// hand checks moved to Zod schemas; it changes only on purpose (vault's errors
+// moved to the one shape; documents refuse a body that isn't an object).
 
 const SHA = "a".repeat(40);
 const LONG = "x".repeat(20_001);

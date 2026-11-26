@@ -97,12 +97,12 @@ describe("WHOOP public webhook", () => {
     const app = createApp(dependencies);
     const big = JSON.stringify({ user_id: 42, padding: "x".repeat(64 * 1024) });
     const declared = await app.fetch(new Request("https://api.example.test/integrations/whoop/webhook", await signedRaw(big)), ENV);
-    expect([declared.status, await declared.json()]).toEqual([413, { error: "Payload too large" }]);
+    expect([declared.status, await declared.json()]).toEqual([413, { error: { code: "too_large", message: "Payload too large" } }]);
     // Without a length the body is cut off as it streams past the limit.
     const init = await signedRaw(big);
     delete (init.headers as Record<string, string>)["content-length"];
     const streamed = await app.fetch(new Request("https://api.example.test/integrations/whoop/webhook", init), ENV);
-    expect([streamed.status, await streamed.json()]).toEqual([413, { error: "Payload too large" }]);
+    expect([streamed.status, await streamed.json()]).toEqual([413, { error: { code: "too_large", message: "Payload too large" } }]);
     expect(repository.recordWebhookEvent).not.toHaveBeenCalled();
   });
 
@@ -113,7 +113,7 @@ describe("WHOOP public webhook", () => {
     ), ENV);
 
     expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toEqual({ error: "Invalid WHOOP webhook signature" });
+    await expect(response.json()).resolves.toEqual({ error: { code: "unauthorized", message: "Invalid WHOOP webhook signature" } });
   });
 
   it("authenticates the exact raw body once and queues the lifecycle-fenced event", async () => {
@@ -193,7 +193,7 @@ describe("WHOOP public webhook", () => {
     );
 
     expect(failed.status).toBe(503);
-    await expect(failed.json()).resolves.toEqual({ error: "WHOOP webhook queue unavailable" });
+    await expect(failed.json()).resolves.toEqual({ error: { code: "unavailable", message: "WHOOP webhook queue unavailable" } });
     expect(retried.status).toBe(204);
     expect(ENV.WHOOP_SYNC_QUEUE.send).toHaveBeenCalledTimes(2);
     expect(repository.markWebhookQueued).toHaveBeenCalledTimes(1);
@@ -273,7 +273,7 @@ describe("WHOOP public webhook", () => {
     );
 
     expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toEqual({ error: "Invalid WHOOP webhook signature" });
+    await expect(response.json()).resolves.toEqual({ error: { code: "unauthorized", message: "Invalid WHOOP webhook signature" } });
     expect(repository.recordWebhookEvent).not.toHaveBeenCalled();
   });
 
@@ -358,7 +358,7 @@ describe("WHOOP public webhook", () => {
     );
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Invalid WHOOP webhook payload" });
+    await expect(response.json()).resolves.toEqual({ error: { code: "invalid", message: "Invalid WHOOP webhook payload" } });
     expect(repository.recordWebhookEvent).not.toHaveBeenCalled();
     expect(ENV.WHOOP_SYNC_QUEUE.send).not.toHaveBeenCalled();
   });

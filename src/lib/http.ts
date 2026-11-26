@@ -6,7 +6,8 @@ import { clampLimit } from "../utils/query";
 
 /**
  * Replies for the app's routes (links, journal, highlights, sections, documents,
- * visits, recipes, training, music history). One error shape:
+ * visits, recipes, training, music history, vault, media, the WHOOP and Spotify
+ * integrations, app sign-in, and the auth middleware on any of them). One error shape:
  *
  *   { "error": { "code": "not_found", "message": "Document not found", "details"?: ... } }
  *

@@ -4,8 +4,8 @@ import { SPOTIFY_AUTHORIZE_URL, SpotifyClient } from "../services/spotify/client
 import { SpotifyRepository } from "../services/spotify/repository";
 import {
   authSecurity,
-  errorSchema,
-  okResponses,
+  structuredErrorSchema,
+  structuredOkResponses,
   okSchema,
   openApiRegistry,
   openApiResponse,
@@ -13,6 +13,7 @@ import {
   spotifyIntegrationStatusResponseSchema,
 } from "../schemas/openapi";
 import type { Env } from "../types/env";
+import { appErrors, fail } from "../lib/http";
 
 export const SPOTIFY_SCOPES = ["user-read-currently-playing", "user-read-recently-played"] as const;
 
@@ -59,7 +60,8 @@ const resultRedirect = (env: Env, result: "connected" | "failed"): string =>
   new URL(`/music/source?result=${result}`, env.OS_BASE_URL).toString();
 
 export function createSpotifyIntegrationRoute(dependencies: SpotifyIntegrationDependencies = {}) {
-  const app = new Hono<{ Bindings: Env }>();
+  // Errors are the one shape (lib/http.ts), the callback's redirects aside.
+  const app = appErrors(new Hono<{ Bindings: Env }>(), "Spotify request");
   const now = dependencies.now ?? (() => new Date());
   const repositoryFor = (env: Env): IntegrationRepository => dependencies.repository
     ?? new SpotifyRepository(env.DB, env.WHOOP_TOKEN_ENCRYPTION_KEY);
@@ -83,7 +85,7 @@ export function createSpotifyIntegrationRoute(dependencies: SpotifyIntegrationDe
   });
 
   app.post("/v1/integrations/spotify/connect", async (c) => {
-    if (!configured(c.env)) return c.json({ error: "Spotify integration is not configured" }, 503);
+    if (!configured(c.env)) return fail(c, 503, "Spotify integration is not configured");
     const repository = repositoryFor(c.env);
     const createdAt = now();
     const state = await createOAuthState(OAUTH_STATE_LENGTH);
@@ -131,10 +133,10 @@ export function createSpotifyIntegrationRoute(dependencies: SpotifyIntegrationDe
     const repository = repositoryFor(c.env);
     const connection = await repository.getConnection();
     if (!connection || connection.status === "disconnected") {
-      return c.json({ error: "Spotify is not connected" }, 409);
+      return fail(c, 409, "Spotify is not connected");
     }
     const disconnected = await repository.disconnect(connection.credentialVersion, now().toISOString());
-    if (!disconnected) return c.json({ error: "Spotify connection changed before disconnect" }, 409);
+    if (!disconnected) return fail(c, 409, "Spotify connection changed before disconnect");
     return c.json({ ok: true });
   });
 
@@ -146,7 +148,7 @@ openApiRegistry.registerPath({
   path: "/v1/integrations/spotify",
   summary: "Get Spotify connection status",
   security: authSecurity,
-  responses: okResponses(spotifyIntegrationStatusResponseSchema),
+  responses: structuredOkResponses(spotifyIntegrationStatusResponseSchema),
 });
 
 openApiRegistry.registerPath({
@@ -155,8 +157,8 @@ openApiRegistry.registerPath({
   summary: "Create a Spotify authorization URL",
   security: authSecurity,
   responses: {
-    ...okResponses(spotifyAuthorizationUrlResponseSchema),
-    503: openApiResponse(errorSchema, "Spotify integration is not configured"),
+    ...structuredOkResponses(spotifyAuthorizationUrlResponseSchema),
+    503: openApiResponse(structuredErrorSchema, "Spotify integration is not configured"),
   },
 });
 
@@ -175,8 +177,8 @@ openApiRegistry.registerPath({
   summary: "Disconnect Spotify and delete stored tokens",
   security: authSecurity,
   responses: {
-    ...okResponses(okSchema),
-    409: openApiResponse(errorSchema, "Spotify is not connected"),
+    ...structuredOkResponses(okSchema),
+    409: openApiResponse(structuredErrorSchema, "Spotify is not connected"),
   },
 });
 

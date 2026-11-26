@@ -696,126 +696,180 @@ exports[`body checks > POST /v1/vault/blobs 1`] = `
     {
       "body": undefined,
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "not json",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "null",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "true",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "0",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "1",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": ""text"",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "[]",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "[1]",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "{}",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"a":1}",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"shas":[]}",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"shas":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"shas":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","abc"]}",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"shas":["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]}",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"shas":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaa… (4353)",
       "json": {
-        "error": "Send "shas": 1 to 100 blob shas",
+        "error": {
+          "code": "invalid",
+          "message": "Send "shas": 1 to 100 blob shas",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"shas":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}",
       "json": {
-        "error": "Read blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: GitHub answered 502",
+        "error": {
+          "code": "upstream",
+          "message": "Read blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: GitHub answered 502",
+        },
       },
       "status": 502,
     },
@@ -841,105 +895,150 @@ exports[`body checks > POST /v1/vault/capture 1`] = `
     {
       "body": undefined,
       "json": {
-        "error": "text is required (up to 2000 characters)",
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 2000 characters)",
+        },
       },
       "status": 400,
     },
     {
       "body": "",
       "json": {
-        "error": "text is required (up to 2000 characters)",
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 2000 characters)",
+        },
       },
       "status": 400,
     },
     {
       "body": "not json",
       "json": {
-        "error": "text is required (up to 2000 characters)",
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 2000 characters)",
+        },
       },
       "status": 400,
     },
     {
       "body": "null",
       "json": {
-        "error": "text is required (up to 2000 characters)",
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 2000 characters)",
+        },
       },
       "status": 400,
     },
     {
       "body": "true",
       "json": {
-        "error": "text is required (up to 2000 characters)",
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 2000 characters)",
+        },
       },
       "status": 400,
     },
     {
       "body": "0",
       "json": {
-        "error": "text is required (up to 2000 characters)",
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 2000 characters)",
+        },
       },
       "status": 400,
     },
     {
       "body": "1",
       "json": {
-        "error": "text is required (up to 2000 characters)",
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 2000 characters)",
+        },
       },
       "status": 400,
     },
     {
       "body": ""text"",
       "json": {
-        "error": "text is required (up to 2000 characters)",
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 2000 characters)",
+        },
       },
       "status": 400,
     },
     {
       "body": "[]",
       "json": {
-        "error": "text is required (up to 2000 characters)",
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 2000 characters)",
+        },
       },
       "status": 400,
     },
     {
       "body": "[1]",
       "json": {
-        "error": "text is required (up to 2000 characters)",
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 2000 characters)",
+        },
       },
       "status": 400,
     },
     {
       "body": "{}",
       "json": {
-        "error": "text is required (up to 2000 characters)",
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 2000 characters)",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"a":1}",
       "json": {
-        "error": "text is required (up to 2000 characters)",
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 2000 characters)",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"text":"   "}",
       "json": {
-        "error": "text is required (up to 2000 characters)",
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 2000 characters)",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"text":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… (2012)",
       "json": {
-        "error": "text is required (up to 2000 characters)",
+        "error": {
+          "code": "invalid",
+          "message": "text is required (up to 2000 characters)",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"text":" An idea "}",
       "json": {
-        "error": "Read Dump.md: GitHub answered 502",
+        "error": {
+          "code": "upstream",
+          "message": "Read Dump.md: GitHub answered 502",
+        },
       },
       "status": 502,
     },
@@ -1442,154 +1541,220 @@ exports[`body checks > PUT /v1/vault/file 1`] = `
     {
       "body": undefined,
       "json": {
-        "error": "Invalid vault path",
+        "error": {
+          "code": "invalid",
+          "message": "Invalid vault path",
+        },
       },
       "status": 400,
     },
     {
       "body": "",
       "json": {
-        "error": "Invalid vault path",
+        "error": {
+          "code": "invalid",
+          "message": "Invalid vault path",
+        },
       },
       "status": 400,
     },
     {
       "body": "not json",
       "json": {
-        "error": "Invalid vault path",
+        "error": {
+          "code": "invalid",
+          "message": "Invalid vault path",
+        },
       },
       "status": 400,
     },
     {
       "body": "null",
       "json": {
-        "error": "Invalid vault path",
+        "error": {
+          "code": "invalid",
+          "message": "Invalid vault path",
+        },
       },
       "status": 400,
     },
     {
       "body": "true",
       "json": {
-        "error": "Invalid vault path",
+        "error": {
+          "code": "invalid",
+          "message": "Invalid vault path",
+        },
       },
       "status": 400,
     },
     {
       "body": "0",
       "json": {
-        "error": "Invalid vault path",
+        "error": {
+          "code": "invalid",
+          "message": "Invalid vault path",
+        },
       },
       "status": 400,
     },
     {
       "body": "1",
       "json": {
-        "error": "Invalid vault path",
+        "error": {
+          "code": "invalid",
+          "message": "Invalid vault path",
+        },
       },
       "status": 400,
     },
     {
       "body": ""text"",
       "json": {
-        "error": "Invalid vault path",
+        "error": {
+          "code": "invalid",
+          "message": "Invalid vault path",
+        },
       },
       "status": 400,
     },
     {
       "body": "[]",
       "json": {
-        "error": "Invalid vault path",
+        "error": {
+          "code": "invalid",
+          "message": "Invalid vault path",
+        },
       },
       "status": 400,
     },
     {
       "body": "[1]",
       "json": {
-        "error": "Invalid vault path",
+        "error": {
+          "code": "invalid",
+          "message": "Invalid vault path",
+        },
       },
       "status": 400,
     },
     {
       "body": "{}",
       "json": {
-        "error": "Invalid vault path",
+        "error": {
+          "code": "invalid",
+          "message": "Invalid vault path",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"a":1}",
       "json": {
-        "error": "Invalid vault path",
+        "error": {
+          "code": "invalid",
+          "message": "Invalid vault path",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"path":"../x.md","content":5,"sha":"nope"}",
       "json": {
-        "error": "Invalid vault path",
+        "error": {
+          "code": "invalid",
+          "message": "Invalid vault path",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"path":"Dump.md"}",
       "json": {
-        "error": "content must be a string under 1 MB",
+        "error": {
+          "code": "invalid",
+          "message": "content must be a string under 1 MB",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"path":"Dump.md","content":5,"sha":"nope"}",
       "json": {
-        "error": "content must be a string under 1 MB",
+        "error": {
+          "code": "invalid",
+          "message": "content must be a string under 1 MB",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"path":"Dump.md","content":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… (1000032)",
       "json": {
-        "error": "content must be a string under 1 MB",
+        "error": {
+          "code": "invalid",
+          "message": "content must be a string under 1 MB",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"path":"Dump.md","content":"hi","sha":"nope"}",
       "json": {
-        "error": "sha must be the blob sha you loaded, or null for a new file",
+        "error": {
+          "code": "invalid",
+          "message": "sha must be the blob sha you loaded, or null for a new file",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"path":"Dump.md","content":"hi","sha":5}",
       "json": {
-        "error": "sha must be the blob sha you loaded, or null for a new file",
+        "error": {
+          "code": "invalid",
+          "message": "sha must be the blob sha you loaded, or null for a new file",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"path":"Dump.md","content":"hi","sha":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}",
       "json": {
-        "error": "sha must be the blob sha you loaded, or null for a new file",
+        "error": {
+          "code": "invalid",
+          "message": "sha must be the blob sha you loaded, or null for a new file",
+        },
       },
       "status": 400,
     },
     {
       "body": "{"path":"Dump.md","content":"hi","sha":null,"message":"  tidy  "}",
       "json": {
-        "error": "Save Dump.md: GitHub answered 502",
+        "error": {
+          "code": "upstream",
+          "message": "Save Dump.md: GitHub answered 502",
+        },
       },
       "status": 502,
     },
     {
       "body": "{"path":"Dump.md","content":"hi","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","message":5}",
       "json": {
-        "error": "Save Dump.md: GitHub answered 502",
+        "error": {
+          "code": "upstream",
+          "message": "Save Dump.md: GitHub answered 502",
+        },
       },
       "status": 502,
     },
     {
       "body": "{"path":"Dump.md","content":"","message":"mmmmmmmmmmmmmmmmmm… (244)",
       "json": {
-        "error": "Save Dump.md: GitHub answered 502",
+        "error": {
+          "code": "upstream",
+          "message": "Save Dump.md: GitHub answered 502",
+        },
       },
       "status": 502,
     },

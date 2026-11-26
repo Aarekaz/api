@@ -74,7 +74,8 @@ The website reads these GETs, and their bodies must stay byte-compatible:
 ## App routes: replies, errors, pages, caching
 
 App-only routes (visits, documents, search, capture, links, highlights,
-journal, sections, recipes, training, music history) use `src/lib/http.ts`:
+journal, sections, recipes, training, music history, vault, media, the WHOOP
+and Spotify integrations, app sign-in) use `src/lib/http.ts`:
 
 - Each route app is `appErrors(new Hono<…>(), "Links request")`: anything a
   handler throws is answered by `failWith`, so handlers don't wrap themselves

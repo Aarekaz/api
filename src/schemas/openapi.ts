@@ -415,9 +415,9 @@ export const createdResponses = (schema: z.ZodTypeAny, description = "Created") 
   ...errorResponses,
 });
 
-// The newer routes (documents family, journal, recipes, sections, site, …)
-// answer errors as { error: { code, message } }. Auth failures from the
-// middleware still use the plain { error } shape.
+// The app's routes (lib/http.ts: documents family, journal, recipes, sections,
+// site, vault, media, integrations, …) answer errors as { error: { code, message } },
+// auth failures from the middleware included (ADR 0014).
 export const structuredErrorSchema = z
   .object({
     error: z.object({
@@ -429,8 +429,8 @@ export const structuredErrorSchema = z
 
 export const structuredErrorResponses = {
   400: openApiResponse(structuredErrorSchema, "Bad request"),
-  401: openApiResponse(errorSchema, "Unauthorized"),
-  403: openApiResponse(errorSchema, "Forbidden"),
+  401: openApiResponse(structuredErrorSchema, "Unauthorized"),
+  403: openApiResponse(structuredErrorSchema, "Forbidden"),
   404: openApiResponse(structuredErrorSchema, "Not found"),
   500: openApiResponse(structuredErrorSchema, "Server error"),
 };

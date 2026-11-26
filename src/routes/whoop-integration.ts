@@ -10,17 +10,18 @@ import {
 } from "../services/whoop/repository";
 import {
   authSecurity,
-  errorResponses,
-  errorSchema,
+  structuredErrorResponses,
+  structuredErrorSchema,
   okSchema,
   openApiResponse,
   openApiJsonRequestBody,
-  okResponses,
+  structuredOkResponses,
   openApiRegistry,
   whoopAuthorizationUrlResponseSchema,
   whoopIntegrationStatusResponseSchema,
 } from "../schemas/openapi";
 import type { Env } from "../types/env";
+import { appErrors, fail } from "../lib/http";
 import { WHOOP_SCOPES, type WhoopQueueMessage, type WhoopResource } from "../types/whoop";
 import { enqueueReconciliation } from "../services/whoop/sync";
 import { whoopWebhookSchema } from "../schemas/whoop";
@@ -174,7 +175,8 @@ const validWebhookSignature = async (
 };
 
 export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDependencies = {}) {
-  const app = new Hono<{ Bindings: Env }>();
+  // Errors are the one shape (lib/http.ts), the callback's redirects aside.
+  const app = appErrors(new Hono<{ Bindings: Env }>(), "WHOOP request");
   const now = dependencies.now ?? (() => new Date());
   const repositoryFor = (env: Env): IntegrationRepository => dependencies.repository
     ?? new WhoopRepository(env.DB, env.WHOOP_TOKEN_ENCRYPTION_KEY);
@@ -211,7 +213,7 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
   });
 
   app.post("/v1/integrations/whoop/connect", async (c) => {
-    if (!configured(c.env)) return c.json({ error: "WHOOP integration is not configured" }, 503);
+    if (!configured(c.env)) return fail(c, 503, "WHOOP integration is not configured");
     const repository = repositoryFor(c.env);
     const createdAt = now();
     const state = await createOAuthState();
@@ -290,25 +292,25 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
 
   // A WHOOP event is four small fields; the limit is far above that and stops
   // an unsigned caller making the Worker read (and hash) a large body.
-  app.post("/integrations/whoop/webhook", limitBody(WEBHOOK_MAX_BYTES), async (c) => {
+  app.post("/integrations/whoop/webhook", limitBody(WEBHOOK_MAX_BYTES, (c) => fail(c, 413, "Payload too large")), async (c) => {
     const signature = c.req.header("X-WHOOP-Signature");
     const timestamp = c.req.header("X-WHOOP-Signature-Timestamp");
     if (!signature || !timestamp || typeof c.env.WHOOP_CLIENT_SECRET !== "string"
       || c.env.WHOOP_CLIENT_SECRET.length === 0) {
-      return c.json({ error: "Invalid WHOOP webhook signature" }, 401);
+      return fail(c, 401, "Invalid WHOOP webhook signature");
     }
     const rawBody = await c.req.raw.text();
     if (!await validWebhookSignature(c.env.WHOOP_CLIENT_SECRET, timestamp, signature, rawBody, now())) {
-      return c.json({ error: "Invalid WHOOP webhook signature" }, 401);
+      return fail(c, 401, "Invalid WHOOP webhook signature");
     }
     let json: unknown;
     try {
       json = JSON.parse(rawBody);
     } catch {
-      return c.json({ error: "Invalid WHOOP webhook payload" }, 400);
+      return fail(c, 400, "Invalid WHOOP webhook payload");
     }
     const parsed = whoopWebhookSchema.safeParse(json);
-    if (!parsed.success) return c.json({ error: "Invalid WHOOP webhook payload" }, 400);
+    if (!parsed.success) return fail(c, 400, "Invalid WHOOP webhook payload");
 
     const repository = repositoryFor(c.env);
     const connection = await repository.getCurrentConnection();
@@ -342,7 +344,7 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
         eventType: receipt.eventType,
       });
     } catch {
-      return c.json({ error: "WHOOP webhook queue unavailable" }, 503);
+      return fail(c, 503, "WHOOP webhook queue unavailable");
     }
     let markedQueued: boolean;
     try {
@@ -352,7 +354,7 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
         receipt.connectionId,
       );
     } catch {
-      return c.json({ error: "WHOOP webhook queue unavailable" }, 503);
+      return fail(c, 503, "WHOOP webhook queue unavailable");
     }
     if (!markedQueued) {
       const status = await repository.getWebhookEventStatus(
@@ -361,7 +363,7 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
         receipt.connectionId,
       );
       if (status === "received") {
-        return c.json({ error: "WHOOP webhook queue unavailable" }, 503);
+        return fail(c, 503, "WHOOP webhook queue unavailable");
       }
     }
     return c.body(null, 204);
@@ -373,12 +375,12 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
       const body = await c.req.text();
       options = syncOptionsSchema.parse(body.trim() === "" ? {} : JSON.parse(body));
     } catch {
-      return c.json({ error: "Invalid WHOOP sync options" }, 400);
+      return fail(c, 400, "Invalid WHOOP sync options");
     }
-    if (!configured(c.env)) return c.json({ error: "WHOOP integration is not configured" }, 503);
+    if (!configured(c.env)) return fail(c, 503, "WHOOP integration is not configured");
     const repository = repositoryFor(c.env);
     const connection = await repository.getCurrentConnection();
-    if (!connectionCanSync(connection)) return c.json({ error: "WHOOP is not connected" }, 409);
+    if (!connectionCanSync(connection)) return fail(c, 409, "WHOOP is not connected");
     await enqueueReconciliation(c.env, connection.whoopUserId, "manual", {
       repository,
       now,
@@ -390,10 +392,10 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
   });
 
   app.delete("/v1/integrations/whoop", async (c) => {
-    if (!configured(c.env)) return c.json({ error: "WHOOP integration is not configured" }, 503);
+    if (!configured(c.env)) return fail(c, 503, "WHOOP integration is not configured");
     const repository = repositoryFor(c.env);
     const connection = await repository.getCurrentConnection();
-    if (!connectionCanSync(connection)) return c.json({ error: "WHOOP is not connected" }, 409);
+    if (!connectionCanSync(connection)) return fail(c, 409, "WHOOP is not connected");
     try {
       let revokedCredentialVersion: number | null = null;
       await repository.withWhoopAccessToken(
@@ -404,16 +406,16 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
         },
         (refreshToken, options) => clientFor(c.env, "").refreshToken(refreshToken, options),
       );
-      if (revokedCredentialVersion === null) return c.json({ error: "WHOOP connection changed before disconnect" }, 409);
+      if (revokedCredentialVersion === null) return fail(c, 409, "WHOOP connection changed before disconnect");
       const disconnected = await repository.disconnect(
         connection.whoopUserId,
         revokedCredentialVersion,
         now().toISOString(),
       );
-      if (!disconnected) return c.json({ error: "WHOOP connection changed before disconnect" }, 409);
+      if (!disconnected) return fail(c, 409, "WHOOP connection changed before disconnect");
       return c.json({ ok: true });
     } catch {
-      return c.json({ error: "WHOOP disconnect failed" }, 502);
+      return fail(c, 502, "WHOOP disconnect failed");
     }
   });
 
@@ -421,10 +423,10 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
     const repository = repositoryFor(c.env);
     const connection = await repository.getCurrentConnection();
     if (!connection || connection.status !== "disconnected") {
-      return c.json({ error: "Disconnect WHOOP before deleting local data" }, 409);
+      return fail(c, 409, "Disconnect WHOOP before deleting local data");
     }
     const deleted = await repository.deleteLocalData(connection.whoopUserId, connection.credentialVersion);
-    if (!deleted) return c.json({ error: "WHOOP connection changed before data deletion" }, 409);
+    if (!deleted) return fail(c, 409, "WHOOP connection changed before data deletion");
     return c.json({ ok: true });
   });
 
@@ -436,7 +438,7 @@ openApiRegistry.registerPath({
   path: "/v1/integrations/whoop",
   summary: "Get WHOOP connection and sync status",
   security: authSecurity,
-  responses: okResponses(whoopIntegrationStatusResponseSchema),
+  responses: structuredOkResponses(whoopIntegrationStatusResponseSchema),
 });
 
 const whoopWebhookHeadersSchema = z.object({
@@ -454,10 +456,10 @@ openApiRegistry.registerPath({
   },
   responses: {
     204: { description: "Webhook accepted" },
-    400: openApiResponse(errorSchema, "Invalid webhook payload"),
-    401: openApiResponse(errorSchema, "Invalid webhook signature"),
-    413: openApiResponse(errorSchema, "Payload too large"),
-    503: openApiResponse(errorSchema, "Webhook queue unavailable"),
+    400: openApiResponse(structuredErrorSchema, "Invalid webhook payload"),
+    401: openApiResponse(structuredErrorSchema, "Invalid webhook signature"),
+    413: openApiResponse(structuredErrorSchema, "Payload too large"),
+    503: openApiResponse(structuredErrorSchema, "Webhook queue unavailable"),
   },
 });
 
@@ -466,7 +468,7 @@ openApiRegistry.registerPath({
   path: "/v1/integrations/whoop/connect",
   summary: "Create a WHOOP authorization URL",
   security: authSecurity,
-  responses: okResponses(whoopAuthorizationUrlResponseSchema),
+  responses: structuredOkResponses(whoopAuthorizationUrlResponseSchema),
 });
 
 openApiRegistry.registerPath({
@@ -477,7 +479,7 @@ openApiRegistry.registerPath({
   security: authSecurity,
   responses: {
     202: openApiResponse(okSchema, "Reconciliation queued"),
-    ...errorResponses,
+    ...structuredErrorResponses,
   },
 });
 
@@ -490,7 +492,7 @@ for (const [method, path, summary] of [
     path,
     summary,
     security: authSecurity,
-    responses: okResponses(okSchema),
+    responses: structuredOkResponses(okSchema),
   });
 }
 
