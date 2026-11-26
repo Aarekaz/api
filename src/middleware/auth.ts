@@ -39,7 +39,8 @@ export async function requireAuth(c: Context<{ Bindings: Env }>, next: Next) {
   if (owner) return next();
   // The website's token (optional): only the GETs the website makes.
   if (site) {
-    if (isSiteRead(c.req.method, c.req.path)) return next();
+    // Published rows only: ?include_unpublished is for the owner's apps, never the site's token.
+    if (isSiteRead(c.req.method, c.req.path) && c.req.query("include_unpublished") === undefined) return next();
     const message = "This token can only read the website's data";
     // Website routes keep their old error body; every other route has the one shape (lib/http.ts).
     return isSitePath(c.req.path) ? c.json({ error: message }, 403) : fail(c, 403, message, { code: "forbidden" });

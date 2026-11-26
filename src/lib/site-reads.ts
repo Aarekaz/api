@@ -10,7 +10,8 @@ const SITE_PATHS: RegExp[] = [
   /^\/v1\/(profile|projects|posts|photos|experience|education|skills|now|uses|settings|shelf|github|wakatime|wakatime\/hourly)$/,
   /^\/v1\/(status|music\/now)$/,
   /^\/v1\/(wrapped|traffic)\/\d{4}$/,
-  /^\/v1\/health\/whoop\/[a-z-]+(\/[\w-]+)?$/,
+  // The WHOOP reads by name: not /profile (name, email, body measurements), which the site never shows.
+  /^\/v1\/health\/whoop\/(overview|cycles|recoveries|sleeps|workouts)(\/[\w-]+)?$/,
 ];
 
 const trimmed = (path: string) => (path.length > 1 ? path.replace(/\/+$/, "") : path);

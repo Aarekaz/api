@@ -92,8 +92,9 @@ export function addTagsFilter(
 }
 
 // Adds `published = 1` to the filter unless the caller passes
-// `?include_unpublished=true`. Both the public site and the OS
-// authenticate with the same token; the distinction is a query param.
+// `?include_unpublished=true`. Only the owner's token and device sessions
+// can: a SITE_TOKEN request carrying the parameter is refused in
+// middleware/auth.ts (docs/adr/0004-site-token.md).
 export function addPublishedFilter(
   builder: FilterBuilder,
   query: Record<string, string | undefined>,

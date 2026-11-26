@@ -52,6 +52,23 @@ describe("SITE_TOKEN", () => {
     }
   });
 
+  it("can't read the WHOOP profile (name, email, body), only the WHOOP reads the site shows", async () => {
+    for (const path of ["/v1/health/whoop/profile", "/v1/health/whoop/sync"]) {
+      expect((await call("GET", path, "site-token")).status, path).toBe(403);
+    }
+    expect((await call("GET", "/v1/health/whoop/recoveries", "site-token")).status).toBe(200);
+    expect((await call("GET", "/v1/health/whoop/profile", "owner-token")).status).toBe(200);
+  });
+
+  it("can't ask for unpublished rows (the website's old error body)", async () => {
+    for (const query of ["include_unpublished=true", "include_unpublished=1", "include_unpublished="]) {
+      const res = await call("GET", `/v1/projects?${query}`, "site-token");
+      expect(res.status, query).toBe(403);
+      expect(await res.json()).toEqual({ error: "This token can only read the website's data" });
+    }
+    expect((await call("GET", "/v1/projects?include_unpublished=true", "owner-token")).status).toBe(200);
+  });
+
   it("leaves API_TOKEN with full access", async () => {
     expect((await call("POST", "/v1/profile", "owner-token")).status).toBe(200);
     expect((await call("GET", "/v1/visits", "owner-token")).status).toBe(200);
