@@ -52,6 +52,12 @@ The website reads these GETs, and their bodies must stay byte-compatible:
   types only, never SVG) and `UPLOAD_LIMITS`, every upload's size cap (ADR
   0011). `lib/uploads.ts` has the presign, presigned PUT and direct upload
   handlers both routes mount.
+- `lib/private-photos.ts`: the one upload and read for private photos
+  (journal entries, notes): 15 MB, JPEG/PNG/HEIC/WebP, unguessable names in
+  `R2_PRIVATE`. `services/note-photos.ts`: note photos (`notes/`, served at
+  `/v1/documents/photos/:name`; Markdown points at that authenticated URL).
+  Publishing writing copies them to `blog/notes/` in the public bucket and the
+  post's content points there; the document keeps the private address.
 - `middleware/body-limit.ts`: `limitBody(bytes)` for any route that reads a
   body without the bearer token (the WHOOP webhook, the crowd).
 - `utils/json.ts` `parseJsonAs(request, schema)`: a body as a Zod schema for

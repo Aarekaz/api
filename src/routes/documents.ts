@@ -16,11 +16,15 @@ import {
   type DocumentInput,
 } from "../services/documents";
 import { isSingleUrl, presentLink, saveLink } from "../services/links";
+import { NOTE_PHOTO_PREFIX, notePhotoRef, notePhotoUrl } from "../services/note-photos";
+import { photoResponse, receivePhoto } from "../lib/private-photos";
 import { z } from "zod";
 import {
   authSecurity,
   cursorQuery,
+  imageUploadSchema,
   pageFields,
+  structuredErrorResponses,
   structuredCreatedResponses,
   structuredErrorSchema,
   structuredOkResponses,
@@ -180,10 +184,47 @@ openApiRegistry.registerPath({
 
 openApiRegistry.registerPath({
   method: "post",
-  path: "/v1/capture",
-  summary: "Capture text to the Inbox (a bare URL is saved to Read later)",
+  path: "/v1/documents/photos",
+  summary: "Upload a private photo for a note (up to 15 MB)",
+  description: "Kept in the private bucket. Put ![](url) in the note; publishing a piece of writing copies its photos to the public bucket for the site.",
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(z.object({ text: z.string().min(1).max(20000) })) },
+  request: {
+    body: {
+      description: "JPEG, PNG, HEIC or WebP image",
+      content: { "image/*": { schema: imageUploadSchema } },
+    },
+  },
+  responses: {
+    201: openApiResponse(z.object({ ref: z.string(), url: z.string(), content_type: z.string(), size: z.number().int() }), "Created"),
+    ...structuredErrorResponses,
+    413: openApiResponse(structuredErrorSchema, "Photo too large"),
+    415: openApiResponse(structuredErrorSchema, "Unsupported image type"),
+    503: openApiResponse(structuredErrorSchema, "No private bucket"),
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/documents/photos/{name}",
+  summary: "Get a note photo",
+  security: authSecurity,
+  request: { params: z.object({ name: z.string().openapi({ description: "The ref without its notes/ prefix" }) }) },
+  responses: {
+    200: { description: "The image", content: { "image/*": { schema: imageUploadSchema } } },
+    ...structuredErrorResponses,
+  },
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/capture",
+  summary: "Capture text or photos to the Inbox (a bare URL is saved to Read later)",
+  description: "Send text, photos or both. photos are refs from POST /v1/documents/photos; with photos it is always a note.",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(z.object({
+    text: z.string().max(20000).optional(),
+    photos: z.array(z.string()).max(20).optional().openapi({ description: "Refs from POST /v1/documents/photos (notes/…)" }),
+  })) },
   responses: structuredCreatedResponses(z.object({
     ok: z.boolean(),
     document: documentSummarySchema.optional().openapi({ description: "The new Inbox note" }),
@@ -207,6 +248,25 @@ app.get("/", async (c) => {
   const { items, next_cursor } = page(rows, limit, (row) => [row.updated_at, row.id]);
   return list(c, items.map((row) => ({ ...present(row, includeBody), ...(row.deleted_at ? { deleted_at: row.deleted_at } : {}) })),
     next_cursor, { server_time: new Date().toISOString() });
+});
+
+// MARK: Photos in notes (private R2 objects, served only through this authenticated route)
+
+/** POST /v1/documents/photos (raw image body) → { ref, url }: put `![](url)` in a note. */
+app.post("/photos", async (c) => {
+  // Never the public bucket: a note's photo has no public address until its piece is published.
+  if (!c.env.R2_PRIVATE) return failWithMessage(c, 503, "Private photo storage isn't set up");
+  const stored = await receivePhoto(c, NOTE_PHOTO_PREFIX, c.env.R2_PRIVATE);
+  if (stored instanceof Response) return stored;
+  return c.json({ ref: stored.ref, url: notePhotoUrl(apiBase(c), stored.ref), content_type: stored.content_type, size: stored.size }, 201);
+});
+
+/** GET /v1/documents/photos/:name: the image, for the signed-in apps only. */
+app.get("/photos/:name", async (c) => {
+  const ref = notePhotoRef(c.req.param("name"));
+  const object = ref ? await c.env.R2_PRIVATE?.get(ref) : null;
+  if (!object) return failWithMessage(c, 404, "No such photo");
+  return photoResponse(object);
 });
 
 app.get("/:id", async (c) => {
@@ -260,14 +320,38 @@ searchRoute.get("/", async (c) => {
   return c.json({ results: await searchDocuments(c.env, q, limitFrom(c, 30, 100)) });
 });
 
-const CaptureBody = z.object({ text: z.string().transform((t) => t.trim()).pipe(z.string().min(1).max(20000)) });
+const CaptureBody = z.object({
+  text: z.string().transform((t) => t.trim()).pipe(z.string().max(20000)).optional(),
+  photos: z.array(z.string()).max(20).optional(),
+});
 
-/** POST /v1/capture { text } → a new note in Inbox (a bare URL goes to Read later). */
+/** This API's own address, for links to its authenticated routes. */
+function apiBase(c: { env: Env; req: { url: string } }): string {
+  return c.env.API_BASE_URL || new URL(c.req.url).origin;
+}
+
+/**
+ * POST /v1/capture { text?, photos? } → a new note in Inbox (a bare URL goes to
+ * Read later). `photos` are refs from POST /v1/documents/photos; with them it is
+ * always a note, the photos after any words.
+ */
 export const captureRoute = appErrors(new Hono<{ Bindings: Env }>(), "Documents request");
 captureRoute.post("/", async (c) => {
   const parsed = await parseJsonAs(c.req.raw, CaptureBody);
   if (!parsed.success) return failWithMessage(c, 400, "text is required (up to 20000 characters)");
-  const { text } = parsed.data;
+  const text = parsed.data.text ?? "";
+  const refs = (parsed.data.photos ?? []).map(notePhotoRef);
+  if (!text && refs.length === 0) return failWithMessage(c, 400, "text is required (up to 20000 characters)");
+  if (refs.some((ref) => ref === null)) return failWithMessage(c, 400, "photos must be refs from POST /v1/documents/photos");
+  if (refs.length > 0) {
+    if (!c.env.R2_PRIVATE) return failWithMessage(c, 503, "Private photo storage isn't set up");
+    for (const ref of refs) {
+      if (!(await c.env.R2_PRIVATE.head(ref!))) return failWithMessage(c, 400, `No such photo: ${ref}`);
+    }
+    const urls = refs.map((ref) => notePhotoUrl(apiBase(c), ref!));
+    const note = await captureToInbox(c.env, text, new Date(), { photos: urls, textIsLink: isSingleUrl(text) });
+    return c.json({ ok: true, document: present(note, false) }, 201);
+  }
   // A bare URL is something to read later, not a line in the inbox.
   // Either way something new is made (as POST /v1/links and POST /v1/documents answer): 201.
   if (isSingleUrl(text)) return c.json({ ok: true, link: presentLink(await saveLink(c.env, text, new Date(), later(c))) }, 201);

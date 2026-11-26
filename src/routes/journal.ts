@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
 import { body, cursorFrom, appErrors, fail, later, limitFrom, list, page } from "../lib/http";
-import { ulid } from "../services/documents-core";
+import { photoResponse, receivePhoto } from "../lib/private-photos";
 import {
   authSecurity,
   cursorQuery,
@@ -236,23 +236,13 @@ export function streakOf(days: Iterable<string>, today: string): Streak {
 // MARK: Photos (private R2 objects, served only through this authenticated route)
 
 const PHOTO_KEY = /^journal\/[0-9A-Za-z-]{20,80}\.(jpg|png|heic|webp)$/;
-const PHOTO_TYPES: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/heic": "heic", "image/webp": "webp" };
-const MAX_PHOTO = 15 * 1024 * 1024;
 
 /** POST /v1/journal/photos (raw image body) → { ref }: put the ref in an entry's attachments. */
 app.post("/photos", async (c) => {
-  const type = (c.req.header("content-type") ?? "").split(";")[0].trim().toLowerCase();
-  const ext = PHOTO_TYPES[type];
-  if (!ext) return fail(c, 415, "Send a JPEG, PNG, HEIC or WebP image", { code: "invalid" });
-  const length = Number(c.req.header("content-length"));
-  if (length > MAX_PHOTO) return fail(c, 413, "Photos can be up to 15 MB");
-  const data = await c.req.arrayBuffer();
-  if (!data.byteLength) return fail(c, 400, "The image is empty");
-  if (data.byteLength > MAX_PHOTO) return fail(c, 413, "Photos can be up to 15 MB");
   // Unguessable, and kept in the private bucket, which has no public address.
-  const ref = `journal/${ulid()}-${crypto.randomUUID()}.${ext}`;
-  await (c.env.R2_PRIVATE ?? c.env.R2_BUCKET).put(ref, data, { httpMetadata: { contentType: type, cacheControl: "private, max-age=31536000, immutable" } });
-  return c.json({ ref, content_type: type, size: data.byteLength }, 201);
+  const stored = await receivePhoto(c, "journal", c.env.R2_PRIVATE ?? c.env.R2_BUCKET);
+  if (stored instanceof Response) return stored;
+  return c.json({ ref: stored.ref, content_type: stored.content_type, size: stored.size }, 201);
 });
 
 /** GET /v1/journal/photos/:name: the image, for the signed-in app only. */
@@ -262,12 +252,7 @@ app.get("/photos/:name", async (c) => {
   // Older photos were saved in the public bucket before the private one existed.
   const object = (await c.env.R2_PRIVATE?.get(ref)) ?? (await c.env.R2_BUCKET.get(ref));
   if (!object) return fail(c, 404, "No such photo");
-  return new Response(object.body, {
-    headers: {
-      "Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream",
-      "Cache-Control": "private, max-age=31536000, immutable",
-    },
-  });
+  return photoResponse(object);
 });
 
 // MARK: Stats and on this day
