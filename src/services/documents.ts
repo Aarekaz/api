@@ -81,13 +81,17 @@ export async function getDocument(env: Env, id: string): Promise<DocumentRow> {
   return row;
 }
 
-async function uniqueSlug(env: Env, base: string): Promise<string> {
-  let slug = base;
-  for (let n = 2; n < 500; n++) {
-    const taken = await env.DB.prepare("SELECT 1 FROM documents WHERE slug = ?").bind(slug).first();
-    if (!taken) return slug;
-    slug = `${base}-${n}`;
-  }
+/**
+ * `base`, else the first free `base-2` … `base-499`, else `base-` and a random
+ * tail. One read of the taken slugs (a range on the unique slug index: every
+ * slug starting `base-` sorts below `base.`), not one per candidate.
+ */
+export async function uniqueSlug(env: Env, base: string): Promise<string> {
+  const { results } = await env.DB.prepare("SELECT slug FROM documents WHERE slug = ? OR (slug >= ? AND slug < ?)")
+    .bind(base, `${base}-`, `${base}.`).all<{ slug: string }>();
+  const taken = new Set(results.map((row) => row.slug));
+  if (!taken.has(base)) return base;
+  for (let n = 2; n < 500; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
   return `${base}-${ulid().slice(-6).toLowerCase()}`;
 }
 
