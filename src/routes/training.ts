@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Env } from "../types/env";
 import { parseJson } from "../utils/json";
 import { fail, list } from "../lib/http";
+import { isDay } from "../utils/date";
 import { z } from "zod";
 import {
   authSecurity,
@@ -27,7 +28,6 @@ type Exercise = {
 };
 const str = (v: unknown, max = 120) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
-const isDay = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
 
 export function cleanExercises(list: unknown): Exercise[] {
   if (!Array.isArray(list)) return [];

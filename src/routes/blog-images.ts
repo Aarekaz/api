@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Env } from "../types/env";
-import { fileExtensionForContentType } from "../utils/response";
+import { fileExtensionForContentType } from "../utils/content-type";
 import {
   openApiRegistry,
   openApiResponse,
@@ -14,6 +14,7 @@ import {
   presignHeadersSchema,
   uploadTokenHeadersSchema,
 } from "../schemas/openapi";
+import { signUploadToken, verifyUploadToken } from "../services/upload-token";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -31,47 +32,6 @@ const ALLOWED_TYPES = new Set([
 ]);
 
 const MAX_DIRECT_UPLOAD = 5 * 1024 * 1024;
-
-/* ── Presigned upload HMAC helpers (identical pattern to photos.ts) ──── */
-
-async function signUploadToken(
-  key: string,
-  contentType: string,
-  secret: string,
-): Promise<string> {
-  const payload = JSON.stringify({
-    key,
-    contentType,
-    exp: Date.now() + 5 * 60 * 1000,
-  });
-  const enc = new TextEncoder();
-  const hmacKey = await crypto.subtle.importKey(
-    "raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", hmacKey, enc.encode(payload));
-  const sigHex = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  return btoa(payload) + "." + sigHex;
-}
-
-async function verifyUploadToken(
-  token: string,
-  secret: string,
-): Promise<{ key: string; contentType: string } | null> {
-  const parts = token.split(".");
-  if (parts.length !== 2) return null;
-  const payload = atob(parts[0]);
-  const sigHex = parts[1];
-  const enc = new TextEncoder();
-  const hmacKey = await crypto.subtle.importKey(
-    "raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"],
-  );
-  const sigBytes = new Uint8Array(sigHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)));
-  const valid = await crypto.subtle.verify("HMAC", hmacKey, sigBytes, enc.encode(payload));
-  if (!valid) return null;
-  const data = JSON.parse(payload);
-  if (typeof data.exp !== "number" || Date.now() > data.exp) return null;
-  return { key: data.key, contentType: data.contentType };
-}
 
 /* ── OpenAPI ─────────────────────────────────────────────────────────── */
 
@@ -154,7 +114,7 @@ app.put("/upload-presigned", async (c) => {
     return c.json({ error: "Missing upload token" }, 401);
   }
 
-  const claim = await verifyUploadToken(token, c.env.API_TOKEN);
+  const claim = await verifyUploadToken(token, c.env.API_TOKEN, "blog/");
   if (!claim) {
     return c.json({ error: "Invalid or expired upload token" }, 403);
   }

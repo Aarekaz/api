@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
-import { cursorFrom, failWith, fail as failWithStatus, later, limitFrom, list, page } from "../lib/http";
+import { cursorFrom, appErrors, fail as failWithStatus, later, limitFrom, list, page } from "../lib/http";
 import { retryD1Read } from "../lib/d1-retry";
 import { parseJson } from "../utils/json";
 import {
@@ -19,13 +19,14 @@ import {
   fetchArticle, getLink, linkTags, listLinks, markRead, presentLink, readingOf, readingStats, saveLink, saveProgress, setLinkNote, updateLink,
   type LinkListState,
 } from "../services/links";
+import { DAY, dateOnly, isDay } from "../utils/date";
 
 // /v1/links: read later. Every link lands in the Inbox; archiving it (when
 // you've finished) moves it to the Archive. Progress and a note per article
 // sync between devices. Deleting a link is DELETE /v1/documents/:id (soft, with
 // restore). Every field added since v1 is additive, so older clients keep working.
 
-const app = new Hono<{ Bindings: Env }>();
+const app = appErrors(new Hono<{ Bindings: Env }>(), "Links request");
 
 const STATES = ["unread", "read", "starred", "all", "inbox", "archived"] as const;
 const Tag = z.string().trim().max(40).transform((t) => t.replace(/^#+/, "").toLowerCase());
@@ -45,7 +46,16 @@ const Progress = z.object({
   updated_at: z.string().datetime({ offset: true }).optional(),
   device: z.string().trim().max(60).nullish(),
   /** The device's local date, so time read lands on the day you read it. */
-  day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+  day: z.string().regex(DAY).nullish(),
+  seconds: z.number().min(0).max(86_400).nullish().openapi({
+    description: "Active reading seconds since this device's last report. Credited to time read (at most the time since the previous progress plus 30 s, and 10 minutes a report), even when progress didn't move.",
+  }),
+  words: z.number().int().min(0).max(5_000_000).nullish().openapi({
+    description: "Words in the text the app rendered; raises the link's reading_minutes (230 words a minute) when it says more.",
+  }),
+  report_id: z.string().uuid().nullish().openapi({
+    description: "The app's id for this report, so a retried request counts its seconds once.",
+  }),
 });
 
 const ReadingStats = z.object({
@@ -62,7 +72,6 @@ const ReadingStats = z.object({
 const SaveLink = z.object({ url: z.string().min(1).max(4000) });
 
 /** One error shape, { error: { code, message } } (lib/http.ts). */
-const fail = (c: Context<{ Bindings: Env }>, error: unknown) => failWith(c, error, "Links request");
 
 const invalidJson = (c: Context<{ Bindings: Env }>) => failWithStatus(c, 400, "Invalid JSON");
 
@@ -146,22 +155,24 @@ openApiRegistry.registerPath({
   summary: "Reading stats: minutes and articles per day, finished per month, favourite sites",
   security: authSecurity,
   request: { query: z.object({
-    since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().openapi({ description: "First day (default: a year ago)" }),
-    day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().openapi({ description: "Also list the articles read on this day, with their minutes" }),
+    since: z.string().regex(DAY).optional().openapi({ description: "First day (default: a year ago)" }),
+    day: z.string().regex(DAY).optional().openapi({ description: "Also list the articles read on this day, with their minutes" }),
   }) },
   responses: structuredOkResponses(ReadingStats),
 });
 
-openApiRegistry.registerPath({
-  method: "put",
-  path: "/v1/links/{id}/progress",
-  summary: "Save reading progress (last write wins by updated_at)",
-  security: authSecurity,
-  request: { params: idParams, body: openApiJsonRequestBody(Progress) },
-  responses: structuredOkResponses(linkReadingSchema.extend({
-    applied: z.boolean().openapi({ description: "Whether this write won" }),
-  })),
-});
+for (const method of ["put", "post"] as const) {
+  openApiRegistry.registerPath({
+    method,
+    path: "/v1/links/{id}/progress",
+    summary: method === "put" ? "Save reading progress (last write wins by updated_at)" : "Save reading progress (same as PUT)",
+    security: authSecurity,
+    request: { params: idParams, body: openApiJsonRequestBody(Progress) },
+    responses: structuredOkResponses(linkReadingSchema.extend({
+      applied: z.boolean().openapi({ description: "Whether this write won" }),
+    })),
+  });
+}
 
 for (const [action, summary] of [
   ["archive", "Archive a link"],
@@ -201,58 +212,38 @@ openApiRegistry.registerPath({
 app.get("/", async (c) => {
   const raw = c.req.query("state");
   const state: LinkListState = (STATES as readonly string[]).includes(raw ?? "") ? raw as LinkListState : "all";
-  try {
-    const limit = limitFrom(c, 500, 2000);
-    const rows = await listLinks(c.env, state, limit, c.req.query("tag") || undefined, cursorFrom(c, 2) as [string, string] | null);
-    const { items, next_cursor } = page(rows, limit, (row) => [row.created_at, row.id]);
-    return list(c, "links", items.map((row) => presentLink(row)), next_cursor);
-  } catch (error) {
-    return fail(c, error);
-  }
+  const limit = limitFrom(c, 500, 2000);
+  const rows = await listLinks(c.env, state, limit, c.req.query("tag") || undefined, cursorFrom(c, 2) as [string, string] | null);
+  const { items, next_cursor } = page(rows, limit, (row) => [row.created_at, row.id]);
+  return list(c, "links", items.map((row) => presentLink(row)), next_cursor);
 });
 
 /** GET /v1/links/tags: every tag with how many links carry it (and how many are in the Inbox). */
 app.get("/tags", async (c) => {
-  try {
-    return c.json({ items: await linkTags(c.env) });
-  } catch (error) {
-    return fail(c, error);
-  }
+  return c.json({ items: await linkTags(c.env) });
 });
 
 app.post("/", async (c) => {
   const body = await parseJson(c.req.raw);
   if (body === null) return failWithStatus(c, 400, "url is required");
-  try {
-    const { url } = SaveLink.parse(body);
-    // The page is read after the reply (fetched_at null until then), so saving is instant.
-    const link = await saveLink(c.env, url, new Date(), later(c));
-    return c.json(presentLink(link, link.fetched_at !== null), 201);
-  } catch (error) {
-    return fail(c, error);
-  }
+  const { url } = SaveLink.parse(body);
+  // The page is read after the reply (fetched_at null until then), so saving is instant.
+  const link = await saveLink(c.env, url, new Date(), later(c));
+  return c.json(presentLink(link, link.fetched_at !== null), 201);
 });
 
 app.get("/stats", async (c) => {
   const since = c.req.query("since");
-  const day = since && /^\d{4}-\d{2}-\d{2}$/.test(since) ? since : new Date(Date.now() - 366 * 86_400_000).toISOString().slice(0, 10);
+  const day = isDay(since) ? since : dateOnly(new Date(Date.now() - 366 * 86_400_000));
   const on = c.req.query("day");
-  const date = on && /^\d{4}-\d{2}-\d{2}$/.test(on) ? on : undefined;
-  try {
-    // D1 resets the whole database when any query (a backup tick, a sync) runs
-    // out of CPU, failing these cheap reads with it; one retry nearly always lands.
-    return c.json(await retryD1Read(() => readingStats(c.env, day, date)));
-  } catch (error) {
-    return fail(c, error);
-  }
+  const date = isDay(on) ? on : undefined;
+  // D1 resets the whole database when any query (a backup tick, a sync) runs
+  // out of CPU, failing these cheap reads with it; one retry nearly always lands.
+  return c.json(await retryD1Read(() => readingStats(c.env, day, date)));
 });
 
 app.get("/:id", async (c) => {
-  try {
-    return c.json(presentLink(await getLink(c.env, c.req.param("id")), true));
-  } catch (error) {
-    return fail(c, error);
-  }
+  return c.json(presentLink(await getLink(c.env, c.req.param("id")), true));
 });
 
 /** PATCH /v1/links/:id { starred?, tags?, title?, state?, note? } */
@@ -260,50 +251,37 @@ app.patch("/:id", async (c) => {
   const body = await parseJson(c.req.raw);
   if (body === null) return invalidJson(c);
   const id = c.req.param("id");
-  try {
-    const input = UpdateLink.parse(body);
-    const current = await getLink(c.env, id);
-    if (input.starred !== undefined || input.tags !== undefined || input.title !== undefined) {
-      await updateLink(c.env, id, { starred: input.starred, tags: input.tags, title: input.title });
-    }
-    if (input.state && (input.state === "archived") !== (current.read_at !== null)) {
-      await markRead(c.env, id, input.state === "archived");
-    }
-    if (input.note !== undefined) await setLinkNote(c.env, id, input.note);
-    return c.json(presentLink(await getLink(c.env, id)));
-  } catch (error) {
-    return fail(c, error);
+  const input = UpdateLink.parse(body);
+  const current = await getLink(c.env, id);
+  if (input.starred !== undefined || input.tags !== undefined || input.title !== undefined) {
+    await updateLink(c.env, id, { starred: input.starred, tags: input.tags, title: input.title });
   }
+  if (input.state && (input.state === "archived") !== (current.read_at !== null)) {
+    await markRead(c.env, id, input.state === "archived");
+  }
+  if (input.note !== undefined) await setLinkNote(c.env, id, input.note);
+  return c.json(presentLink(await getLink(c.env, id)));
 });
 
 /** GET /v1/links/:id/progress: where you are, without the article's text. */
 app.get("/:id/progress", async (c) => {
-  try {
-    return c.json(readingOf(await getLink(c.env, c.req.param("id"))));
-  } catch (error) {
-    return fail(c, error);
-  }
+  return c.json(readingOf(await getLink(c.env, c.req.param("id"))));
 });
 
-/** PUT /v1/links/:id/progress { progress, anchor?, updated_at?, device? }: last write wins by updated_at. */
-app.put("/:id/progress", async (c) => {
+/**
+ * PUT (or POST) /v1/links/:id/progress { progress, anchor?, updated_at?, device?, day?, seconds?, words?, report_id? }:
+ * last write wins by updated_at; seconds count as time read either way.
+ */
+app.on(["PUT", "POST"], "/:id/progress", async (c) => {
   const body = await parseJson(c.req.raw);
   if (body === null) return invalidJson(c);
-  try {
-    return c.json(await saveProgress(c.env, c.req.param("id"), Progress.parse(body)));
-  } catch (error) {
-    return fail(c, error);
-  }
+  return c.json(await saveProgress(c.env, c.req.param("id"), Progress.parse(body)));
 });
 
 // Archive when you've finished; bring it back to the Inbox. /read and /unread are the older names.
 for (const [path, archived] of [["archive", true], ["read", true], ["unarchive", false], ["unread", false]] as const) {
   app.post(`/:id/${path}`, async (c) => {
-    try {
-      return c.json(presentLink(await markRead(c.env, c.req.param("id"), archived)));
-    } catch (error) {
-      return fail(c, error);
-    }
+    return c.json(presentLink(await markRead(c.env, c.req.param("id"), archived)));
   });
 }
 
@@ -311,20 +289,12 @@ for (const [path, archived] of [["archive", true], ["read", true], ["unarchive",
 app.post("/:id/page", async (c) => {
   const body = await c.req.json().catch(() => null) as { html?: unknown; url?: unknown } | null;
   if (!body || typeof body.html !== "string" || body.html.length < 200) return failWithStatus(c, 400, "html is required");
-  try {
-    const url = typeof body.url === "string" ? body.url : undefined;
-    return c.json(presentLink(await fetchArticle(c.env, c.req.param("id"), new Date(), { html: body.html, url }), true));
-  } catch (error) {
-    return fail(c, error);
-  }
+  const url = typeof body.url === "string" ? body.url : undefined;
+  return c.json(presentLink(await fetchArticle(c.env, c.req.param("id"), new Date(), { html: body.html, url }), true));
 });
 
 app.post("/:id/refetch", async (c) => {
-  try {
-    return c.json(presentLink(await fetchArticle(c.env, c.req.param("id")), true));
-  } catch (error) {
-    return fail(c, error);
-  }
+  return c.json(presentLink(await fetchArticle(c.env, c.req.param("id")), true));
 });
 
 export default app;

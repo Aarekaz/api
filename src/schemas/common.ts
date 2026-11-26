@@ -9,11 +9,6 @@ export const backfillSchema = z.object({
   end: dateString,
 });
 
-export const rangeQuerySchema = z.object({
-  start: dateString.optional(),
-  end: dateString.optional(),
-});
-
 export const listQuerySchema = z.object({
   limit: z.string().optional(),
   offset: z.string().optional(),

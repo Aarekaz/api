@@ -8,8 +8,6 @@ export const WHOOP_SCOPES = [
   "read:workout",
 ] as const;
 
-export type WhoopScope = (typeof WHOOP_SCOPES)[number];
-
 export type WhoopConnectionStatus =
   | "not_connected"
   | "connecting"

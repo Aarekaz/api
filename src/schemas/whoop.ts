@@ -108,8 +108,6 @@ export const whoopCollectionResponseSchema = <T extends z.ZodTypeAny>(recordSche
   next_token: z.string().nullish(),
 }).passthrough();
 
-export type WhoopWebhook = z.infer<typeof whoopWebhookSchema>;
-export type WhoopCollectionQuery = z.infer<typeof whoopCollectionQuerySchema>;
 export type WhoopProfile = z.infer<typeof whoopProfileSchema>;
 export type WhoopBodyMeasurement = z.infer<typeof whoopBodyMeasurementSchema>;
 export type WhoopCycle = z.infer<typeof whoopCycleSchema>;

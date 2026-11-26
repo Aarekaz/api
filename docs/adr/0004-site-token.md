@@ -49,3 +49,18 @@ Rollback: set the site's env back to `API_TOKEN`.
   (and the contract), or the site gets 403s once it uses SITE_TOKEN.
 - The site token can still read everything the site shows publicly, nothing
   more; it can't trigger refreshes or writes.
+
+## Amendment, 26 Nov 2026 (audit-2026-11)
+
+- WHOOP reads are listed by name (`overview`, `cycles`, `recoveries`,
+  `sleeps`, `workouts`, each optionally with an id) instead of any
+  `/v1/health/whoop/<word>`. The wildcard let the site token read
+  `/v1/health/whoop/profile`: name, email, height, weight and max heart rate.
+  The website reads only `workouts` and `cycles` (`anurag.me/lib/whoop.ts`).
+- A SITE_TOKEN request with `?include_unpublished` (any value) is a 403 in the
+  website's old body. The parameter turns off the `published = 1` filter on
+  projects, photos, shelf, uses, skills, education and experience, and the
+  website never sends it.
+- Still open, for the owner: `GET /v1/posts` has no published filter for any
+  caller, so the site token reads drafts. The website filters them itself;
+  filtering for the site token would change what it receives.

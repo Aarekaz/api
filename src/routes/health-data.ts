@@ -1,34 +1,14 @@
 import { Hono } from "hono";
-import { z } from "zod";
 import type { Env } from "../types/env";
-import type { JsonRecord } from "../types/common";
 import { nowIso, dateOnly, addDays } from "../utils/date";
-import { parseJson } from "../utils/json";
-import { validateBody } from "../utils/validation";
-import { parseId } from "../utils/query";
+import { readBody } from "../lib/site-http";
 import {
   appleHealthDailySchema,
-  appleHealthHeartRateSchema,
-  appleHealthHeartRateBatchSchema,
-  appleHealthSleepSessionSchema,
-  appleHealthWorkoutSchema,
 } from "../schemas/health";
 import {
   openApiRegistry,
-  genericObjectSchema,
-  okUpdatedSchema,
-  okDeletedSchema,
   healthDailyRangeResponseSchema,
   healthDailyUpdateResponseSchema,
-  healthDailyDeleteResponseSchema,
-  healthHeartRateRangeResponseSchema,
-  healthHeartRateBatchResponseSchema,
-  healthSleepRangeResponseSchema,
-  healthWorkoutsRangeResponseSchema,
-  healthSummaryResponseSchema,
-  dateSchema,
-  errorSchema,
-  openApiResponse,
   openApiJsonRequestBody,
   okResponses,
   createdResponses,
@@ -36,12 +16,6 @@ import {
 } from "../schemas/openapi";
 
 const app = new Hono<{ Bindings: Env }>();
-
-const workoutPatchSchema = appleHealthWorkoutSchema
-  .partial()
-  .refine((data) => Object.keys(data).length > 0, {
-    message: "At least one field must be provided",
-  });
 
 // OpenAPI registrations
 openApiRegistry.registerPath({
@@ -82,12 +56,7 @@ app.get("/", async (c) => {
 });
 
 app.post("/", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(appleHealthDailySchema, body);
+  const validation = await readBody(c, appleHealthDailySchema);
   if (!validation.ok) {
     return validation.response;
   }

@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import type { Env } from "./types/env";
 import { nowIso } from "./utils/date";
 import { requireAuth } from "./middleware/auth";
-import { errorHandler } from "./middleware/error-handler";
 import { requestLogger } from "./middleware/request-logger";
 import { getOpenApiDocument } from "./schemas/openapi";
 import { getSwaggerUiHtml } from "./utils/swagger";
@@ -62,7 +61,9 @@ const app = new Hono<{ Bindings: Env }>();
 
 // Global middleware (applied to all routes)
 app.use("*", requestLogger);
-app.use("*", errorHandler);
+// No global error middleware: Hono catches a thrown error where it's thrown and
+// answers with its own handler (a text 500), which is what clients have always
+// had. App routes turn errors into the one JSON shape themselves (lib/http.ts).
 
 // CORS for presigned upload — middleware adds headers to ALL responses on this path
 const PRESIGNED_UPLOAD_PATHS = [

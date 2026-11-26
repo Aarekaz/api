@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../types/env";
-import { failWith } from "../lib/http";
+import { appErrors } from "../lib/http";
 import { parseJson } from "../utils/json";
 import {
   authSecurity,
@@ -20,7 +20,7 @@ import { MAX_PATH, SectionError, createSection, deleteSection, listSections, upd
 // documents.folder. Moving a page into a folder is PUT /v1/documents/:id
 // { folder }. Private: nothing here reaches anuragd.me.
 
-const app = new Hono<{ Bindings: Env }>();
+const app = appErrors(new Hono<{ Bindings: Env }>(), "Folder request");
 
 const Name = z.string().trim().min(1).max(80)
   .refine((s) => !s.includes("/"), "can't contain /")
@@ -105,7 +105,6 @@ openApiRegistry.registerPath({
 });
 
 /** One error shape, { error: { code, message } } (lib/http.ts). */
-const fail = (c: Context<{ Bindings: Env }>, error: unknown) => failWith(c, error, "Folder request");
 
 async function body(c: Context<{ Bindings: Env }>) {
   const json = await parseJson(c.req.raw);
@@ -115,33 +114,21 @@ async function body(c: Context<{ Bindings: Env }>) {
 
 /** GET /v1/sections → { items (depth first), unsorted, server_time } */
 app.get("/", async (c) => {
-  try {
-    const { items, unsorted } = await listSections(c.env);
-    return c.json(SectionList.parse({ items, unsorted, server_time: new Date().toISOString() }));
-  } catch (error) {
-    return fail(c, error);
-  }
+  const { items, unsorted } = await listSections(c.env);
+  return c.json(SectionList.parse({ items, unsorted, server_time: new Date().toISOString() }));
 });
 
 /** POST /v1/sections { name, parent? } → 201 { section } */
 app.post("/", async (c) => {
-  try {
-    const input = CreateSection.parse(await body(c));
-    const section = await createSection(c.env, input);
-    return c.json({ section: SectionSchema.parse(section) }, 201);
-  } catch (error) {
-    return fail(c, error);
-  }
+  const input = CreateSection.parse(await body(c));
+  const section = await createSection(c.env, input);
+  return c.json({ section: SectionSchema.parse(section) }, 201);
 });
 
 /** PATCH /v1/sections { path, name?, parent?, sort_order? }: rename, nest or reorder. */
 app.patch("/", async (c) => {
-  try {
-    const input = UpdateSection.parse(await body(c));
-    return c.json(SectionChange.parse(await updateSection(c.env, input)));
-  } catch (error) {
-    return fail(c, error);
-  }
+  const input = UpdateSection.parse(await body(c));
+  return c.json(SectionChange.parse(await updateSection(c.env, input)));
 });
 
 /**
@@ -149,13 +136,9 @@ app.patch("/", async (c) => {
  * pages. Its notes and folders move up into its parent.
  */
 app.delete("/", async (c) => {
-  try {
-    const query = c.req.query("path");
-    const input = DeleteSection.parse(query !== undefined ? { path: query } : await body(c));
-    return c.json(SectionDeleted.parse(await deleteSection(c.env, input.path)));
-  } catch (error) {
-    return fail(c, error);
-  }
+  const query = c.req.query("path");
+  const input = DeleteSection.parse(query !== undefined ? { path: query } : await body(c));
+  return c.json(SectionDeleted.parse(await deleteSection(c.env, input.path)));
 });
 
 export default app;

@@ -2,8 +2,8 @@ import { Hono } from "hono";
 import type { Env } from "../types/env";
 import type { JsonRecord } from "../types/common";
 import { nowIso } from "../utils/date";
-import { parseJson, mapJsonField } from "../utils/json";
-import { validateBody } from "../utils/validation";
+import { mapJsonField } from "../utils/json";
+import { readBody } from "../lib/site-http";
 import { normalizeFinancePlan } from "../utils/normalizers";
 import { financePlanSchema } from "../schemas/finance";
 import {
@@ -98,12 +98,7 @@ app.get("/", async (c) => {
 });
 
 app.put("/", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(financePlanSchema, body);
+  const validation = await readBody(c, financePlanSchema);
   if (!validation.ok) {
     return validation.response;
   }

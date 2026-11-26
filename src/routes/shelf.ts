@@ -4,24 +4,21 @@ import type { Env } from "../types/env";
 import type { JsonRecord } from "../types/common";
 import { nowIso } from "../utils/date";
 import { parseJson, mapJsonField } from "../utils/json";
-import { validateBody } from "../utils/validation";
+import { readBody, idParam, badId, notFound } from "../lib/site-http";
 import { normalizeShelfItem } from "../utils/normalizers";
 import {
-  SHELF_MEDIA_TYPES,
-  activeStatusFor,
-  finishedStatusFor,
-  queuedStatusFor,
   shelfItemBaseSchema,
   shelfItemSchema,
   shelfLogPatchSchema,
   shelfLogSchema,
   statusMatchesShelfType,
-  stoppedStatusFor,
 } from "../schemas/content";
 import { shelfResponseSchema } from "../schemas/responses";
 import { listQuerySchema } from "../schemas/common";
 import { getTmdbMedia, normalizeTmdbMediaType, searchTmdbMedia, type TmdbCandidate } from "../services/tmdb";
 import { getTag, mergeTags } from "../utils/tags";
+import { isJsonRecord, normalizeTmdbMetadata, shouldReplaceShelfImage } from "../services/shelf-enrich";
+import diaryRoute from "./shelf-diary";
 import {
   openApiRegistry,
   genericObjectSchema,
@@ -42,7 +39,8 @@ import {
   addPublishedFilter,
   buildWhereClause,
   parseSort,
-  parseId,
+  patchAssignments,
+  publishedFlag,
 } from "../utils/query";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -125,8 +123,6 @@ function addShelfTypeFilter(filters: ReturnType<typeof createFilterBuilder>, raw
   filters.params.push(...safe);
 }
 
-const DIARY_TYPES: readonly string[] = SHELF_MEDIA_TYPES;
-
 type ShelfItemInput = z.infer<typeof shelfItemSchema>;
 
 function shelfStateParams(data: ShelfItemInput) {
@@ -158,36 +154,6 @@ function shelfControlParams(data: ShelfItemInput) {
   ];
 }
 
-function isJsonRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function compactRecord(record: JsonRecord): JsonRecord {
-  return Object.fromEntries(
-    Object.entries(record).filter(([, value]) => value !== undefined)
-  );
-}
-
-function normalizeTmdbMetadata(candidate: TmdbCandidate): JsonRecord {
-  return compactRecord({
-    id: candidate.tmdb_id,
-    media_type: candidate.tmdb_media_type,
-    title: candidate.title,
-    original_title: candidate.original_title,
-    year: candidate.year,
-    release_date: candidate.release_date,
-    overview: candidate.overview,
-    poster_path: candidate.poster_path,
-    poster_url: candidate.poster_url,
-    backdrop_path: candidate.backdrop_path,
-    backdrop_url: candidate.backdrop_url,
-  });
-}
-
-function shouldReplaceShelfImage(item: JsonRecord, tags: unknown): boolean {
-  if (!item.image_url) return true;
-  return getTag(tags, "poster_source") === "tmdb";
-}
 
 // OpenAPI registrations
 openApiRegistry.registerPath({
@@ -322,265 +288,12 @@ app.get("/", async (c) => {
   return c.json(results);
 });
 
-function normalizeLogRow(row: JsonRecord): JsonRecord {
-  const { rewatch, published, ...rest } = row;
-  return {
-    ...rest,
-    rewatch: Boolean(rewatch),
-    ...(published === undefined ? {} : { published: published == null ? true : Boolean(published) }),
-  };
-}
-
-function shelfKind(type: string): string {
-  const normalized = type.toLowerCase();
-  if (normalized === "film") return "movie";
-  if (normalized === "tv" || normalized === "series") return "show";
-  return normalized;
-}
-
-function statusForLog(type: string, kind: string): string | null {
-  switch (kind) {
-    case "started":
-    case "progress":
-      return activeStatusFor(type);
-    case "finished":
-      return finishedStatusFor(type);
-    case "paused":
-      return stoppedStatusFor(type, "paused");
-    case "dropped":
-      return stoppedStatusFor(type, "dropped");
-    case "want":
-      return queuedStatusFor(type);
-    default:
-      return null;
-  }
-}
-
-app.get("/diary", async (c) => {
-  const query = c.req.query();
-  const { limit, offset, start, end } = parseListQuery(query);
-  const clauses: string[] = [];
-  const params: (string | number)[] = [];
-
-  const itemId = query.item_id ? parseId(query.item_id) : null;
-  if (query.item_id && !itemId) return c.json({ error: "Invalid item_id" }, 400);
-  if (itemId) {
-    clauses.push("l.item_id = ?");
-    params.push(itemId);
-  }
-  const types = (query.type ?? "")
-    .toLowerCase()
-    .split(",")
-    .map((part) => part.trim())
-    .filter((part) => DIARY_TYPES.includes(part));
-  if (types.length > 0) {
-    clauses.push(`s.type IN (${types.map(() => "?").join(", ")})`);
-    params.push(...types);
-  }
-  const kinds = (query.kind ?? "")
-    .split(",")
-    .map((part) => part.trim())
-    .filter((part) => (shelfLogSchema.shape.kind.options as readonly string[]).includes(part));
-  if (kinds.length > 0) {
-    clauses.push(`l.kind IN (${kinds.map(() => "?").join(", ")})`);
-    params.push(...kinds);
-  }
-  if (start) {
-    clauses.push("l.logged_at >= ?");
-    params.push(start);
-  }
-  if (end) {
-    clauses.push("l.logged_at <= ?");
-    params.push(end);
-  }
-
-  const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
-  const rows = await c.env.DB.prepare(
-    `SELECT l.*, s.type AS type, s.title AS title, s.author AS author, s.image_url AS image_url,
-       s.cover_override_url AS cover_override_url, s.status AS item_status, s.published AS published
-     FROM shelf_log l JOIN shelf_items s ON s.id = l.item_id${where}
-     ORDER BY l.logged_at DESC, l.id DESC LIMIT ? OFFSET ?`
-  )
-    .bind(...params, limit, offset)
-    .all();
-
-  return c.json({
-    items: (rows.results ?? []).map((row) => normalizeLogRow(row as JsonRecord)),
-    limit,
-    offset,
-  });
-});
-
-app.patch("/log/:logId", async (c) => {
-  const logId = parseId(c.req.param("logId"));
-  if (!logId) return c.json({ error: "Invalid id" }, 400);
-  const body = await parseJson(c.req.raw);
-  if (body === null) return c.json({ error: "Invalid JSON" }, 400);
-  const validation = validateBody(shelfLogPatchSchema, body);
-  if (!validation.ok) return validation.response;
-
-  const updates: string[] = [];
-  const params: (string | number | null)[] = [];
-  const data = validation.data;
-  if (data.logged_at !== undefined) {
-    updates.push("logged_at = ?");
-    params.push(data.logged_at);
-  }
-  if (data.rating !== undefined) {
-    updates.push("rating = ?");
-    params.push(data.rating);
-  }
-  if (data.note !== undefined) {
-    updates.push("note = ?");
-    params.push(data.note);
-  }
-  if (data.rewatch !== undefined) {
-    updates.push("rewatch = ?");
-    params.push(data.rewatch ? 1 : 0);
-  }
-  const updatedAt = nowIso();
-  updates.push("updated_at = ?");
-  params.push(updatedAt, logId);
-
-  const result = await c.env.DB.prepare(`UPDATE shelf_log SET ${updates.join(", ")} WHERE id = ?`)
-    .bind(...params)
-    .run();
-  if (result.meta.changes === 0) return c.json({ error: "Diary entry not found" }, 404);
-  return c.json({ ok: true, updated_at: updatedAt });
-});
-
-app.delete("/log/:logId", async (c) => {
-  const logId = parseId(c.req.param("logId"));
-  if (!logId) return c.json({ error: "Invalid id" }, 400);
-  const result = await c.env.DB.prepare("DELETE FROM shelf_log WHERE id = ?").bind(logId).run();
-  if (result.meta.changes === 0) return c.json({ error: "Diary entry not found" }, 404);
-  return c.json({ ok: true, id: logId, deleted_at: nowIso() });
-});
-
-/**
- * Log something: "finished it", "on page 120", "watched S2 E5", "rated it".
- * Writes one diary row and moves the item along in the same call, so the
- * site (which reads shelf_items) updates by itself.
- */
-app.post("/:id/log", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) return c.json({ error: "Invalid id" }, 400);
-  const body = await parseJson(c.req.raw);
-  if (body === null) return c.json({ error: "Invalid JSON" }, 400);
-  const validation = validateBody(shelfLogSchema, body);
-  if (!validation.ok) return validation.response;
-  const data = validation.data;
-
-  const existing = await c.env.DB.prepare("SELECT * FROM shelf_items WHERE id = ?").bind(id).first<JsonRecord>();
-  if (!existing) return c.json({ error: "Shelf item not found" }, 404);
-
-  const type = String(existing.type ?? "");
-  if (!DIARY_TYPES.includes(shelfKind(type))) {
-    return c.json({ error: "Only books, movies, shows and anime keep a diary" }, 400);
-  }
-
-  const status = data.status ?? statusForLog(type, data.kind);
-  if (status && !statusMatchesShelfType(type, status)) {
-    return c.json({ error: `Invalid ${type} shelf status: ${status}` }, 400);
-  }
-
-  const loggedAt = data.logged_at ?? nowIso();
-  const updatedAt = nowIso();
-  const updates: string[] = [];
-  const params: (string | number | null)[] = [];
-  const set = (column: string, value: string | number | null) => {
-    updates.push(`${column} = ?`);
-    params.push(value);
-  };
-
-  if (status) set("status", status);
-
-  const total = data.progress_total ?? (typeof existing.progress_total === "number" ? existing.progress_total : null);
-  let current = data.progress_current ?? null;
-  if (current === null && data.kind === "finished" && total !== null && total > 0 && !data.rewatch) current = total;
-  if (current !== null) set("progress_current", current);
-  if (data.progress_total !== undefined) set("progress_total", data.progress_total);
-  if (data.progress_unit !== undefined) set("progress_unit", data.progress_unit);
-
-  if (data.rating !== undefined) {
-    set("rating", data.rating);
-    set("rating_scale", data.rating_scale ?? (typeof existing.rating_scale === "number" ? existing.rating_scale : 5));
-  }
-
-  if (data.season !== undefined || data.episode !== undefined) {
-    const metadata = parseStoredRecord(existing.metadata_json);
-    const previous = isJsonRecord(metadata.progress) ? metadata.progress : {};
-    metadata.progress = compactRecord({
-      ...previous,
-      season: data.season ?? previous.season,
-      episode: data.episode ?? previous.episode,
-      updated_at: loggedAt,
-    });
-    set("metadata_json", mapJsonField(metadata));
-  }
-
-  const isScreen = shelfKind(type) !== "book";
-  if ((data.kind === "started" || data.kind === "progress" || data.kind === "finished") && !existing.started_at) {
-    set("started_at", loggedAt);
-  }
-  if (data.kind === "finished") set("completed_at", loggedAt);
-  if (isScreen && (data.kind === "progress" || data.kind === "finished" || data.kind === "started")) {
-    set("last_watched_at", loggedAt);
-  }
-
-  set("updated_at", updatedAt);
-  params.push(id);
-
-  const insert = c.env.DB.prepare(
-    `INSERT INTO shelf_log (item_id, kind, logged_at, status, progress_current, progress_total, progress_unit,
-       season, episode, rating, note, rewatch, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    id,
-    data.kind,
-    loggedAt,
-    status ?? null,
-    current,
-    data.progress_total ?? null,
-    data.progress_unit ?? null,
-    data.season ?? null,
-    data.episode ?? null,
-    data.rating ?? null,
-    data.note ?? null,
-    data.rewatch ? 1 : 0,
-    updatedAt
-  );
-  const update = c.env.DB.prepare(`UPDATE shelf_items SET ${updates.join(", ")} WHERE id = ?`).bind(...params);
-  const [logResult] = (await c.env.DB.batch([insert, update])) as { meta: { last_row_id?: number } }[];
-
-  const row = await c.env.DB.prepare("SELECT * FROM shelf_items WHERE id = ?").bind(id).first<JsonRecord>();
-  return c.json(
-    {
-      ok: true,
-      log_id: logResult?.meta?.last_row_id ?? null,
-      logged_at: loggedAt,
-      status: status ?? null,
-      item: row ? normalizeShelfItem(row) : null,
-    },
-    201
-  );
-});
-
-function parseStoredRecord(value: unknown): JsonRecord {
-  if (typeof value !== "string" || !value) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return isJsonRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
+// The diary: /diary, /log/:logId and /:id/log, before /:id below.
+app.route("/", diaryRoute);
 
 app.post("/:id/enrich", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const body = await parseJson(c.req.raw);
   const validation = body === null ? shelfEnrichSchema.safeParse({}) : shelfEnrichSchema.safeParse(body);
@@ -592,7 +305,7 @@ app.post("/:id/enrich", async (c) => {
     .bind(id)
     .all();
   if (!row.results || row.results.length === 0) {
-    return c.json({ error: "Shelf item not found" }, 404);
+    return notFound(c, "Shelf item");
   }
 
   const item = normalizeShelfItem(row.results[0] as JsonRecord);
@@ -664,10 +377,8 @@ app.post("/:id/enrich", async (c) => {
 });
 
 app.get("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const query = c.req.query();
   const filters = createFilterBuilder();
@@ -680,19 +391,14 @@ app.get("/:id", async (c) => {
     .all();
 
   if (!row.results || row.results.length === 0) {
-    return c.json({ error: "Shelf item not found" }, 404);
+    return notFound(c, "Shelf item");
   }
 
   return c.json(normalizeShelfItem(row.results[0] as JsonRecord));
 });
 
 app.post("/", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(shelfItemSchema, body);
+  const validation = await readBody(c, shelfItemSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -735,17 +441,10 @@ app.post("/", async (c) => {
 });
 
 app.put("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(shelfItemSchema, body);
+  const validation = await readBody(c, shelfItemSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -781,24 +480,17 @@ app.put("/:id", async (c) => {
     .run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Shelf item not found" }, 404);
+    return notFound(c, "Shelf item");
   }
 
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.patch("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(shelfPatchSchema, body);
+  const validation = await readBody(c, shelfPatchSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -812,7 +504,7 @@ app.patch("/:id", async (c) => {
       .first<JsonRecord>();
 
     if (!existing) {
-      return c.json({ error: "Shelf item not found" }, 404);
+      return notFound(c, "Shelf item");
     }
 
     const nextType = validation.data.type ?? String(existing.type ?? "");
@@ -825,133 +517,39 @@ app.patch("/:id", async (c) => {
     }
   }
 
-  const updates: string[] = [];
-  const params: (string | number | null)[] = [];
-
-  if (Object.prototype.hasOwnProperty.call(validation.data, "type")) {
-    updates.push("type = ?");
-    params.push(validation.data.type ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "title")) {
-    updates.push("title = ?");
-    params.push(validation.data.title ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "quote")) {
-    updates.push("quote = ?");
-    params.push(validation.data.quote ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "author")) {
-    updates.push("author = ?");
-    params.push(validation.data.author ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "source")) {
-    updates.push("source = ?");
-    params.push(validation.data.source ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "url")) {
-    updates.push("url = ?");
-    params.push(validation.data.url ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "note")) {
-    updates.push("note = ?");
-    params.push(validation.data.note ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "image_url")) {
-    updates.push("image_url = ?");
-    params.push(validation.data.image_url ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "drawer")) {
-    updates.push("drawer = ?");
-    params.push(validation.data.drawer ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "tags")) {
-    updates.push("tags_json = ?");
-    params.push(mapJsonField(validation.data.tags));
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "date_added")) {
-    updates.push("date_added = ?");
-    params.push(validation.data.date_added ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "published")) {
-    updates.push("published = ?");
-    params.push(validation.data.published === false ? 0 : 1);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "status")) {
-    updates.push("status = ?");
-    params.push(validation.data.status ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "rating")) {
-    updates.push("rating = ?");
-    params.push(validation.data.rating ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "rating_scale")) {
-    updates.push("rating_scale = ?");
-    params.push(validation.data.rating_scale ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "started_at")) {
-    updates.push("started_at = ?");
-    params.push(validation.data.started_at ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "completed_at")) {
-    updates.push("completed_at = ?");
-    params.push(validation.data.completed_at ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "last_watched_at")) {
-    updates.push("last_watched_at = ?");
-    params.push(validation.data.last_watched_at ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "progress_current")) {
-    updates.push("progress_current = ?");
-    params.push(validation.data.progress_current ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "progress_total")) {
-    updates.push("progress_total = ?");
-    params.push(validation.data.progress_total ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "progress_unit")) {
-    updates.push("progress_unit = ?");
-    params.push(validation.data.progress_unit ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "favorite_rank")) {
-    updates.push("favorite_rank = ?");
-    params.push(validation.data.favorite_rank ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "showcase")) {
-    updates.push("showcase = ?");
-    params.push(validation.data.showcase === true ? 1 : 0);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "metadata")) {
-    updates.push("metadata_json = ?");
-    params.push(mapJsonField(validation.data.metadata));
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "shelf_group")) {
-    updates.push("shelf_group = ?");
-    params.push(validation.data.shelf_group ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "display_order")) {
-    updates.push("display_order = ?");
-    params.push(validation.data.display_order ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "cover_override_url")) {
-    updates.push("cover_override_url = ?");
-    params.push(validation.data.cover_override_url ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "spine_image_url")) {
-    updates.push("spine_image_url = ?");
-    params.push(validation.data.spine_image_url ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "goodreads_id")) {
-    updates.push("goodreads_id = ?");
-    params.push(validation.data.goodreads_id ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "isbn")) {
-    updates.push("isbn = ?");
-    params.push(validation.data.isbn ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "apple_books_id")) {
-    updates.push("apple_books_id = ?");
-    params.push(validation.data.apple_books_id ?? null);
-  }
+  const { sets: updates, params } = patchAssignments(validation.data, {
+    type: true,
+    title: true,
+    quote: true,
+    author: true,
+    source: true,
+    url: true,
+    note: true,
+    image_url: true,
+    drawer: true,
+    tags: { column: "tags_json", to: mapJsonField },
+    date_added: true,
+    published: { to: publishedFlag },
+    status: true,
+    rating: true,
+    rating_scale: true,
+    started_at: true,
+    completed_at: true,
+    last_watched_at: true,
+    progress_current: true,
+    progress_total: true,
+    progress_unit: true,
+    favorite_rank: true,
+    showcase: { to: (value) => value === true ? 1 : 0 },
+    metadata: { column: "metadata_json", to: mapJsonField },
+    shelf_group: true,
+    display_order: true,
+    cover_override_url: true,
+    spine_image_url: true,
+    goodreads_id: true,
+    isbn: true,
+    apple_books_id: true,
+  });
 
   const updatedAt = nowIso();
   updates.push("updated_at = ?");
@@ -963,24 +561,22 @@ app.patch("/:id", async (c) => {
   const result = await c.env.DB.prepare(sql).bind(...params).run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Shelf item not found" }, 404);
+    return notFound(c, "Shelf item");
   }
 
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.delete("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const result = await c.env.DB.prepare("DELETE FROM shelf_items WHERE id = ?")
     .bind(id)
     .run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Shelf item not found" }, 404);
+    return notFound(c, "Shelf item");
   }
 
   // Its diary goes with it (the diary only lists entries whose item exists anyway).

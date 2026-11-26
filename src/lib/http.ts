@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { z } from "zod";
 import { parseJson } from "../utils/json";
+import { clampLimit } from "../utils/query";
 
 /**
  * Replies for the app's routes (links, journal, highlights, sections, documents,
@@ -41,6 +42,17 @@ export class HttpError extends Error {
 }
 
 type AnyContext = Context<any, any, any>;
+
+/**
+ * Every error a route app's handlers throw, answered by failWith: register
+ * once per app (`appErrors(app, "Links request")`) instead of a try/catch in
+ * each handler. Hono applies an app's onError to its routes wherever it is
+ * mounted. docs/adr/0007-one-module-per-error-dialect.md.
+ */
+export function appErrors<A extends { onError: (handler: (error: Error, c: AnyContext) => Response) => unknown }>(app: A, what: string): A {
+  app.onError((error, c) => failWith(c, error, what));
+  return app;
+}
 
 /** A successful JSON reply. */
 export function ok<T>(c: AnyContext, data: T, status: ContentfulStatusCode = 200) {
@@ -133,7 +145,7 @@ export function legacyListKeys(c: AnyContext): boolean {
 
 /** `?limit=` between 1 and `max`, `fallback` when missing or not a number. */
 export function limitFrom(c: AnyContext, fallback: number, max: number): number {
-  return Math.min(Math.max(Math.floor(Number(c.req.query("limit"))) || fallback, 1), max);
+  return clampLimit(c.req.query("limit"), fallback, max);
 }
 
 /** Opaque cursor: the sort values of the last row on the page. */

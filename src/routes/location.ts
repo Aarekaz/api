@@ -2,8 +2,7 @@ import { Hono } from "hono";
 import type { Env } from "../types/env";
 import type { JsonRecord } from "../types/common";
 import { nowIso } from "../utils/date";
-import { parseJson } from "../utils/json";
-import { validateBody, validateQuery } from "../utils/validation";
+import { validateQuery, readBody, idParam, badId, notFound } from "../lib/site-http";
 import { locationSchema, locationQuerySchema } from "../schemas/common";
 import {
   openApiRegistry,
@@ -19,7 +18,7 @@ import {
   authSecurity,
   errorResponses,
 } from "../schemas/openapi";
-import { parseId } from "../utils/query";
+import { clampLimit, clampOffset, patchAssignments } from "../utils/query";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -135,8 +134,8 @@ app.get("/", async (c) => {
       validation.data.start ??
       new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     label = validation.data.label ?? null;
-    limit = Math.min(Number(validation.data.limit) || 1000, 10000);
-    offset = Math.max(Number(validation.data.offset) || 0, 0);
+    limit = clampLimit(validation.data.limit, 1000, 10000);
+    offset = clampOffset(validation.data.offset);
   } else {
     end = nowIso();
     start = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -170,12 +169,7 @@ app.get("/", async (c) => {
 });
 
 app.post("/", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(locationSchema, body);
+  const validation = await readBody(c, locationSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -232,34 +226,25 @@ app.get("/latest", async (c) => {
 });
 
 app.get("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const row = await c.env.DB.prepare("SELECT * FROM location_history WHERE id = ?")
     .bind(id)
     .all();
 
   if (!row.results || row.results.length === 0) {
-    return c.json({ error: "Location not found" }, 404);
+    return notFound(c, "Location");
   }
 
   return c.json(row.results[0] as JsonRecord);
 });
 
 app.put("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(locationSchema, body);
+  const validation = await readBody(c, locationSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -293,91 +278,38 @@ app.put("/:id", async (c) => {
     .run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Location not found" }, 404);
+    return notFound(c, "Location");
   }
 
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.patch("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(locationPatchSchema, body);
+  const validation = await readBody(c, locationPatchSchema);
   if (!validation.ok) {
     return validation.response;
   }
 
-  const updates: string[] = [];
-  const params: (string | number | null)[] = [];
-
-  if (Object.prototype.hasOwnProperty.call(validation.data, "latitude")) {
-    updates.push("latitude = ?");
-    params.push(validation.data.latitude ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "longitude")) {
-    updates.push("longitude = ?");
-    params.push(validation.data.longitude ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "altitude")) {
-    updates.push("altitude = ?");
-    params.push(validation.data.altitude ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "accuracy")) {
-    updates.push("accuracy = ?");
-    params.push(validation.data.accuracy ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "speed")) {
-    updates.push("speed = ?");
-    params.push(validation.data.speed ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "heading")) {
-    updates.push("heading = ?");
-    params.push(validation.data.heading ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "recorded_at")) {
-    updates.push("recorded_at = ?");
-    params.push(validation.data.recorded_at ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "address")) {
-    updates.push("address = ?");
-    params.push(validation.data.address ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "city")) {
-    updates.push("city = ?");
-    params.push(validation.data.city ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "state")) {
-    updates.push("state = ?");
-    params.push(validation.data.state ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "country")) {
-    updates.push("country = ?");
-    params.push(validation.data.country ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "postal_code")) {
-    updates.push("postal_code = ?");
-    params.push(validation.data.postal_code ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "label")) {
-    updates.push("label = ?");
-    params.push(validation.data.label ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "notes")) {
-    updates.push("notes = ?");
-    params.push(validation.data.notes ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "source")) {
-    updates.push("source = ?");
-    params.push(validation.data.source ?? null);
-  }
+  const { sets: updates, params } = patchAssignments(validation.data, {
+    latitude: true,
+    longitude: true,
+    altitude: true,
+    accuracy: true,
+    speed: true,
+    heading: true,
+    recorded_at: true,
+    address: true,
+    city: true,
+    state: true,
+    country: true,
+    postal_code: true,
+    label: true,
+    notes: true,
+    source: true,
+  });
 
   const updatedAt = nowIso();
   updates.push("updated_at = ?");
@@ -389,23 +321,21 @@ app.patch("/:id", async (c) => {
   const result = await c.env.DB.prepare(sql).bind(...params).run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Location not found" }, 404);
+    return notFound(c, "Location");
   }
 
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.delete("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const result = await c.env.DB.prepare("DELETE FROM location_history WHERE id = ?")
     .bind(id)
     .run();
   if (result.meta.changes === 0) {
-    return c.json({ error: "Location not found" }, 404);
+    return notFound(c, "Location");
   }
   return c.json({ ok: true, id, deleted_at: nowIso() });
 });

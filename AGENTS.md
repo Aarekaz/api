@@ -21,7 +21,8 @@ The website reads these GETs, and their bodies must stay byte-compatible:
   website shape only on purpose: site first, then refresh both files
   (`UPDATE_WEBSITE_FREEZE=1 npx vitest run src/__tests__/contracts`).
 - Website routes keep their old error bodies (`{ "error": "message" }`) and
-  never use `src/lib/http.ts`.
+  never use `src/lib/http.ts`; they use `src/lib/site-http.ts`
+  (`docs/adr/0007-one-module-per-error-dialect.md`).
 - Writes the website shows trigger a page refresh on anuragd.me
   (`middleware/site-refresh.ts`).
 
@@ -37,6 +38,15 @@ The website reads these GETs, and their bodies must stay byte-compatible:
   state, stats; import from `services/links`), `documents.ts`, `highlights.ts`,
   `sections.ts`, `whoop/`, `spotify/` likewise.
 - `src/lib/http.ts`: replies for the app's routes (below).
+- `src/lib/site-http.ts`: replies for the website's routes: `readBody(c,
+  schema)` ("Invalid JSON", then "Validation error" with Zod's `flatten()`),
+  `idParam`/`badId`, `notFound(c, "Project")`, `validateBody`/`validateQuery`.
+  PATCH handlers build their `SET` list with `patchAssignments` (utils/query.ts).
+  `__tests__/routes/website-crud.test.ts` snapshots every body they send.
+- `src/utils/`: pure helpers. `date.ts` is the one place for calendar days
+  (`DAY`, `isDay`, `dayAtOffset`, `dayInZone`, `shiftDay`; ADR 0008);
+  `query.ts` has the list filters and `clampLimit` (the one `?limit=` rule).
+- `services/upload-token.ts`: presigned upload tokens (photos, blog images).
 - `src/services/data-versions.ts`: per-kind data versions for ETags.
 - `src/schemas/`: Zod schemas (validation and OpenAPI). `openapi.ts` has the
   shared response helpers (`structuredOkResponses`, `cursorQuery`, `pageFields`).
@@ -56,6 +66,9 @@ The website reads these GETs, and their bodies must stay byte-compatible:
 App-only routes (visits, documents, search, capture, links, highlights,
 journal, sections, recipes, training, music history) use `src/lib/http.ts`:
 
+- Each route app is `appErrors(new Hono<…>(), "Links request")`: anything a
+  handler throws is answered by `failWith`, so handlers don't wrap themselves
+  in try/catch.
 - `ok(c, data)`; `fail(c, status, message, { code?, details?, extra? })`;
   `failWith(c, error, "Links request")` for anything thrown (HttpError, Zod
   errors, service errors carrying `status` and maybe `code`; anything else is

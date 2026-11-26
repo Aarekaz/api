@@ -18,14 +18,29 @@ type ListQueryOptions = {
   maxLimit?: number;
 };
 
+/**
+ * A page size from `?limit=`: whole numbers only (rounded down), at least 1,
+ * at most `max`; missing, zero or not a number is `fallback`. The one rule for
+ * every list (lib/http.ts limitFrom uses it too). A negative limit used to
+ * reach SQL, where LIMIT -1 means no limit.
+ */
+export function clampLimit(raw: unknown, fallback: number, max: number): number {
+  return Math.min(Math.max(Math.floor(Number(raw)) || fallback, 1), max);
+}
+
+/** `?offset=` as a whole number, at least 0. */
+export function clampOffset(raw: unknown): number {
+  return Math.max(Math.floor(Number(raw)) || 0, 0);
+}
+
 export function parseListQuery(
   query: Record<string, string | undefined>,
   options: ListQueryOptions = {}
 ): ListQuery {
   const defaultLimit = options.defaultLimit ?? 100;
   const maxLimit = options.maxLimit ?? 1000;
-  const limit = Math.min(Number(query.limit) || defaultLimit, maxLimit);
-  const offset = Math.max(Number(query.offset) || 0, 0);
+  const limit = clampLimit(query.limit, defaultLimit, maxLimit);
+  const offset = clampOffset(query.offset);
   const search = query.search?.trim() || null;
   const sort = query.sort?.trim() || null;
   const start = query.start?.trim() || null;
@@ -77,8 +92,9 @@ export function addTagsFilter(
 }
 
 // Adds `published = 1` to the filter unless the caller passes
-// `?include_unpublished=true`. Both the public site and the OS
-// authenticate with the same token; the distinction is a query param.
+// `?include_unpublished=true`. Only the owner's token and device sessions
+// can: a SITE_TOKEN request carrying the parameter is refused in
+// middleware/auth.ts (docs/adr/0004-site-token.md).
 export function addPublishedFilter(
   builder: FilterBuilder,
   query: Record<string, string | undefined>,
@@ -152,3 +168,28 @@ export function parseId(value: string): number | null {
   }
   return parsed;
 }
+
+/** How a PATCH field is written: to a column of another name, and/or through a transform. */
+export type PatchColumn = true | string | { column?: string; to?: (value: any) => unknown };
+
+/**
+ * The `SET` assignments for the fields a PATCH body carries (present, even if
+ * null), in the order `columns` lists them. A field maps to the column of its
+ * own name, written as `value ?? null`, unless its entry names another column
+ * or a transform. Fields not listed are ignored.
+ */
+export function patchAssignments(data: Record<string, unknown>, columns: Record<string, PatchColumn>): { sets: string[]; params: unknown[] } {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  for (const [field, spec] of Object.entries(columns)) {
+    if (!Object.prototype.hasOwnProperty.call(data, field)) continue;
+    const column = typeof spec === "string" ? spec : spec === true ? field : spec.column ?? field;
+    const to = typeof spec === "object" && spec.to ? spec.to : (value: unknown) => value ?? null;
+    sets.push(`${column} = ?`);
+    params.push(to(data[field]));
+  }
+  return { sets, params };
+}
+
+/** `published` as the 0/1 column: anything but an explicit false is published. */
+export const publishedFlag = (value: unknown) => (value === false ? 0 : 1);

@@ -91,3 +91,26 @@ describe("lib/http", () => {
     expect((await json("/tagged", { headers: { "If-None-Match": 'W/"places-2-x"' } })).status).toBe(200);
   });
 });
+
+describe("appErrors", () => {
+  it("answers whatever a mounted app's handlers throw, in the one shape", async () => {
+    const { appErrors } = await import("../../lib/http");
+    const child = appErrors(new Hono(), "Child request");
+    child.get("/http", () => { throw new HttpError(409, "Taken", "exists"); });
+    child.get("/zod", () => { z.object({ n: z.number() }).parse({}); return new Response(); });
+    child.get("/service", () => { throw new SectionError("Folder not found", 404, "not_found"); });
+    child.get("/crash", () => { throw new Error("secret detail"); });
+    const root = new Hono();
+    root.route("/child", child);
+    root.get("/other", () => { throw new Error("x"); });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const read = async (path: string) => { const res = await root.request(path); return [res.status, await res.text()]; };
+    expect(await read("/child/http")).toEqual([409, '{"error":{"code":"exists","message":"Taken"}}']);
+    expect(await read("/child/zod")).toEqual([400, '{"error":{"code":"invalid","message":"n: Required"}}']);
+    expect(await read("/child/service")).toEqual([404, '{"error":{"code":"not_found","message":"Folder not found"}}']);
+    expect(await read("/child/crash")).toEqual([500, '{"error":{"code":"server","message":"Child request failed"}}']);
+    // Only that app: elsewhere Hono's own text 500 stays.
+    expect(await read("/other")).toEqual([500, "Internal Server Error"]);
+    spy.mockRestore();
+  });
+});

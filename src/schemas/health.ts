@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { dateString } from "./common";
+import { DAY } from "../utils/date";
 
 export const appleHealthDailySchema = z.object({
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD format"),
+  date: z.string().regex(DAY, "Date must be YYYY-MM-DD format"),
   // Heart & Cardiovascular
   resting_heart_rate: z.number().positive().optional(),
   heart_rate_avg: z.number().positive().optional(),
@@ -43,72 +43,4 @@ export const appleHealthDailySchema = z.object({
   // Metadata
   source: z.string().optional(),
   notes: z.string().optional(),
-});
-
-// Infer type from schema for type safety
-export type AppleHealthDaily = z.infer<typeof appleHealthDailySchema>;
-
-export const appleHealthHeartRateSchema = z.object({
-  recorded_at: dateString,
-  heart_rate: z.number().positive(),
-  context: z.string().optional(),
-  source: z.string().optional(),
-});
-
-export type AppleHealthHeartRate = z.infer<typeof appleHealthHeartRateSchema>;
-
-export const appleHealthHeartRateBatchSchema = z.object({
-  samples: z.array(appleHealthHeartRateSchema).min(1).max(1000),
-});
-
-export type AppleHealthHeartRateBatch = z.infer<typeof appleHealthHeartRateBatchSchema>;
-
-export const appleHealthSleepSessionSchema = z.object({
-  start_at: dateString,
-  end_at: dateString,
-  duration_minutes: z.number().int().nonnegative().optional(),
-  deep_minutes: z.number().int().nonnegative().optional(),
-  core_minutes: z.number().int().nonnegative().optional(),
-  rem_minutes: z.number().int().nonnegative().optional(),
-  awake_minutes: z.number().int().nonnegative().optional(),
-  sleep_quality_score: z.number().min(0).max(100).optional(),
-  respiratory_rate_avg: z.number().positive().optional(),
-  heart_rate_avg: z.number().positive().optional(),
-  hrv_avg: z.number().nonnegative().optional(),
-});
-
-export type AppleHealthSleepSession = z.infer<typeof appleHealthSleepSessionSchema>;
-
-export const appleHealthWorkoutSchema = z.object({
-  workout_type: z.string().min(1),
-  start_at: dateString,
-  end_at: dateString,
-  duration_minutes: z.number().int().nonnegative().optional(),
-  active_energy: z.number().nonnegative().optional(),
-  heart_rate_avg: z.number().positive().optional(),
-  heart_rate_max: z.number().positive().optional(),
-  distance: z.number().nonnegative().optional(),
-  elevation_gain: z.number().nonnegative().optional(),
-  source: z.string().optional(),
-  notes: z.string().optional(),
-});
-
-export type AppleHealthWorkout = z.infer<typeof appleHealthWorkoutSchema>;
-
-export const healthQuerySchema = z.object({
-  start: dateString.optional(),
-  end: dateString.optional(),
-});
-
-export const healthHeartRateQuerySchema = z.object({
-  start: dateString.optional(),
-  end: dateString.optional(),
-  limit: z.string().optional(),
-});
-
-export const healthWorkoutsQuerySchema = z.object({
-  start: dateString.optional(),
-  end: dateString.optional(),
-  type: z.string().optional(),
-  limit: z.string().optional(),
 });

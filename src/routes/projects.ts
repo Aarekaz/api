@@ -2,8 +2,8 @@ import { Hono } from "hono";
 import type { Env } from "../types/env";
 import type { JsonRecord } from "../types/common";
 import { nowIso } from "../utils/date";
-import { parseJson, mapJsonField } from "../utils/json";
-import { validateBody } from "../utils/validation";
+import { mapJsonField } from "../utils/json";
+import { readBody, idParam, badId, notFound } from "../lib/site-http";
 import { normalizeProject } from "../utils/normalizers";
 import { projectSchema } from "../schemas/content";
 import { projectResponseSchema, projectsResponseSchema } from "../schemas/responses";
@@ -27,7 +27,8 @@ import {
   addPublishedFilter,
   buildWhereClause,
   parseSort,
-  parseId,
+  patchAssignments,
+  publishedFlag,
 } from "../utils/query";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -121,10 +122,8 @@ app.get("/", async (c) => {
 });
 
 app.get("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const query = c.req.query();
   const filters = createFilterBuilder();
@@ -137,19 +136,14 @@ app.get("/:id", async (c) => {
     .all();
 
   if (!row.results || row.results.length === 0) {
-    return c.json({ error: "Project not found" }, 404);
+    return notFound(c, "Project");
   }
 
   return c.json(normalizeProject(row.results[0] as JsonRecord));
 });
 
 app.post("/", async (c) => {
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(projectSchema, body);
+  const validation = await readBody(c, projectSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -179,17 +173,10 @@ app.post("/", async (c) => {
 });
 
 app.put("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(projectSchema, body);
+  const validation = await readBody(c, projectSchema);
   if (!validation.ok) {
     return validation.response;
   }
@@ -217,71 +204,33 @@ app.put("/:id", async (c) => {
     .run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Project not found" }, 404);
+    return notFound(c, "Project");
   }
 
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.patch("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
-  const body = await parseJson(c.req.raw);
-  if (body === null) {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const validation = validateBody(projectPatchSchema, body);
+  const validation = await readBody(c, projectPatchSchema);
   if (!validation.ok) {
     return validation.response;
   }
 
-  const updates: string[] = [];
-  const params: (string | number | null)[] = [];
-
-  if (Object.prototype.hasOwnProperty.call(validation.data, "title")) {
-    updates.push("title = ?");
-    params.push(validation.data.title ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "description")) {
-    updates.push("description = ?");
-    params.push(validation.data.description ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "links")) {
-    updates.push("links_json = ?");
-    params.push(mapJsonField(validation.data.links));
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "tags")) {
-    updates.push("tags_json = ?");
-    params.push(mapJsonField(validation.data.tags));
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "status")) {
-    updates.push("status = ?");
-    params.push(validation.data.status ?? null);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "sort_order")) {
-    updates.push("sort_order = ?");
-    params.push(validation.data.sort_order ?? 0);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "published")) {
-    updates.push("published = ?");
-    params.push(validation.data.published === false ? 0 : 1);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "featured")) {
-    updates.push("featured = ?");
-    params.push(validation.data.featured === true ? 1 : 0);
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "highlight")) {
-    updates.push("highlight = ?");
-    params.push(highlightValue(validation.data.highlight));
-  }
-  if (Object.prototype.hasOwnProperty.call(validation.data, "listings")) {
-    updates.push("listings_json = ?");
-    params.push(mapJsonField(validation.data.listings));
-  }
+  const { sets: updates, params } = patchAssignments(validation.data, {
+    title: true,
+    description: true,
+    links: { column: "links_json", to: mapJsonField },
+    tags: { column: "tags_json", to: mapJsonField },
+    status: true,
+    sort_order: { to: (value) => value ?? 0 },
+    published: { to: publishedFlag },
+    featured: { to: (value) => value === true ? 1 : 0 },
+    highlight: { to: (value) => highlightValue(value) },
+    listings: { column: "listings_json", to: mapJsonField },
+  });
 
   const updatedAt = nowIso();
   updates.push("updated_at = ?");
@@ -293,24 +242,22 @@ app.patch("/:id", async (c) => {
   const result = await c.env.DB.prepare(sql).bind(...params).run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Project not found" }, 404);
+    return notFound(c, "Project");
   }
 
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
 app.delete("/:id", async (c) => {
-  const id = parseId(c.req.param("id"));
-  if (!id) {
-    return c.json({ error: "Invalid id" }, 400);
-  }
+  const id = idParam(c);
+  if (!id) return badId(c);
 
   const result = await c.env.DB.prepare("DELETE FROM projects WHERE id = ?")
     .bind(id)
     .run();
 
   if (result.meta.changes === 0) {
-    return c.json({ error: "Project not found" }, 404);
+    return notFound(c, "Project");
   }
 
   return c.json({ ok: true, id, deleted_at: nowIso() });
