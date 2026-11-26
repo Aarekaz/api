@@ -24,12 +24,14 @@ import type { Env } from "../types/env";
 import { WHOOP_SCOPES, type WhoopQueueMessage, type WhoopResource } from "../types/whoop";
 import { enqueueReconciliation } from "../services/whoop/sync";
 import { whoopWebhookSchema } from "../schemas/whoop";
+import { limitBody } from "../middleware/body-limit";
 
 const syncOptionsSchema = z.object({ full_history: z.boolean().optional() }).strict();
 
 const WHOOP_AUTHORIZE_URL = "https://api.prod.whoop.com/oauth/oauth2/auth";
 const OAUTH_STATE_LIFETIME_MILLISECONDS = 10 * 60 * 1000;
 const WEBHOOK_MAX_SKEW_MILLISECONDS = 5 * 60 * 1000;
+const WEBHOOK_MAX_BYTES = 64 * 1024;
 const INITIAL_RESOURCES: readonly WhoopResource[] = [
   "profile", "body_measurement", "cycle", "recovery", "sleep", "workout",
 ];
@@ -286,7 +288,9 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
     }
   });
 
-  app.post("/integrations/whoop/webhook", async (c) => {
+  // A WHOOP event is four small fields; the limit is far above that and stops
+  // an unsigned caller making the Worker read (and hash) a large body.
+  app.post("/integrations/whoop/webhook", limitBody(WEBHOOK_MAX_BYTES), async (c) => {
     const signature = c.req.header("X-WHOOP-Signature");
     const timestamp = c.req.header("X-WHOOP-Signature-Timestamp");
     if (!signature || !timestamp || typeof c.env.WHOOP_CLIENT_SECRET !== "string"
@@ -452,6 +456,7 @@ openApiRegistry.registerPath({
     204: { description: "Webhook accepted" },
     400: openApiResponse(errorSchema, "Invalid webhook payload"),
     401: openApiResponse(errorSchema, "Invalid webhook signature"),
+    413: openApiResponse(errorSchema, "Payload too large"),
     503: openApiResponse(errorSchema, "Webhook queue unavailable"),
   },
 });
