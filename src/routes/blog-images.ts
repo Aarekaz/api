@@ -14,14 +14,14 @@ import {
   presignHeadersSchema,
   uploadTokenHeadersSchema,
 } from "../schemas/openapi";
-import { signUploadToken, verifyUploadToken } from "../services/upload-token";
+import { declaresMoreThan, signUploadToken, UPLOAD_LIMITS, verifyUploadToken } from "../services/upload-token";
 
 const app = new Hono<{ Bindings: Env }>();
 
 // Blog images are embedded in markdown — no DB metadata, just R2 storage.
 // Mirrors the photos presign/upload-presigned/upload flow but with:
 //   - key prefix: blog/ (keeps photography and blog-image lifecycles separate)
-//   - 5MB direct-upload cap (screenshots, not DSLR raws)
+//   - smaller size caps (screenshots, not DSLR raws; UPLOAD_LIMITS)
 //   - restricted content types (no SVG — XSS risk when rendered as <img>)
 
 const ALLOWED_TYPES = new Set([
@@ -30,8 +30,6 @@ const ALLOWED_TYPES = new Set([
   "image/jpg",
   "image/webp",
 ]);
-
-const MAX_DIRECT_UPLOAD = 5 * 1024 * 1024;
 
 /* ── OpenAPI ─────────────────────────────────────────────────────────── */
 
@@ -68,6 +66,7 @@ openApiRegistry.registerPath({
     400: openApiResponse(errorSchema, "Missing body"),
     401: openApiResponse(errorSchema, "Missing upload token"),
     403: openApiResponse(errorSchema, "Invalid or expired upload token"),
+    413: openApiResponse(errorSchema, "File too large"),
   },
 });
 
@@ -119,6 +118,10 @@ app.put("/upload-presigned", async (c) => {
     return c.json({ error: "Invalid or expired upload token" }, 403);
   }
 
+  if (declaresMoreThan(c.req.header("content-length"), UPLOAD_LIMITS.blogPresigned)) {
+    return c.json({ error: "File too large" }, 413);
+  }
+
   if (!c.req.raw.body) {
     return c.json({ error: "Missing body" }, 400);
   }
@@ -142,8 +145,7 @@ app.post("/upload", async (c) => {
     return c.json({ error: "Unsupported content type" }, 415);
   }
 
-  const contentLength = c.req.header("content-length");
-  if (contentLength && Number(contentLength) > MAX_DIRECT_UPLOAD) {
+  if (declaresMoreThan(c.req.header("content-length"), UPLOAD_LIMITS.blogDirect)) {
     return c.json({ error: "File too large" }, 413);
   }
 

@@ -4,6 +4,27 @@
 // the server when it signs, so the uploader can't pick where the bytes go.
 
 const LIFETIME_MILLISECONDS = 5 * 60 * 1000;
+const MIB = 1024 * 1024;
+
+/**
+ * The largest body each upload route stores. Presigned PUTs exist to get past
+ * the OS proxy's 4.5 MB limit, so their caps sit well above a full-size camera
+ * JPEG or a Retina screenshot and well below the platform's 100 MB body limit.
+ */
+export const UPLOAD_LIMITS = {
+  photosDirect: 10 * MIB,
+  photosPresigned: 50 * MIB,
+  blogDirect: 5 * MIB,
+  blogPresigned: 25 * MIB,
+} as const;
+
+/**
+ * Whether a request's Content-Length is over `max`. The runtime holds a body to
+ * its declared length, and R2 can't store a body of unknown length, so the
+ * header is the check.
+ */
+export const declaresMoreThan = (contentLength: string | undefined, max: number): boolean =>
+  Boolean(contentLength) && Number(contentLength) > max;
 
 const hmacKey = (secret: string, usage: "sign" | "verify") =>
   crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [usage]);

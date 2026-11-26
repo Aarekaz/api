@@ -40,7 +40,7 @@ import {
   patchAssignments,
   publishedFlag,
 } from "../utils/query";
-import { signUploadToken, verifyUploadToken } from "../services/upload-token";
+import { declaresMoreThan, signUploadToken, UPLOAD_LIMITS, verifyUploadToken } from "../services/upload-token";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -154,6 +154,7 @@ openApiRegistry.registerPath({
     400: openApiResponse(errorSchema, "Missing body"),
     401: openApiResponse(errorSchema, "Missing upload token"),
     403: openApiResponse(errorSchema, "Invalid or expired upload token"),
+    413: openApiResponse(errorSchema, "File too large"),
   },
 });
 
@@ -278,6 +279,10 @@ app.put("/upload-presigned", async (c) => {
     return c.json({ error: "Invalid or expired upload token" }, 403);
   }
 
+  if (declaresMoreThan(c.req.header("content-length"), UPLOAD_LIMITS.photosPresigned)) {
+    return c.json({ error: "File too large" }, 413);
+  }
+
   if (!c.req.raw.body) {
     return c.json({ error: "Missing body" }, 400);
   }
@@ -395,8 +400,7 @@ app.post("/upload", async (c) => {
     return c.json({ error: "Unsupported content type" }, 415);
   }
 
-  const contentLength = c.req.header("content-length");
-  if (contentLength && Number(contentLength) > 10 * 1024 * 1024) {
+  if (declaresMoreThan(c.req.header("content-length"), UPLOAD_LIMITS.photosDirect)) {
     return c.json({ error: "File too large" }, 413);
   }
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Env } from "../../types/env";
 import photosRoute from "../../routes/photos";
 import blogImagesRoute from "../../routes/blog-images";
-import { signUploadToken, verifyUploadToken } from "../../services/upload-token";
+import { signUploadToken, UPLOAD_LIMITS, verifyUploadToken } from "../../services/upload-token";
 
 // Presign, then PUT with the token: one token module for photos and blog
 // images (services/upload-token.ts). A malformed token is a 403 like a forged
@@ -23,11 +23,11 @@ function bucket() {
 }
 
 const ROUTES = [
-  { name: "photos", route: photosRoute, prefix: "photos/", type: "image/jpeg" },
-  { name: "blog-images", route: blogImagesRoute, prefix: "blog/", type: "image/png" },
+  { name: "photos", route: photosRoute, prefix: "photos/", type: "image/jpeg", max: UPLOAD_LIMITS.photosPresigned, direct: UPLOAD_LIMITS.photosDirect },
+  { name: "blog-images", route: blogImagesRoute, prefix: "blog/", type: "image/png", max: UPLOAD_LIMITS.blogPresigned, direct: UPLOAD_LIMITS.blogDirect },
 ];
 
-describe.each(ROUTES)("$name presigned upload", ({ route, prefix, type }) => {
+describe.each(ROUTES)("$name presigned upload", ({ route, prefix, type, max, direct }) => {
   const setup = () => {
     const store = bucket();
     const env = { API_TOKEN: "secret", R2_BUCKET: store.r2, R2_PUBLIC_BASE_URL: "https://media.example.com" } as Env;
@@ -57,6 +57,34 @@ describe.each(ROUTES)("$name presigned upload", ({ route, prefix, type }) => {
       expect(res.status, token).toBe(403);
       expect(await res.json()).toEqual({ error: "Invalid or expired upload token" });
     }
+  });
+
+  it("refuses a body declared over its cap with 413 and stores nothing", async () => {
+    const { store, env } = setup();
+    const token = await signUploadToken(`${prefix}big.png`, type, "secret");
+    // Hono's test request keeps the declared length; the body itself is small.
+    const put = (length: number) => route.request("/upload-presigned", {
+      method: "PUT",
+      headers: { "X-Upload-Token": token, "Content-Type": type, "Content-Length": String(length) },
+      body: new Uint8Array([1]),
+    }, env);
+    const over = await put(max + 1);
+    expect([over.status, await over.json()]).toEqual([413, { error: "File too large" }]);
+    expect(store.objects.size).toBe(0);
+    // Exactly the cap still goes through the checks (the forged length is the
+    // runtime's to refuse, not ours).
+    expect((await put(max)).status).not.toBe(413);
+    // A bad token is still a 403 first, whatever the size.
+    const forged = await route.request("/upload-presigned", { method: "PUT", headers: { "X-Upload-Token": "nope", "Content-Length": String(max + 1) }, body: "x" }, env);
+    expect(forged.status).toBe(403);
+  });
+
+  it("keeps the direct upload cap", async () => {
+    const { env } = setup();
+    const post = (length: number) => route.request("/upload", { method: "POST", headers: { "Content-Type": type, "Content-Length": String(length) }, body: new Uint8Array([1]) }, env);
+    const over = await post(direct + 1);
+    expect([over.status, await over.json()]).toEqual([413, { error: "File too large" }]);
+    expect((await post(direct)).status).not.toBe(413);
   });
 });
 
