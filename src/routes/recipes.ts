@@ -54,6 +54,8 @@ const Fields = {
   tags: z.array(z.string().trim().min(1).max(32)).max(20).optional(),
   notes: z.string().max(20_000).nullish(),
   favorite: z.boolean().optional(),
+  // The caption, transcript or scanned page the recipe was read from (migration 0057).
+  source_text: z.string().max(20_000).nullish(),
 };
 
 const CreateRecipe = z.object(Fields);
@@ -71,7 +73,7 @@ type Row = {
   id: string; title: string; summary: string | null; source_url: string | null; source_name: string | null; author: string | null;
   image_url: string | null; servings: number | null; yield_text: string | null; prep_minutes: number | null; cook_minutes: number | null;
   total_minutes: number | null; ingredients_json: string; steps_json: string; tags_json: string; notes: string | null; favorite: number;
-  created_at: string; updated_at: string; deleted_at: string | null;
+  created_at: string; updated_at: string; deleted_at: string | null; source_text?: string | null;
   cooked_count?: number | null; last_cooked_on?: string | null; rating?: number | null;
 };
 
@@ -89,7 +91,8 @@ export function presentRecipe(row: Row, log?: LogRow[]) {
     cooked_count: Number(row.cooked_count ?? 0), last_cooked_on: row.last_cooked_on ?? null,
     rating: row.rating === null || row.rating === undefined ? null : Math.round(Number(row.rating) * 10) / 10,
     created_at: row.created_at, updated_at: row.updated_at,
-    ...(log ? { log: log.map(presentLog) } : {}),
+    // One recipe carries the text it was read from; lists leave it out to stay light.
+    ...(log ? { source_text: row.source_text ?? null, log: log.map(presentLog) } : {}),
   };
 }
 
@@ -133,6 +136,7 @@ function columns(input: z.infer<typeof UpdateRecipe>): Record<string, unknown> {
   set("tags_json", input.tags === undefined ? undefined : JSON.stringify(tagsOf(input.tags)));
   set("notes", input.notes === undefined ? undefined : blank(input.notes));
   set("favorite", input.favorite === undefined ? undefined : input.favorite ? 1 : 0);
+  set("source_text", input.source_text === undefined ? undefined : blank(input.source_text));
   return out;
 }
 
@@ -212,7 +216,10 @@ const recipeSchema = recipeDraftSchema.extend({
   created_at: z.string(),
   updated_at: z.string(),
 });
-const recipeWithLogSchema = recipeSchema.extend({ log: z.array(recipeLogSchema) });
+const recipeWithLogSchema = recipeSchema.extend({
+  source_text: z.string().nullable().openapi({ description: "The caption, transcript or scanned page it was read from" }),
+  log: z.array(recipeLogSchema),
+});
 const recipeParams = z.object({ id: z.string() });
 
 openApiRegistry.registerPath({

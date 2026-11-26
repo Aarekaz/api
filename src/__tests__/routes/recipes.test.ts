@@ -11,6 +11,7 @@ import { cleanIngredients, cleanSteps, extractRecipe, parseDuration, parseIngred
 function d1(): D1Database {
   const { db, DB } = testD1();
   db.exec(readFileSync("migrations/0034_recipes.sql", "utf8"));
+  db.exec(readFileSync("migrations/0057_recipe_source_text.sql", "utf8"));
   return DB;
 }
 
@@ -141,6 +142,30 @@ describe("recipes routes", () => {
     expect(((await (await root.request("/v1/recipes", {}, env)).json()) as { items: Recipe[] }).items).toHaveLength(1);
     const back = await root.request(`/v1/recipes/${created.id}/restore`, send("POST"), env);
     expect(((await back.json()) as Recipe).title).toBe("Pancakes");
+  });
+
+  it("keeps the text a recipe was read from, on the recipe but not in the list", async () => {
+    const env = { DB: d1() } as Env;
+    const root = app();
+    const created = await (await root.request("/v1/recipes", send("POST", { title: "Chukauni", ingredients: ["Potatoes"] }), env)).json() as Recipe & { source_text: string | null };
+    expect(created.source_text).toBeNull();
+    // The amounts review saves the lines with amounts and the caption they came from.
+    const caption = "Boil 4 potatoes, add 1 cup curd and 2 tbsp mustard oil.";
+    const patched = await (await root.request(`/v1/recipes/${created.id}`, send("PATCH", {
+      ingredients: [{ text: "4 Potatoes", group: null }], source_text: caption,
+    }), env)).json() as Recipe & { source_text: string | null };
+    expect(patched.source_text).toBe(caption);
+    expect(patched.ingredients[0]).toMatchObject({ quantity: 4, item: "Potatoes" });
+    const one = await (await root.request(`/v1/recipes/${created.id}`, {}, env)).json() as { source_text: string | null };
+    expect(one.source_text).toBe(caption);
+    const all = await (await root.request("/v1/recipes", {}, env)).json() as { items: Array<Record<string, unknown>> };
+    expect(all.items[0]).not.toHaveProperty("source_text");
+    // A PATCH without it leaves it; an empty one clears it.
+    await root.request(`/v1/recipes/${created.id}`, send("PATCH", { favorite: true }), env);
+    expect(((await (await root.request(`/v1/recipes/${created.id}`, {}, env)).json()) as { source_text: string | null }).source_text).toBe(caption);
+    const cleared = await (await root.request(`/v1/recipes/${created.id}`, send("PATCH", { source_text: "  " }), env)).json() as { source_text: string | null };
+    expect(cleared.source_text).toBeNull();
+    expect((await root.request(`/v1/recipes/${created.id}`, send("PATCH", { source_text: "x".repeat(20_001) }), env)).status).toBe(400);
   });
 
   it("logs cooking with ratings", async () => {
