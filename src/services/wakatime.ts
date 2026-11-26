@@ -91,6 +91,8 @@ export async function refreshWakaTime(
     }>;
   };
 
+  // One batch per day: the day and its breakdowns land together or not at all,
+  // in one round trip instead of one per row.
   const days = payload.data ?? [];
   for (const day of days) {
     const date = day.range?.date;
@@ -103,75 +105,44 @@ export async function refreshWakaTime(
     const timezone = day.range?.timezone ?? null;
     const createdAt = nowIso();
 
-    await env.DB.prepare(
-      `INSERT INTO wakatime_days (date, total_seconds, total_minutes, timezone, created_at)
+    const statements = [
+      env.DB.prepare(
+        `INSERT INTO wakatime_days (date, total_seconds, total_minutes, timezone, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(date) DO UPDATE SET
+           total_seconds = excluded.total_seconds,
+           total_minutes = excluded.total_minutes,
+           timezone = excluded.timezone,
+           created_at = excluded.created_at`
+      ).bind(date, totalSeconds, totalMinutes, timezone, createdAt),
+      ...breakdownUpserts(env, "wakatime_languages", date, day.languages),
+      ...breakdownUpserts(env, "wakatime_projects", date, day.projects),
+      ...breakdownUpserts(env, "wakatime_editors", date, day.editors),
+    ];
+    await env.DB.batch(statements);
+  }
+}
+
+type BreakdownTable = "wakatime_languages" | "wakatime_projects" | "wakatime_editors";
+
+/** One upsert per named item of a day's languages, projects or editors. */
+function breakdownUpserts(
+  env: Env,
+  table: BreakdownTable,
+  date: string,
+  items: Array<{ name?: string; total_seconds?: number; percent?: number }> | undefined
+): D1PreparedStatement[] {
+  return (items ?? []).filter((item) => item.name).map((item) => {
+    const seconds = item.total_seconds ?? 0;
+    return env.DB.prepare(
+      `INSERT INTO ${table} (date, name, total_seconds, total_minutes, percent)
        VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(date) DO UPDATE SET
+       ON CONFLICT(date, name) DO UPDATE SET
          total_seconds = excluded.total_seconds,
          total_minutes = excluded.total_minutes,
-         timezone = excluded.timezone,
-         created_at = excluded.created_at`
-    )
-      .bind(date, totalSeconds, totalMinutes, timezone, createdAt)
-      .run();
-
-    const languages = day.languages ?? [];
-    for (const item of languages) {
-      if (!item.name) {
-        continue;
-      }
-      const seconds = item.total_seconds ?? 0;
-      const minutes = Math.round(seconds / 60);
-      await env.DB.prepare(
-        `INSERT INTO wakatime_languages (date, name, total_seconds, total_minutes, percent)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(date, name) DO UPDATE SET
-           total_seconds = excluded.total_seconds,
-           total_minutes = excluded.total_minutes,
-           percent = excluded.percent`
-      )
-        .bind(date, item.name, seconds, minutes, item.percent ?? null)
-        .run();
-    }
-
-    const projects = day.projects ?? [];
-    for (const item of projects) {
-      if (!item.name) {
-        continue;
-      }
-      const seconds = item.total_seconds ?? 0;
-      const minutes = Math.round(seconds / 60);
-      await env.DB.prepare(
-        `INSERT INTO wakatime_projects (date, name, total_seconds, total_minutes, percent)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(date, name) DO UPDATE SET
-           total_seconds = excluded.total_seconds,
-           total_minutes = excluded.total_minutes,
-           percent = excluded.percent`
-      )
-        .bind(date, item.name, seconds, minutes, item.percent ?? null)
-        .run();
-    }
-
-    const editors = day.editors ?? [];
-    for (const item of editors) {
-      if (!item.name) {
-        continue;
-      }
-      const seconds = item.total_seconds ?? 0;
-      const minutes = Math.round(seconds / 60);
-      await env.DB.prepare(
-        `INSERT INTO wakatime_editors (date, name, total_seconds, total_minutes, percent)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(date, name) DO UPDATE SET
-           total_seconds = excluded.total_seconds,
-           total_minutes = excluded.total_minutes,
-           percent = excluded.percent`
-      )
-        .bind(date, item.name, seconds, minutes, item.percent ?? null)
-        .run();
-    }
-  }
+         percent = excluded.percent`
+    ).bind(date, item.name, seconds, Math.round(seconds / 60), item.percent ?? null);
+  });
 }
 
 export async function refreshWakaTimeHourly(
@@ -240,23 +211,15 @@ export async function refreshWakaTimeHourly(
       }
     }
 
-    await env.DB.prepare("DELETE FROM wakatime_hourly WHERE date = ?")
-      .bind(dateStr)
-      .run();
-
-    for (let hour = 0; hour < 24; hour += 1) {
-      await env.DB.prepare(
+    // The day's 24 hours replace the old ones in one transaction, so a reader
+    // never sees the day half written.
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM wakatime_hourly WHERE date = ?").bind(dateStr),
+      ...perHour.map((slot, hour) => env.DB.prepare(
         `INSERT INTO wakatime_hourly (date, hour, seconds, languages_json)
          VALUES (?, ?, ?, ?)`
-      )
-        .bind(
-          dateStr,
-          hour,
-          Math.round(perHour[hour].seconds),
-          mapJsonField(perHour[hour].languages)
-        )
-        .run();
-    }
+      ).bind(dateStr, hour, Math.round(slot.seconds), mapJsonField(slot.languages))),
+    ]);
   }
 }
 
