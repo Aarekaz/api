@@ -41,6 +41,8 @@ import {
 } from "../utils/query";
 import { directUpload, presign, presignedPut } from "../lib/uploads";
 import { UPLOAD_KINDS } from "../services/upload-token";
+import { applyPhotoVisibility, isPhotoFileName, photoFileName } from "../services/photo-privacy";
+import { photoResponse } from "../lib/private-photos";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -157,6 +159,24 @@ openApiRegistry.registerPath({
   },
 });
 
+openApiRegistry.registerPath({
+  method: "get",
+  path: "/v1/photos/file/{name}",
+  summary: "A photo's file",
+  description: "Hidden (Only you) photos are kept privately and served only here, to the signed-in apps. Published photos are also on the public media domain.",
+  security: authSecurity,
+  responses: { 200: { description: "The image" }, 404: openApiResponse(errorSchema, "No such photo") },
+});
+
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/photos/privacy",
+  summary: "Move photo files to match their visibility",
+  description: "Hidden photos' files go to the private bucket (their public copy removed); published ones get a public copy. Lists what would move; ?apply=1 moves it.",
+  security: authSecurity,
+  responses: okResponses(genericObjectSchema),
+});
+
 // Route handlers
 app.get("/", async (c) => {
   const query = c.req.query();
@@ -219,7 +239,7 @@ app.post("/", async (c) => {
   }
 
   const createdAt = nowIso();
-  await c.env.DB.prepare(
+  const inserted = await c.env.DB.prepare(
     `INSERT INTO photos (title, description, url, thumb_url, width, height, shot_at, camera, lens, settings, location, tags_json, published, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
@@ -242,11 +262,42 @@ app.post("/", async (c) => {
     )
     .run();
 
+  const id = Number(inserted.meta.last_row_id);
+  if (id) await applyPhotoVisibility(c.env, id);
   return c.json({ ok: true, created_at: createdAt }, 201);
 });
 
 // ── Presigned upload (must be before /:id routes) ────────────────────
 app.post("/presign", presign("photo"));
+
+// ── Private files (services/photo-privacy.ts) ────────────────────────
+/** GET /v1/photos/file/:name: a photo's file, for the signed-in apps (hidden ones live only here). */
+app.get("/file/:name", async (c) => {
+  const name = c.req.param("name");
+  if (!isPhotoFileName(name)) return c.json({ error: "No such photo" }, 404);
+  const key = `photos/${name}`;
+  const object = (await c.env.R2_PRIVATE?.get(key)) ?? (await c.env.R2_BUCKET.get(key));
+  if (!object) return c.json({ error: "No such photo" }, 404);
+  return photoResponse(object);
+});
+
+/**
+ * POST /v1/photos/privacy (?apply=1): moves every photo's files to match its
+ * visibility. Without apply, only lists what would move. For photos uploaded
+ * before hidden ones were kept privately.
+ */
+app.post("/privacy", async (c) => {
+  const apply = c.req.query("apply") === "1";
+  const rows = await c.env.DB.prepare("SELECT id, title, url, published FROM photos ORDER BY id").all<{ id: number; title: string | null; url: string | null; published: number | null }>();
+  const moves = [];
+  const unmovable = [];
+  for (const row of rows.results ?? []) {
+    if (row.published === 0 && !photoFileName(c.env, row.url)) unmovable.push({ id: row.id, title: row.title, url: row.url });
+    const move = await applyPhotoVisibility(c.env, row.id, !apply);
+    if (move) moves.push(move);
+  }
+  return c.json({ ok: true, applied: apply, checked: rows.results?.length ?? 0, moves, unmovable });
+});
 app.put("/upload-presigned", presignedPut("photo"));
 
 app.put("/:id", async (c) => {
@@ -287,6 +338,7 @@ app.put("/:id", async (c) => {
     return notFound(c, "Photo");
   }
 
+  await applyPhotoVisibility(c.env, id);
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
@@ -328,6 +380,7 @@ app.patch("/:id", async (c) => {
     return notFound(c, "Photo");
   }
 
+  await applyPhotoVisibility(c.env, id);
   return c.json({ ok: true, updated_at: updatedAt });
 });
 
