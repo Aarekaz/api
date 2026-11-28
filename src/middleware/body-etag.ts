@@ -2,7 +2,7 @@ import type { Context, Next } from "hono";
 
 /**
  * Strong ETags from the reply's own bytes, for the large lists the apps read
- * at launch: documents, links, journal, shelf and posts.
+ * at launch (documents, links, journal, shelf, posts) and Wrapped's summary.
  *
  * The body is still built (these reads have no data version to check first),
  * but a client that already has it gets a 304 with no body, which is where
@@ -17,7 +17,9 @@ import type { Context, Next } from "hono";
  * weak (W/): a 304 means the rows are the same, and the copy the client keeps
  * has an older server_time, which is the safe direction for a sync cursor.
  */
-export const BODY_ETAG_PREFIXES = ["/v1/documents", "/v1/links", "/v1/journal", "/v1/shelf", "/v1/posts"] as const;
+export const BODY_ETAG_PREFIXES = [
+  "/v1/documents", "/v1/links", "/v1/journal", "/v1/shelf", "/v1/posts", "/v1/wrapped/summary",
+] as const;
 
 const CACHE_CONTROL = "private, no-cache";
 const SERVER_TIME = /^\{"server_time":"[^"]*",/;

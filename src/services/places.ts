@@ -268,6 +268,11 @@ export async function listPlaces(env: Env, window: { year?: string; from?: strin
   return results;
 }
 
+/** The first arrival at each place (key → ISO), for telling a new place from one seen before. */
+export function firstArrivalsStatement(env: Env) {
+  return env.DB.prepare(`SELECT ${KEY} AS key, MIN(arrived_at) AS first FROM shown_visits GROUP BY key`);
+}
+
 /** Visits and places per year (in each visit's own local time). */
 export async function visitYears(env: Env) {
   const { results } = await env.DB.prepare(

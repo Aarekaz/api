@@ -596,6 +596,16 @@ async function derivedReply(
   return c.body(found.body, 200, { "Content-Type": "application/json", "Content-Length": String(found.bytes), "X-Derived-Cache": found.source });
 }
 
+/** Trips at this offset, from the same derived_cache row GET /trips keeps (Wrapped reads them too). */
+export async function cachedTrips(env: Env, offset: number): Promise<Array<Record<string, unknown>>> {
+  const found = await derived(env, {
+    name: "trips", params: `offset=${offset}`, data: "places", shape: `${BUILDS.trips}|${SHAPE}|${env.API_VERSION ?? ""}`,
+    build: async () => ({ trips: await listTrips(env, offset) }),
+  });
+  const text = typeof found.body === "string" ? found.body : await new Response(found.body).text();
+  return (JSON.parse(text) as { trips: Array<Record<string, unknown>> }).trips;
+}
+
 const isoOr = (v: string | undefined, fallback: string) => (isDate(v) ? new Date(v!).toISOString() : fallback);
 const YEAR = /^\d{4}$/;
 /** Each item cleaned; one that isn't an object (null, 3, "x") is dropped like any invalid one. */

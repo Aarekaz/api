@@ -26,7 +26,7 @@ const app = new Hono<{ Bindings: Env }>();
 
 const DIARY_TYPES: readonly string[] = SHELF_MEDIA_TYPES;
 
-function normalizeLogRow(row: JsonRecord): JsonRecord {
+export function normalizeLogRow(row: JsonRecord): JsonRecord {
   const { rewatch, published, ...rest } = row;
   return {
     ...rest,

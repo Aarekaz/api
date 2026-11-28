@@ -23,8 +23,13 @@ export interface DerivedSpec {
   name: string;
   /** The query it depends on, already normalized ("offset=-300"); "" for none. */
   params: string;
-  /** The data_versions row whose writes change it. */
-  data: DataName;
+  /**
+   * The data_versions row whose writes change it, or "daily" for an answer
+   * read from tables without a version (Wrapped's past periods): kept for the
+   * rest of the UTC day, then built again, so late syncs and edits show up by
+   * the next day.
+   */
+  data: DataName | "daily";
   /** The code that builds it; change it when the answer's shape or rules change. */
   shape: string;
   build: () => Promise<unknown>;
@@ -69,7 +74,7 @@ const r2Key = (spec: DerivedSpec) => `derived-cache/${spec.name}/${encodeURIComp
 
 /** The answer for `spec`, from the cache when it still holds for the current data. */
 export async function derived(env: Env, spec: DerivedSpec, limits: DerivedLimits = DERIVED_LIMITS): Promise<DerivedAnswer> {
-  const version = await dataVersion(env, spec.data);
+  const version = spec.data === "daily" ? Math.floor(Date.now() / 86_400_000) : await dataVersion(env, spec.data);
   const plain = async (): Promise<DerivedAnswer> => {
     const text = JSON.stringify(await spec.build());
     return { body: text, bytes: encoder.encode(text).length, source: "bypass" };

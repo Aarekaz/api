@@ -29,6 +29,7 @@ import statusRoute from "./routes/status";
 import wakatimeRoute from "./routes/wakatime";
 import githubRoute from "./routes/github";
 import wrappedRoute from "./routes/wrapped";
+import wrappedSummaryRoute from "./routes/wrapped-summary";
 import trafficRoute from "./routes/traffic";
 import refreshRoute from "./routes/refresh";
 import exportRoute from "./routes/export";
@@ -180,6 +181,7 @@ app.route("/v1/blog-images", blogImagesRoute);
 app.route("/v1/status", statusRoute);
 app.route("/v1/wakatime", wakatimeRoute);
 app.route("/v1/github", githubRoute);
+app.route("/v1/wrapped/summary", wrappedSummaryRoute); // before /v1/wrapped/:year
 app.route("/v1/wrapped", wrappedRoute);
 app.route("/v1/traffic", trafficRoute);
 app.route("/v1/refresh", refreshRoute);

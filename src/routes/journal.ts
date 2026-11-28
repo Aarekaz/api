@@ -21,7 +21,7 @@ import {
 } from "../schemas/openapi";
 import { createDocument, deleteDocument, DocumentError, getDocument, saveDocument, type DocumentRow } from "../services/documents";
 import { DAY, dayAtOffset, dayInZone, shiftDay } from "../utils/date";
-import { countWords, recordWords, wordsBetween } from "../services/journal-words";
+import { JOURNAL_WHEN, countWords, recordWords, wordsBetween } from "../services/journal-words";
 
 export { countWords };
 
@@ -206,7 +206,7 @@ async function countLater(c: Parameters<typeof later>[0], row: DocumentRow) {
 
 const iso = (s: string) => new Date(s).toISOString();
 // Migration 0055 indexes this exact expression for live entries (LIVE).
-const WHEN = "COALESCE(json_extract(frontmatter_json, '$.happened_at'), created_at)";
+const WHEN = JOURNAL_WHEN;
 const LIVE = "kind = 'journal' AND deleted_at IS NULL";
 
 // MARK: Days in your time zone

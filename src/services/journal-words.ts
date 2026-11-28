@@ -6,6 +6,8 @@ import type { Env } from "../types/env";
 // is ignored and the entry is counted from its body, as it always was. Before
 // 0055 is applied nothing is stored and everything is counted from bodies.
 
+/** When a journal entry happened (its frontmatter, else when it was made). */
+export const JOURNAL_WHEN = "COALESCE(json_extract(frontmatter_json, '$.happened_at'), created_at)";
 const LIVE_JOURNAL = "d.kind = 'journal' AND d.deleted_at IS NULL";
 
 export function countWords(body: string): number {
