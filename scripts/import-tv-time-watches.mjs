@@ -78,7 +78,8 @@ const once = new Set();
 const byShow = new Map();
 for (const r of episodes) {
   const key = `${r.s_id}:${r.key.startsWith("rewatch-") ? 1 : 0}:${r.season_number}:${r.episode_number}`;
-  if (once.has(key)) continue;
+  // Episode 0 is TV Time's own extra (a recap or a pilot TMDB doesn't number); TMDB has no such episode.
+  if (once.has(key) || !(Number(r.episode_number) > 0)) continue;
   once.add(key);
   const show = byShow.get(r.s_id) ?? { tvdb: Number(r.s_id), name: r.series_name, marks: [] };
   show.marks.push({
@@ -146,7 +147,7 @@ if (!apply) process.exit(0);
 const log = (...parts) => console.log(...parts);
 
 // 1. Warm TMDB details (and episodes) for what's already on the shelf.
-for (const item of shelf.filter((i) => i.type === "movie" || i.type === "show")) {
+for (const item of args.includes("--no-warm") ? [] : shelf.filter((i) => i.type === "movie" || i.type === "show")) {
   try { await api("GET", `/v1/watch/titles/${item.id}`); } catch (error) { log("warm failed", item.title, error.message); }
 }
 log("warmed", shelf.length);

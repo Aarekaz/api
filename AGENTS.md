@@ -139,6 +139,15 @@ and Spotify integrations, app sign-in) use `src/lib/http.ts`:
   document version (0055; ADR 0010).
 - WHOOP collection reads compare `isoInstant(time)` (ISO text of the instant),
   indexed by 0053; never `julianday()` in a read that pages (ADR 0009).
+- Films and shows (`routes/watch.ts`, `services/watch.ts`, 0060): every viewing
+  is a `media_watches` row with its own time (a film each time, a show per
+  episode; `run` counts rewatches, `source_key` is unique so imports never
+  double-count). TMDB's details live in `media_titles` / `media_episodes`,
+  linked to shelf items through `media_links` (not columns on `shelf_items`,
+  which the website reads with `SELECT *`). The cron refreshes a few stale
+  titles per tick, outside `refresh_health` so `/v1/status` doesn't change.
+  Logging moves the shelf item and writes the diary's milestones; imports pass
+  `update_item: false`. TV Time history: `scripts/import-tv-time-watches.mjs`.
 - Work that can finish after the reply goes in `later(c)` (waitUntil); a saved
   link's page is fetched that way, so `POST /v1/links` returns at once with
   `fetched_at: null` and no `body`.
