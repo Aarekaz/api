@@ -109,6 +109,20 @@ and Spotify integrations, app sign-in) use `src/lib/http.ts`:
   Without the table the reads fall back to the old `max-age` hints. When a
   reply's shape changes without a data change, bump `SHAPE` in routes/visits.ts.
   Rows written straight into D1 (wrangler, scripts) don't bump the version.
+  `/footprints` and `/places` are tagged strongly (same bytes for the same
+  version and query); the rest stay weak.
+- List caching: GETs under `/v1/documents`, `/v1/links`, `/v1/journal`,
+  `/v1/shelf`, `/v1/posts` and `/v1/wrapped/summary` get a strong ETag from
+  the body's SHA-256 (`middleware/body-etag.ts`) with `private, no-cache`, and
+  a 304 on a match. The body is still built; only the transfer is saved. The
+  documents list's `server_time` is left out of its tag, which is weak.
+- Wrapped: `GET /v1/wrapped/summary?from=&to=&tz=` is one period of the app's
+  Wrapped from D1 (`services/wrapped-summary.ts`). A past period is kept in
+  `derived_cache` with `data: "daily"` (built again each UTC day); bump
+  `BUILD` in routes/wrapped-summary.ts when its rules change.
+- Photo thumbnails: with the `IMAGES` binding (off in wrangler.toml), an
+  upload also stores `<name>-thumb.webp` beside the original, in the same
+  bucket, so photo-privacy.ts moves it with the photo.
 - Derived answers: `/trips`, `/chapters` and `/footprints` are kept in
   `derived_cache` (0050) until the places version moves, single-flight, large
   ones in R2_PRIVATE (`services/derived-cache.ts`,
