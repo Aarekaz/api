@@ -17,6 +17,7 @@ import { MAX_PATH, createSection, deleteSection, listSections, updateSection } f
 // A folder is named by its path, the string pages already keep in
 // documents.folder. Moving a page into a folder is PUT /v1/documents/:id
 // { folder }. Private: nothing here reaches anuragd.me.
+// Its paths share the Inbox tag (routes/documents.ts), whose guide covers folders.
 
 const app = appErrors(new Hono<{ Bindings: Env }>(), "Folder request");
 
@@ -25,20 +26,26 @@ const Name = z.string().trim().min(1).max(80)
   .refine((s) => s !== "." && s !== "..", "isn't a folder name");
 const Path = z.string().trim().max(MAX_PATH);
 
+// Neither app sends it (they only read it back); the server still takes it.
+const SortOrder = z.number().int().min(0).max(1_000_000).nullish()
+  .openapi({ description: "Not used by the apps; leave it out", deprecated: true });
+
 export const CreateSection = z.object({
-  name: Name,
-  parent: Path.optional(),
-  sort_order: z.number().int().min(0).max(1_000_000).nullish(),
+  name: Name.openapi({ description: "The folder's name, without /" }),
+  parent: Path.optional().openapi({ description: "The parent folder's path; leave it out (or \"\") for the top level. It must exist" }),
+  sort_order: SortOrder,
 }).strict();
 
 export const UpdateSection = z.object({
-  path: Path.min(1),
-  name: Name.optional(),
-  parent: Path.optional(),
-  sort_order: z.number().int().min(0).max(1_000_000).nullish(),
+  path: Path.min(1).openapi({ description: "The folder's current path, like \"Library/Agent Skills\"" }),
+  name: Name.optional().openapi({ description: "A new name (rename)" }),
+  parent: Path.optional().openapi({ description: "A new parent path (move); \"\" is the top level. Its notes and folders come along" }),
+  sort_order: SortOrder,
 }).strict();
 
-export const DeleteSection = z.object({ path: Path.min(1) }).strict();
+export const DeleteSection = z.object({
+  path: Path.min(1).openapi({ description: "The folder's path. Its notes and folders move up into its parent; nothing is deleted" }),
+}).strict();
 
 const SectionSchema = z.object({
   path: z.string(),
@@ -66,6 +73,7 @@ const sectionConflict = { 409: openApiResponse(structuredErrorSchema, "A folder 
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/sections",
+  tags: ["Inbox"],
   summary: "List Writing folders as a tree (depth first)",
   security: authSecurity,
   responses: structuredOkResponses(SectionList),
@@ -74,6 +82,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/sections",
+  tags: ["Inbox"],
   summary: "Create folder",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(CreateSection) },
@@ -83,6 +92,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/sections",
+  tags: ["Inbox"],
   summary: "Rename, nest or reorder a folder",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(UpdateSection) },
@@ -92,6 +102,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/sections",
+  tags: ["Inbox"],
   summary: "Delete a folder (its pages and folders move up into its parent)",
   description: "The path can be sent as ?path= or in a JSON body { path }.",
   security: authSecurity,

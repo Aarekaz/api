@@ -7,6 +7,7 @@ import { parseStoredJson } from "../utils/json";
 import { appErrors, body } from "../lib/http";
 import { normalizeProfile } from "../utils/normalizers";
 import {
+  apiTags,
   authSecurity,
   dateTimeSchema,
   openApiJsonRequestBody,
@@ -33,18 +34,24 @@ const handleMap = z.record(z.string().max(200).nullable());
 /** Every field optional; null clears it. Unknown keys are rejected, not dropped. */
 export const profilePatchSchema = z
   .object({
-    name: z.string().trim().min(1).max(200),
-    bio: text,
-    location: text,
-    email: text,
-    website: text,
-    timezone: text,
-    image_url: text,
-    image_alt: text,
-    avatar_url: z.string().url().nullable(),
-    summary: z.array(z.string().max(1000)).max(40).nullable(),
-    handles: handleMap.nullable(),
-    contact: handleMap.nullable(),
+    name: z.string().trim().min(1).max(200).openapi({ description: "Your name, the heading of the home page and /resume" }),
+    bio: text.openapi({ description: "One line under the name on the home page" }),
+    location: text.openapi({ description: "Where you live, as you'd write it. Shown on the site" }),
+    email: text.openapi({ description: "Shown on the site" }),
+    website: text.openapi({ description: "A link, shown on the site" }),
+    timezone: text.openapi({ description: "An IANA name like \"America/New_York\". Stored, not shown on the site" }),
+    image_url: text.openapi({ description: "Your photo, as a link. Stored as given, not copied" }),
+    image_alt: text.openapi({ description: "What the photo shows, for screen readers. Stored; the site does not show it today" }),
+    avatar_url: z.string().url().nullable().openapi({ description: "Stored, not shown on the site" }),
+    summary: z.array(z.string().max(1000)).max(40).nullable().openapi({
+      description: "The facts under your name on the home page and /resume, one per item: where you work, what you study",
+    }),
+    handles: handleMap.nullable().openapi({
+      description: "Usernames by site: `github`, `linkedin`, `twitter`. Shown as icons. Replaces the whole map, so send every handle you keep",
+    }),
+    contact: handleMap.nullable().openapi({
+      description: "Contact details by name; the site shows `email`. Replaces the whole map, so send every key you keep",
+    }),
   })
   .partial()
   .strict()
@@ -93,7 +100,9 @@ app.patch("/profile", async (c) => {
 export const SHELF_SECTIONS = ["links", "quotes", "visuals", "wallpapers", "books", "movies", "shows"] as const;
 
 export const shelfSectionsPatchSchema = z
-  .object(Object.fromEntries(SHELF_SECTIONS.map((key) => [key, z.boolean()])) as Record<(typeof SHELF_SECTIONS)[number], z.ZodBoolean>)
+  .object(Object.fromEntries(SHELF_SECTIONS.map((key) => [
+    key, z.boolean().openapi({ description: `true shows the ${key} section of anuragd.me/shelf, false hides it` }),
+  ])) as Record<(typeof SHELF_SECTIONS)[number], z.ZodBoolean>)
   .partial()
   .strict()
   .refine((data) => Object.keys(data).length > 0, { message: "At least one section must be provided" });
@@ -140,9 +149,29 @@ app.patch("/shelf-sections", async (c) => {
 
 // MARK: OpenAPI
 
+const TAG = "Site";
+apiTags.push({
+  name: TAG,
+  description: `The owner's controls for what anuragd.me shows: small writes that change only what you send. The app's Site space uses them.
+
+**Profile.** PATCH /v1/site/profile changes the profile fields you send and keeps the rest; null clears a field. Unknown keys \
+are refused (400). \`handles\` and \`contact\` replace their whole map, so GET /v1/profile first and send every key you keep. \
+The reply has the saved profile. The site shows it on the home page and /resume (see the Profile guide for which fields).
+
+**Shelf sections.** PATCH /v1/site/shelf-sections shows (true) or hides (false) sections of anuragd.me/shelf: links, quotes, \
+visuals, wallpapers, books, movies and shows. Only the sections you send change; the rest of the stored shelf config is kept. \
+Hiding a section doesn't touch its items.
+
+**Uploads.** None. \`image_url\` is stored as given.
+
+**Ask first.** Everything here is public, and there is no draft: a change is live on anuragd.me within seconds. Agents must not \
+send these on their own. Show the owner the exact change, get a yes, then confirm a second time before sending it.`,
+});
+
 openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/site/profile",
+  tags: [TAG],
   summary: "Change some profile fields, keeping the rest",
   description: "Every field is optional; null clears it. Unknown keys are rejected.",
   security: authSecurity,
@@ -157,6 +186,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/site/shelf-sections",
+  tags: [TAG],
   summary: "Show or hide sections of anuragd.me/shelf",
   description: "Other keys in the stored shelf config (hiddenItems, future keys) are kept as they were.",
   security: authSecurity,

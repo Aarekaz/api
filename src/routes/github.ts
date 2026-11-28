@@ -7,7 +7,7 @@ import { githubResponseSchema } from "../schemas/responses";
 import { refreshGitHub } from "../services/github";
 import { markRefreshed } from "../services/wakatime";
 import {
-  openApiRegistry,
+  apiTags, openApiRegistry,
   okDateRangeSchema,
   openApiJsonRequestBody,
   okResponses,
@@ -17,10 +17,27 @@ import {
 
 const app = new Hono<{ Bindings: Env }>();
 
+const CODING_TAG = "Coding";
+apiTags.push({
+  name: CODING_TAG,
+  description: `Coding activity, read from GitHub (contributions per day, commits per repo) and WakaTime (time per day and per hour). \
+Nothing here is written by hand: the cron refreshes both on its own, and the refresh and backfill calls only fetch \
+from those services again.
+
+**Public.** anuragd.me reads GET /v1/github, GET /v1/wakatime and GET /v1/wakatime/hourly, so what's stored shows on the site.
+
+**Reading.** Pass \`start\` and \`end\` (YYYY-MM-DD) as query params; without them you get the last 30 days.
+
+**Avoid.** Don't call refresh or backfill on a schedule of your own: the cron already does it. Backfill only to fill a gap \
+the owner asked about (at most 365 days for WakaTime, 370 for GitHub).`,
+});
+
+
 // OpenAPI registrations
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/github",
+  tags: [CODING_TAG],
   summary: "Get GitHub data",
   security: authSecurity,
   responses: okResponses(githubResponseSchema),
@@ -29,6 +46,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/github/refresh",
+  tags: [CODING_TAG],
   summary: "Refresh GitHub data",
   security: authSecurity,
   responses: createdResponses(okDateRangeSchema),
@@ -37,6 +55,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/github/backfill",
+  tags: [CODING_TAG],
   summary: "Backfill GitHub data",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(backfillSchema) },

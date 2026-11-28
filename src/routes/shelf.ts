@@ -7,9 +7,10 @@ import { parseJson, mapJsonField } from "../utils/json";
 import { readBody, idParam, badId, notFound } from "../lib/site-http";
 import { normalizeShelfItem } from "../utils/normalizers";
 import {
+  describedFields,
   shelfItemBaseSchema,
   shelfItemSchema,
-  shelfLogPatchSchema,
+  shelfLogPatchObject,
   shelfLogSchema,
   statusMatchesShelfType,
 } from "../schemas/content";
@@ -29,6 +30,7 @@ import {
   okResponses,
   createdResponses,
   authSecurity,
+  apiTags,
 } from "../schemas/openapi";
 import {
   parseListQuery,
@@ -47,7 +49,7 @@ const app = new Hono<{ Bindings: Env }>();
 
 // A PATCH may also clear a field with null (a rating, a date, a note).
 const clearable = shelfItemBaseSchema.shape;
-const shelfPatchSchema = shelfItemBaseSchema
+const shelfPatchObject = shelfItemBaseSchema
   .extend({
     author: clearable.author.unwrap().nullable(),
     note: clearable.note.unwrap().nullable(),
@@ -61,16 +63,17 @@ const shelfPatchSchema = shelfItemBaseSchema
     progress_unit: clearable.progress_unit.unwrap().nullable(),
     status: clearable.status.unwrap().nullable(),
   })
-  .partial()
-  .refine((data) => Object.keys(data).length > 0, {
+  .partial();
+const shelfPatchSchema = shelfPatchObject.refine((data) => Object.keys(data).length > 0, {
     message: "At least one field must be provided",
   });
 
+// Request-only schemas (no response extends them), so their notes sit on the fields.
 const shelfEnrichSchema = z.object({
-  tmdb_id: z.number().int().positive().optional(),
-  tmdb_media_type: z.enum(["movie", "tv"]).optional(),
-  title: z.string().optional(),
-  year: z.string().optional(),
+  tmdb_id: z.number().int().positive().optional().openapi({ description: "The TMDB id, when you know it. Otherwise the item's title (or `title`) is searched" }),
+  tmdb_media_type: z.enum(["movie", "tv"]).optional().openapi({ description: "movie or tv. Defaults from the item's type" }),
+  title: z.string().optional().openapi({ description: "A title to search instead of the item's" }),
+  year: z.string().optional().openapi({ description: "Release year, to tell remakes apart" }),
 });
 
 const shelfQuerySchema = listQuerySchema.extend({
@@ -84,9 +87,9 @@ const shelfQuerySchema = listQuerySchema.extend({
 });
 
 const shelfDiaryQuerySchema = listQuerySchema.extend({
-  type: z.string().optional(),
-  item_id: z.string().optional(),
-  kind: z.string().optional(),
+  type: z.string().optional().openapi({ description: "book, movie, show or anime, or a comma list" }),
+  item_id: z.string().optional().openapi({ description: "One item's diary" }),
+  kind: z.string().optional().openapi({ description: "Log kinds, comma list: started, progress, finished, paused, dropped, want, rated, note" }),
 });
 
 /**
@@ -154,11 +157,102 @@ function shelfControlParams(data: ShelfItemInput) {
   ];
 }
 
-
 // OpenAPI registrations
+const TAG = "Shelf";
+apiTags.push({
+  name: TAG,
+  description: `The Library and anuragd.me/shelf. Books, movies, shows and anime are tracked here, each with a diary of \
+starts, progress and finishes. The shelf also holds the site's collections: quotes (\`type\` quote), links (article), \
+visuals (visual) and wallpapers (wallpaper).
+
+**Public or private.** An item with \`published: true\` is on anuragd.me/shelf. \`published\` defaults to **true** when it \
+is left out, on POST and on PUT, so always send \`published: false\` (the app does the same). Agents add items hidden. Only \
+the owner puts one on the site, after a two-step confirm: show the item as it will appear, get a yes, then confirm once \
+more. GET /v1/shelf and GET /v1/shelf/{id} return published items only; add \`include_unpublished=1\` to see hidden ones. \
+The website's token may only call GET /v1/shelf, without that flag. Without \`type\` it leaves out anime, so the site never \
+lists anime. The diary (GET /v1/shelf/diary) is not read by the site, but a log moves the item itself (status, progress, \
+rating, dates), and a published item shows that change.
+
+**Order of calls.** 1. Check it isn't already there: GET /v1/shelf?type=book&include_unpublished=1&search=<title>. \
+2. For a movie or show, look it up first with GET /v1/media/search?type=movie&q=<title> (TMDB) and keep its poster and \
+ids. 3. POST /v1/shelf with \`published: false\`; the reply has the new \`id\`. 4. Record what happened with POST \
+/v1/shelf/{id}/log (started, progress, finished, …): it writes the diary and moves the item's status in one call. Prefer a \
+log to setting \`status\` or \`completed_at\` by hand, so the diary has the entry. POST /v1/shelf/{id}/enrich fills a \
+movie or show's poster and TMDB details later.
+
+**Statuses** (they must fit the type). Books: library, reading, completed, want_to_read, paused, dnf. Movies: watched, \
+watching, want_to_watch. Shows and anime: watching, completed, want_to_watch, paused, dropped.
+
+**Uploads.** None. \`image_url\` and the other image fields are stored as the link you give; they are not copied into this \
+API's storage.
+
+**Avoid.** PUT replaces every field: a PUT without \`published\` publishes the item, and one without \`date_added\` clears \
+it. Use PATCH with only the fields you change (null clears a rating, date or note). Only log a finish or rating the owner \
+told you about. DELETE removes the item and its diary for good.`,
+});
+// The request bodies with their field notes. shelfItemBaseSchema is also the base of the shelf
+// response, so the notes are on doc-only copies used here and nowhere else.
+const shelfFieldDocs = {
+  type: "book, movie, show or anime (tracked, with a diary); quote, article, visual or wallpaper (the site's collections)",
+  title: "The work's title. Not needed for a quote",
+  quote: "For a quote: the words",
+  author: "Book author, or who said the quote",
+  source: "For a quote or link: where it is from (a book, a site)",
+  url: "For a link: the page. Otherwise optional",
+  note: "The owner's own note on it",
+  image_url: "Cover or poster: a public image link, stored as given",
+  drawer: "Which shelf section a movie or show sits in on the site: movies or shows. Leave it out otherwise",
+  tags: "A list of strings. Lookups add key:value tags like \"tmdb_id:603\" and \"year:1999\"",
+  date_added: "When it was added (ISO 8601). Defaults to now on POST",
+  published: "true puts the item on anuragd.me/shelf. Defaults to true when left out: agents always send false. Only the owner publishes",
+  status: "Where it stands; must fit the type (see the Shelf guide). Prefer POST /v1/shelf/{id}/log to change it",
+  rating: "Only the owner's own rating, never one from a review site. Read with `rating_scale`",
+  rating_scale: "5 or 10: what `rating` is out of",
+  started_at: "ISO 8601. A log sets it",
+  completed_at: "ISO 8601. A finish log sets it",
+  last_watched_at: "Movies, shows, anime: ISO 8601. A log sets it",
+  progress_current: "Where you are, in `progress_unit`",
+  progress_total: "Pages or episodes in all",
+  progress_unit: "\"page\" for books, \"episode\" for shows and anime (as the app sends)",
+  favorite_rank: "1 is the top favorite; the site orders favorites by it. Owner's choice",
+  showcase: "Puts it forward on the site. Owner's choice",
+  shelf_group: "A named group on the site's bookshelf",
+  display_order: "Its place within the site's shelf",
+  cover_override_url: "A cover to show instead of `image_url`",
+  spine_image_url: "A book spine image for the site's bookshelf",
+  goodreads_id: "Goodreads book id",
+  isbn: "ISBN-10 or ISBN-13",
+  apple_books_id: "Apple Books id",
+  metadata: "Free-form details kept with the item: `tmdb` (from enrich), `seasons` (episode counts), `progress` (season, episode)",
+} as const;
+const shelfBodyDoc = describedFields(shelfItemBaseSchema, shelfFieldDocs);
+const shelfPatchDoc = describedFields(shelfPatchObject, shelfFieldDocs).partial();
+const shelfLogBodyDoc = describedFields(shelfLogSchema, {
+  kind: "What happened. started, progress, finished, paused, dropped and want also move the item's `status` "
+    + "(a finished book becomes completed, a finished movie watched). rated and note only write the diary, plus the rating if given",
+  logged_at: "When it happened (ISO 8601). Defaults to now; give the real date for something in the past",
+  status: "Only to override the status `kind` gives. Must fit the item's type",
+  progress_current: "Where you are now. A finish without it is set to the total",
+  progress_total: "Pages or episodes in all",
+  progress_unit: "\"page\" or \"episode\"",
+  season: "Shows and anime: the season you're on",
+  episode: "Shows and anime: the episode you're on",
+  rating: "Only the owner's own rating. Also sets the item's rating",
+  rating_scale: "5 or 10. Defaults to the item's scale, else 5",
+  note: "A line about it, in the owner's words",
+  rewatch: "A reread or rewatch of something already finished",
+});
+const shelfLogPatchDoc = describedFields(shelfLogPatchObject, {
+  logged_at: "ISO 8601",
+  rating: "null clears it. The item's own rating is not changed",
+  note: "null clears it",
+  rewatch: "A reread or rewatch",
+});
+
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/shelf",
+  tags: [TAG],
   summary: "List shelf items",
   security: authSecurity,
   request: { query: shelfQuerySchema },
@@ -168,6 +262,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/shelf/{id}",
+  tags: [TAG],
   summary: "Get shelf item",
   security: authSecurity,
   responses: okResponses(genericObjectSchema),
@@ -176,33 +271,37 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/shelf",
+  tags: [TAG],
   summary: "Create shelf item",
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(shelfItemSchema) },
+  request: { body: openApiJsonRequestBody(shelfBodyDoc) },
   responses: createdResponses(okCreatedSchema),
 });
 
 openApiRegistry.registerPath({
   method: "put",
   path: "/v1/shelf/{id}",
+  tags: [TAG],
   summary: "Update shelf item",
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(shelfItemSchema) },
+  request: { body: openApiJsonRequestBody(shelfBodyDoc) },
   responses: okResponses(okUpdatedSchema),
 });
 
 openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/shelf/{id}",
+  tags: [TAG],
   summary: "Patch shelf item",
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(shelfPatchSchema) },
+  request: { body: openApiJsonRequestBody(shelfPatchDoc) },
   responses: okResponses(okUpdatedSchema),
 });
 
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/shelf/{id}",
+  tags: [TAG],
   summary: "Delete shelf item",
   security: authSecurity,
   responses: okResponses(okDeletedSchema),
@@ -211,6 +310,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/shelf/{id}/enrich",
+  tags: [TAG],
   summary: "Enrich shelf item with TMDB poster metadata",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(shelfEnrichSchema) },
@@ -220,6 +320,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/shelf/diary",
+  tags: [TAG],
   summary: "The Library diary: every start, update and finish, newest first",
   security: authSecurity,
   request: { query: shelfDiaryQuerySchema },
@@ -229,24 +330,27 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/shelf/{id}/log",
+  tags: [TAG],
   summary: "Log a start, progress, finish, pause, drop or rating; updates the item and writes the diary",
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(shelfLogSchema) },
+  request: { body: openApiJsonRequestBody(shelfLogBodyDoc) },
   responses: createdResponses(genericObjectSchema),
 });
 
 openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/shelf/log/{logId}",
+  tags: [TAG],
   summary: "Fix a diary entry (date, rating, note, rewatch)",
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(shelfLogPatchSchema) },
+  request: { body: openApiJsonRequestBody(shelfLogPatchDoc) },
   responses: okResponses(okUpdatedSchema),
 });
 
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/shelf/log/{logId}",
+  tags: [TAG],
   summary: "Delete a diary entry (the item itself stays)",
   security: authSecurity,
   responses: okResponses(okDeletedSchema),

@@ -7,6 +7,7 @@ import { readBody } from "../lib/site-http";
 import { normalizeFinancePlan } from "../utils/normalizers";
 import { financePlanSchema } from "../schemas/finance";
 import {
+  apiTags,
   openApiRegistry,
   genericObjectSchema,
   okUpdatedSchema,
@@ -72,9 +73,28 @@ const defaultFinancePlan = {
   notes: "",
 };
 
+const TAG = "Finance";
+apiTags.push({
+  name: TAG,
+  description: `Your money plan: one record holding a job offer, a monthly budget (income, pre-tax savings, taxes, spending, \
+accounts and where each paycheck goes) and equity grants. The app's Money section and the dashboard read it. \
+Private: nothing here is shown on anuragd.me.
+
+**One plan, replaced whole.** GET /v1/finance, change what you mean to, and PUT the whole plan back. PUT replaces it: \
+an \`offer\` or \`budget\` left out goes back to the defaults (not to what was stored), \`equity\` left out becomes empty and \
+\`notes\` empty. Never PUT a partial plan. Until a plan is saved, GET returns a default one.
+
+**Amounts** are plain numbers in dollars; monthly unless the field says annual. Percentages are written as 4 for 4%. \
+Ids in \`accounts\`, \`items\` and \`equity\` are short strings you choose; keep the ones already there.
+
+**Avoid.** Changing the plan unless asked: it is the owner's own numbers. It isn't advice and the API doesn't move money. \
+No uploads here.`,
+});
+
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/finance",
+  tags: [TAG],
   summary: "Fetch finance plan",
   security: authSecurity,
   responses: okResponses(genericObjectSchema),
@@ -83,7 +103,8 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "put",
   path: "/v1/finance",
-  summary: "Update finance plan",
+  tags: [TAG],
+  summary: "Replace the finance plan (send all of it)",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(financePlanSchema) },
   responses: okResponses(okUpdatedSchema),

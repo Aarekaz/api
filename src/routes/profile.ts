@@ -13,14 +13,38 @@ import {
   openApiJsonRequestBody,
   okResponses,
   authSecurity,
+  apiTags,
 } from "../schemas/openapi";
 
 const app = new Hono<{ Bindings: Env }>();
 
 // OpenAPI registrations
+// profileSchema is also the base of the profile response schema, so field descriptions
+// live on PATCH /v1/site/profile (routes/site.ts), the write to use.
+const TAG = "Profile";
+apiTags.push({
+  name: TAG,
+  description: `The owner's name, bio and links. Public: this is the top of the home page and /resume on anuragd.me.
+
+**What the site shows.** \`name\`, \`bio\`, \`summary\` (the facts under the name, one per line), \`location\`, \`email\`, \
+\`website\`, \`image_url\`, \`handles\` (github, linkedin, twitter, shown as icons) and \`contact\`. \`timezone\`, \`avatar_url\` \
+and \`image_alt\` are stored and returned, but the site doesn't show them. The website's token reads GET /v1/profile, so \
+every field it returns is readable by the site.
+
+**Order of calls.** GET /v1/profile first. To change some fields, use PATCH /v1/site/profile (see the Site guide): it keeps \
+the fields you leave out, and null clears one. Avoid PUT /v1/profile: it replaces the whole profile, and any field left out \
+is cleared.
+
+**Uploads.** None here. \`image_url\` is stored as given; it is not copied into this API's storage.
+
+**Ask first.** There is no draft or published flag: a write is live on anuragd.me within seconds. Agents must not change the \
+profile on their own. Show the owner the exact change, get a yes, then confirm a second time before sending it.`,
+});
+
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/profile",
+  tags: [TAG],
   summary: "Fetch profile",
   security: authSecurity,
   responses: okResponses(profileResponseSchema),
@@ -29,7 +53,9 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "put",
   path: "/v1/profile",
-  summary: "Update profile",
+  tags: [TAG],
+  summary: "Replace the whole profile",
+  description: "Every field left out is cleared. To change a few fields, use PATCH /v1/site/profile instead.",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(profileSchema) },
   responses: okResponses(okUpdatedSchema),

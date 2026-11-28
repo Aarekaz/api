@@ -143,9 +143,13 @@ export function createSpotifyIntegrationRoute(dependencies: SpotifyIntegrationDe
   return app;
 }
 
+// OAuth plumbing for Music; its guide is in routes/music.ts.
+const TAG = "Music";
+
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/integrations/spotify",
+  tags: [TAG],
   summary: "Get Spotify connection status",
   security: authSecurity,
   responses: structuredOkResponses(spotifyIntegrationStatusResponseSchema),
@@ -154,6 +158,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/integrations/spotify/connect",
+  tags: [TAG],
   summary: "Create a Spotify authorization URL",
   security: authSecurity,
   responses: {
@@ -165,6 +170,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/integrations/spotify/callback",
+  tags: [TAG],
   summary: "Complete Spotify OAuth authorization",
   responses: {
     302: { description: "Fixed OS connection result redirect" },
@@ -174,6 +180,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/integrations/spotify",
+  tags: [TAG],
   summary: "Disconnect Spotify and delete stored tokens",
   security: authSecurity,
   responses: {

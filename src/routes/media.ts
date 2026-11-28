@@ -16,14 +16,18 @@ import { getTmdbTvDetails, normalizeTmdbMediaType, searchTmdbMedia } from "../se
 const app = appErrors(new Hono<{ Bindings: Env }>(), "Media request");
 
 const mediaSearchQuerySchema = z.object({
-  type: z.enum(["movie", "show", "tv"]),
-  q: z.string().min(1),
-  year: z.string().optional(),
+  type: z.enum(["movie", "show", "tv"]).openapi({ description: "movie, or show (tv is the same)" }),
+  q: z.string().min(1).openapi({ description: "The title to look for" }),
+  year: z.string().optional().openapi({ description: "Release year, to tell remakes apart" }),
 });
+
+// TMDB lookups are for adding to the shelf, so they share the Shelf tag (its guide is in routes/shelf.ts).
+const TAG = "Shelf";
 
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/media/search",
+  tags: [TAG],
   summary: "Search TMDB media",
   security: authSecurity,
   request: { query: mediaSearchQuerySchema },
@@ -53,8 +57,10 @@ app.get("/search", async (c) => {
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/media/tv/{id}",
+  tags: [TAG],
   summary: "A TMDB show's seasons and episode counts",
   security: authSecurity,
+  request: { params: z.object({ id: z.string().openapi({ description: "The show's TMDB id, from /v1/media/search" }) }) },
   responses: structuredOkResponses(genericObjectSchema),
 });
 

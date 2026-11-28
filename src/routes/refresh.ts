@@ -14,10 +14,13 @@ import {
 
 const app = new Hono<{ Bindings: Env }>();
 
+const SYSTEM_TAG = "System";
+
 // OpenAPI registration
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/refresh",
+  tags: [SYSTEM_TAG],
   summary: "Refresh all data sources",
   security: authSecurity,
   responses: okResponses(genericObjectSchema),

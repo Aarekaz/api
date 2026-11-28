@@ -11,6 +11,7 @@ import {
   imageUploadSchema,
   okSchema,
   openApiJsonRequestBody,
+  apiTags,
   openApiRegistry,
   openApiResponse,
   structuredCreatedResponses,
@@ -69,26 +70,42 @@ const Attachment = z.object({
 
 const Source = z.enum(["native", "suggestion", "apple_import", "import"]);
 
+// Request fields. Place, StateOfMind, Attachment and Source are also in the
+// response (entrySchema), so their descriptions go on the field here, not on them.
 const Fields = {
-  body: z.string().max(200_000),
-  happened_at: z.string().datetime({ offset: true }),
-  place: Place.nullish(),
-  mood: Mood.nullish(),
-  state_of_mind: StateOfMind.nullish(),
-  attachments: z.array(Attachment).max(24).nullish(),
-  prompt: z.string().trim().max(500).nullish(),
+  body: z.string().max(200_000).openapi({ description: "What you wrote, as plain text or Markdown" }),
+  happened_at: z.string().datetime({ offset: true }).openapi({
+    description: "When the moment happened, ISO time with offset. Defaults to now on create",
+  }),
+  place: Place.nullish().openapi({ description: "Where you were: { name, lat?, lng? }. null clears it" }),
+  mood: Mood.nullish().openapi({
+    description: "The five weather words. Sending only mood sets a matching state_of_mind; send one or the other",
+  }),
+  state_of_mind: StateOfMind.nullish().openapi({
+    description: "How it felt, like Health's State of Mind: valence -1 (very unpleasant) to 1 (very pleasant), labels "
+      + "(feelings), associations (what it was about), kind momentary or daily. mood is worked out from it",
+  }),
+  attachments: z.array(Attachment).max(24).nullish().openapi({
+    description: "What it is about, up to 24: { kind, ref, title?, meta? }. kind photo (ref from POST /v1/journal/photos), "
+      + "workout (ref: the day), place, song (track id or URL), article or link (the URL), note",
+  }),
+  prompt: z.string().trim().max(500).nullish().openapi({ description: "The question the entry answers, when it came from one" }),
 };
 
 const CreateEntry = z.object({
   ...Fields,
   happened_at: Fields.happened_at.optional(),
-  source: Source.optional(),
+  source: Source.optional().openapi({
+    description: "Where it came from: native (written in the app, the default), suggestion, apple_import or import",
+  }),
   /** Its id where it came from (an Apple Journal export file, say): posting it twice returns the first. */
-  external_id: z.string().trim().min(1).max(300).nullish(),
+  external_id: z.string().trim().min(1).max(300).nullish().openapi({
+    description: "Its id where it came from, for imports: posting the same source and external_id again returns the first entry",
+  }),
 });
 
 const UpdateEntry = z.object({
-  version: z.number().int(),
+  version: z.number().int().openapi({ description: "The version you loaded; a stale one is a 409" }),
   ...Fields,
   body: Fields.body.optional(),
   happened_at: Fields.happened_at.optional(),
@@ -401,6 +418,26 @@ app.delete("/:id", async (c) => {
 
 // MARK: OpenAPI
 
+const TAG = "Journal";
+apiTags.push({
+  name: TAG,
+  description: `The owner's journal: a timeline of moments, each with when it happened, where, how it felt and what it was about. \
+Private: nothing here is shown on anuragd.me. Every entry is \`locked\`: the journal is not for agents.
+
+**Don't read or write the journal unless the owner asks you to.** Don't quote it anywhere else.
+
+**Order.** For an import, set \`source\` (import, apple_import) and \`external_id\`: posting the same pair again returns \
+the first entry (200), so a retried import makes no copies. Upload photos first (below), then POST /v1/journal with their refs \
+in \`attachments\`. PATCH /v1/journal/{id} needs the \`version\` you loaded; fields left out keep their value. \
+DELETE is soft and keeps the photos.
+
+**Photos.** POST /v1/journal/photos with the raw bytes as the body and its Content-Type (image/jpeg, image/png, \
+image/heic or image/webp; up to 15 MB). They go to the private bucket (R2_PRIVATE) and are read back only through \
+GET /v1/journal/photos/{name}. Put the returned \`ref\` (journal/…) in \`attachments\` as { kind: "photo", ref }.
+
+**Feelings.** Send \`state_of_mind\` (or only \`mood\`); the other is kept in step.`,
+});
+
 const entrySchema = z.object({
   id: z.string(),
   body: z.string(),
@@ -427,6 +464,7 @@ const conflict = { 409: openApiResponse(structuredErrorSchema, "The entry change
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/journal/photos",
+  tags: [TAG],
   summary: "Upload a private journal photo (up to 15 MB)",
   description: "Put the returned ref in an entry's attachments as { kind: \"photo\", ref }.",
   security: authSecurity,
@@ -447,6 +485,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/journal/photos/{name}",
+  tags: [TAG],
   summary: "Get a journal photo",
   security: authSecurity,
   request: { params: z.object({ name: z.string().openapi({ description: "The ref without its journal/ prefix" }) }) },
@@ -459,6 +498,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/journal/stats",
+  tags: [TAG],
   summary: "Get entries and words per local day, totals and streaks",
   description: "Defaults to the 365 days up to today. Only days you wrote are listed.",
   security: authSecurity,
@@ -489,6 +529,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/journal/on-this-day",
+  tags: [TAG],
   summary: "List entries from earlier years on this month and day",
   security: authSecurity,
   request: { query: z.object({ date: dateSchema.optional(), ...zone }) },
@@ -501,6 +542,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/journal",
+  tags: [TAG],
   summary: "List journal entries, newest first by when they happened",
   security: authSecurity,
   request: {
@@ -518,6 +560,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/journal/{id}",
+  tags: [TAG],
   summary: "Get journal entry",
   security: authSecurity,
   request: { params: entryParams },
@@ -527,6 +570,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/journal",
+  tags: [TAG],
   summary: "Create journal entry",
   description: "Posting the same source and external_id again returns the first entry with 200.",
   security: authSecurity,
@@ -540,6 +584,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/journal/{id}",
+  tags: [TAG],
   summary: "Update journal entry",
   description: "Send the version you loaded. Fields left out keep their value.",
   security: authSecurity,
@@ -550,6 +595,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/journal/{id}",
+  tags: [TAG],
   summary: "Delete journal entry (soft; its photos are kept)",
   security: authSecurity,
   request: { params: entryParams },

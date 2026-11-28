@@ -6,6 +6,8 @@ import { authSecurity, dateTimeSchema, okResponses, openApiRegistry } from "../s
 // GET /v1/sync/status: when each source last synced, for the apps' Settings.
 const app = new Hono<{ Bindings: Env }>();
 
+const SYSTEM_TAG = "System";
+
 async function value<T>(env: Env, sql: string): Promise<T | null> {
   try {
     return (await env.DB.prepare(sql).first<T>()) ?? null;
@@ -17,6 +19,7 @@ async function value<T>(env: Env, sql: string): Promise<T | null> {
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/sync/status",
+  tags: [SYSTEM_TAG],
   summary: "Get when each data source last synced",
   security: authSecurity,
   responses: okResponses(z.object({

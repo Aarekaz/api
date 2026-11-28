@@ -3,6 +3,7 @@ import type { Env } from "../types/env";
 import { dateOnly } from "../utils/date";
 import { limitBody } from "../middleware/body-limit";
 import {
+  apiTags,
   openApiRegistry,
   genericObjectSchema,
   okResponses,
@@ -21,9 +22,19 @@ const HOUR_MS = 60 * 60 * 1000;
 const MAX_BODY_BYTES = 8 * 1024;
 
 // OpenAPI registrations (public — no security)
+const TAG = "Crowd";
+apiTags.push({
+  name: TAG,
+  description: `The visitor count behind the living-world site (aarekaz.me): \`tending\` is people there in the last hour, \
+\`total\` all-time distinct visitors. Public and unauthenticated (the browser calls it), but nothing here is shown on anuragd.me.
+
+**Read only.** Use GET /v1/crowd. Don't POST: a POST records a visit (one per visitor per day), so an agent posting \
+would count itself as a person. Nothing to create, upload or publish here.`,
+});
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/crowd",
+  tags: [TAG],
   summary: "Read the living-world crowd (public)",
   responses: okResponses(genericObjectSchema),
 });
@@ -31,7 +42,9 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/crowd",
+  tags: [TAG],
   summary: "Record an anonymous visit and read the crowd (public)",
+  description: "Body { id } (the browser's own stable id; only its hash is kept). For the site's visitors, not for agents.",
   responses: okResponses(genericObjectSchema),
 });
 

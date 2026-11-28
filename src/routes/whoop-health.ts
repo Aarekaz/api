@@ -12,6 +12,7 @@ import {
 } from "../services/whoop/read-cursor";
 import type { Env } from "../types/env";
 import {
+  apiTags,
   authSecurity,
   errorResponses,
   errorSchema,
@@ -219,6 +220,34 @@ export function createWhoopHealthRoute(dependencies: WhoopHealthDependencies = {
   return app;
 }
 
+// One WHOOP tag for the reads here and the connection plumbing in whoop-integration.ts.
+export const WHOOP_TAG = "WHOOP";
+apiTags.push({
+  name: WHOOP_TAG,
+  description: `What the WHOOP band records: cycles (strain), recoveries, sleeps and workouts, copied from WHOOP into this API. \
+It is health data. Apple Health is under the Health tag.
+
+**Reading.** GET /v1/health/whoop/overview is the quick look: the current cycle, recovery and sleep, recent workouts, 7 and \
+30 day trends, and how the sync is doing (kept for a minute). For more, page through /cycles, /recoveries, /sleeps or /workouts: \
+\`start\` and \`end\` are timestamps with an offset (2026-08-01T00:00:00Z), \`limit\` is 1–100 (default 25), and you pass \
+\`next_cursor\` back as \`cursor\` with the same \`start\` and \`end\` until it is null. Any other query parameter is a 400. \
+GET /v1/health/whoop/workouts/{id} is one workout by its WHOOP id. With WHOOP not connected the lists are empty.
+
+**Read-only.** WHOOP writes this data: its webhooks bring changes in, and a reconcile runs every hour (the last 2 days) and \
+every night (14 days). There is nothing to create or edit here, so don't try to correct a record. If something looks stale, \
+GET /v1/integrations/whoop shows the sync status.
+
+**Plumbing agents don't call.** POST /v1/integrations/whoop/connect, GET /integrations/whoop/callback and \
+POST /integrations/whoop/webhook are WHOOP's sign-in and WHOOP's own calls. POST /v1/integrations/whoop/sync is the Sync button \
+in the dashboard; call it only when the owner asks. DELETE /v1/integrations/whoop (disconnect) and \
+DELETE /v1/integrations/whoop/data (deletes every copied WHOOP record, for good) are the owner's, never an agent's.
+
+**On anuragd.me.** The website reads workouts and cycles and shows a summary of them (movement and cycling) on the home page, \
+/now and the year in review. Its token can also read the overview, recoveries and sleeps, though the site doesn't show them. \
+The profile (name, email, height, weight) is never shown and the site's token can't read it. Keep all of it out of anything \
+shared or published.`,
+});
+
 for (const [resource, responseSchema, summary] of [
   ["cycles", whoopCycleReadSchema, "List WHOOP physiological cycles"],
   ["recoveries", whoopRecoveryReadSchema, "List WHOOP recoveries"],
@@ -228,6 +257,7 @@ for (const [resource, responseSchema, summary] of [
   openApiRegistry.registerPath({
     method: "get",
     path: `/v1/health/whoop/${resource}`,
+    tags: [WHOOP_TAG],
     summary,
     security: authSecurity,
     request: { query: whoopHealthCollectionQuerySchema },
@@ -238,6 +268,7 @@ for (const [resource, responseSchema, summary] of [
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/health/whoop/overview",
+  tags: [WHOOP_TAG],
   summary: "Get the current WHOOP health overview",
   security: authSecurity,
   responses: okResponses(whoopOverviewReadSchema),
@@ -246,6 +277,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/health/whoop/profile",
+  tags: [WHOOP_TAG],
   summary: "Get the connected WHOOP profile",
   security: authSecurity,
   responses: {
@@ -257,6 +289,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/health/whoop/workouts/{workoutId}",
+  tags: [WHOOP_TAG],
   summary: "Get a WHOOP workout",
   security: authSecurity,
   request: { params: whoopWorkoutPathSchema },

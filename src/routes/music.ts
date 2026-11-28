@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import {
-  authSecurity, cursorQuery, dateTimeSchema, musicNowResponseSchema, okResponses, openApiRegistry, pageFields, structuredOkResponses,
+  apiTags, authSecurity, cursorQuery, dateTimeSchema, musicNowResponseSchema, okResponses, openApiRegistry, pageFields, structuredOkResponses,
 } from "../schemas/openapi";
 import { cursorFrom, failWith, limitFrom, list, page } from "../lib/http";
 import { getMusicNow, type MusicNowDependencies } from "../services/spotify/now-playing";
@@ -54,9 +54,27 @@ export function createMusicRoute(dependencies: MusicNowDependencies = {}) {
   return app;
 }
 
+// The Music guide agents read in /openapi.json; routes/spotify-integration.ts shares the tag.
+const TAG = "Music";
+apiTags.push({
+  name: TAG,
+  description: `What you listen to on Spotify: what's playing now, every play kept, and your top artists and tracks. \
+Read-only: plays are kept by the server from Spotify's recently played list, so there is nothing to post.
+
+**Public and private.** GET /v1/music/now is shown on anuragd.me (what's playing). History and top are private.
+
+**Reading.** GET /v1/music/now for now; GET /v1/music/history pages through plays, newest first (\`cursor\`, or \`before\` a time); \
+GET /v1/music/top?days= for the most played over recent days.
+
+**Connecting Spotify** is the owner's to do, in a browser: POST /v1/integrations/spotify/connect returns a Spotify link to sign in \
+with, and Spotify comes back to /integrations/spotify/callback. Don't start, finish or disconnect (DELETE /v1/integrations/spotify) \
+the connection yourself. GET /v1/integrations/spotify says whether it's connected. No uploads here.`,
+});
+
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/music/now",
+  tags: [TAG],
   summary: "Get the currently playing or most recently played Spotify track",
   description: "Served from a ~25 second cache. Returns `disconnected` (HTTP 200) when Spotify is not connected; "
     + "on Spotify rate limits or failures the last cached result (or `idle`) is returned.",
@@ -81,6 +99,7 @@ const musicPlaySchema = z.object({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/music/history",
+  tags: [TAG],
   summary: "List kept Spotify plays, newest first",
   security: authSecurity,
   request: {
@@ -102,6 +121,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/music/top",
+  tags: [TAG],
   summary: "Get top artists and tracks over recent days",
   security: authSecurity,
   request: {

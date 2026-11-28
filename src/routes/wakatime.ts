@@ -25,10 +25,14 @@ import {
 
 const app = new Hono<{ Bindings: Env }>();
 
+const CODING_TAG = "Coding";
+
+
 // OpenAPI registrations
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/wakatime",
+  tags: [CODING_TAG],
   summary: "Get WakaTime data",
   security: authSecurity,
   responses: okResponses(wakatimeResponseSchema),
@@ -37,6 +41,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/wakatime/hourly",
+  tags: [CODING_TAG],
   summary: "Get WakaTime hourly data",
   security: authSecurity,
   responses: okResponses(wakatimeHourlyResponseSchema),
@@ -45,6 +50,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/wakatime/refresh",
+  tags: [CODING_TAG],
   summary: "Refresh WakaTime data",
   security: authSecurity,
   responses: createdResponses(okDateRangeSchema),
@@ -53,6 +59,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/wakatime/hourly/refresh",
+  tags: [CODING_TAG],
   summary: "Refresh WakaTime hourly data",
   security: authSecurity,
   responses: createdResponses(okDateRangeSchema),
@@ -61,6 +68,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/wakatime/backfill",
+  tags: [CODING_TAG],
   summary: "Backfill WakaTime data",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(backfillSchema) },

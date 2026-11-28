@@ -4,6 +4,7 @@ import type { Env } from "../types/env";
 import { dateOnly, addDays } from "../utils/date";
 import { buildWrapped } from "../services/wakatime";
 import {
+  apiTags,
   openApiRegistry,
   genericObjectSchema,
   okResponses,
@@ -13,9 +14,23 @@ import {
 const app = new Hono<{ Bindings: Env }>();
 
 // OpenAPI registrations
+const TAG = "Wrapped";
+apiTags.push({
+  name: TAG,
+  description: `A look back at your coding: WakaTime coding time (by day, language, project and editor) and GitHub activity, \
+for today, the last 7 or 30 days, or a calendar year. Read-only: it is worked out on each request from data the server \
+already syncs, so there is nothing to write.
+
+**Public.** A year's wrapped (GET /v1/wrapped/{year}, e.g. /v1/wrapped/2026) is shown on anuragd.me. Day, week and month \
+are private.
+
+**Reading.** /v1/wrapped/day, /week (last 7 days) and /month (last 30 days) end today (UTC). /v1/wrapped/{year} takes a \
+four-digit year from 2000 to next year. No uploads here.`,
+});
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/wrapped/day",
+  tags: [TAG],
   summary: "Get today's wrapped",
   security: authSecurity,
   responses: okResponses(genericObjectSchema),
@@ -24,6 +39,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/wrapped/week",
+  tags: [TAG],
   summary: "Get this week's wrapped",
   security: authSecurity,
   responses: okResponses(genericObjectSchema),
@@ -32,6 +48,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/wrapped/month",
+  tags: [TAG],
   summary: "Get this month's wrapped",
   security: authSecurity,
   responses: okResponses(genericObjectSchema),
@@ -40,6 +57,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/wrapped/2026",
+  tags: [TAG],
   summary: "Get 2026 wrapped",
   security: authSecurity,
   responses: okResponses(genericObjectSchema),
@@ -48,6 +66,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/wrapped/{year}",
+  tags: [TAG],
   summary: "Get one calendar year's wrapped (2000 to next year)",
   security: authSecurity,
   request: { params: z.object({ year: z.string().regex(/^\d{4}$/).openapi({ example: "2025" }) }) },

@@ -18,6 +18,8 @@ import {
 // Public routes for Sign in with GitHub in the native apps (mounted at /auth/app).
 const app = appErrors(new Hono<{ Bindings: Env }>(), "Sign-in request");
 
+const SYSTEM_TAG = "System";
+
 app.get("/github/start", async (c) => {
   if (!appAuthConfigured(c.env)) return fail(c, 503, "App sign-in is not configured");
   return c.redirect(await startSignIn(c.env, c.req.url), 302);
@@ -54,6 +56,7 @@ signOutRoute.post("/", async (c) => {
 openApiRegistry.registerPath({
   method: "get",
   path: "/auth/app/github/start",
+  tags: [SYSTEM_TAG],
   summary: "Start Sign in with GitHub for the native apps",
   description: "Public. Redirects to GitHub's authorization page.",
   responses: {
@@ -65,6 +68,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/auth/app/github/callback",
+  tags: [SYSTEM_TAG],
   summary: "Complete Sign in with GitHub for the native apps",
   description: "Public. Always redirects back to the app: with `token` and `login` on success, "
     + "or with `error` (not_configured, expired, not_allowed, github).",
@@ -82,6 +86,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/app/signout",
+  tags: [SYSTEM_TAG],
   summary: "Sign this device out",
   description: "Revokes the device session used as the bearer token. The owner API token is never revoked.",
   security: authSecurity,

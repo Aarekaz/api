@@ -5,6 +5,7 @@ import {
   authSecurity,
   structuredOkResponses,
   openApiJsonRequestBody,
+  apiTags,
   openApiRegistry,
   openApiResponse,
   structuredErrorSchema,
@@ -45,6 +46,20 @@ const FileBody = z.object({
 const CaptureBody = z.object({ text: z.string().transform((t) => t.trim()).pipe(z.string().min(1).max(2000)) });
 
 // OpenAPI registrations
+const TAG = "Vault";
+apiTags.push({
+  name: TAG,
+  description: `The owner's Obsidian vault: Markdown files in a private GitHub repo, read and written through this API \
+(every write is a commit). Private: nothing here is shown on anuragd.me.
+
+**Use the Inbox instead.** Notes now live in /v1/documents, and the apps don't call these routes. To keep something, \
+POST /v1/capture, not /v1/vault/capture. Write to the vault only when the owner asks for a vault file by name.
+
+**Order.** GET /v1/vault/tree lists every .md file with its blob \`sha\`. Read one with GET /v1/vault/file?path=, \
+or many at once with POST /v1/vault/blobs { shas } (up to 100). To change a file, PUT /v1/vault/file with the \`sha\` you loaded \
+(null for a new file); a 409 means it changed on GitHub: read it again and redo your edit. There is no delete. \
+POST /v1/vault/capture adds one line under "## Inbox" in Dump.md. No uploads: text files only, up to 1 MB each.`,
+});
 const vaultErrors = {
   404: openApiResponse(structuredErrorSchema, "Not found"),
   409: openApiResponse(structuredErrorSchema, "Conflict (the file changed on GitHub)"),
@@ -56,6 +71,7 @@ const blobSha = z.string().regex(/^[0-9a-f]{40}$/);
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/vault/tree",
+  tags: [TAG],
   summary: "List every file in the vault with its blob sha",
   security: authSecurity,
   responses: {
@@ -70,11 +86,12 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/vault/blobs",
+  tags: [TAG],
   summary: "Read file contents by blob sha",
   security: authSecurity,
   request: {
     body: openApiJsonRequestBody(z.object({
-      shas: z.array(blobSha).min(1).max(MAX_BLOBS_PER_REQUEST),
+      shas: z.array(blobSha).min(1).max(MAX_BLOBS_PER_REQUEST).openapi({ description: "Blob shas from GET /v1/vault/tree, 1 to 100" }),
     })),
   },
   responses: {
@@ -88,6 +105,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/vault/file",
+  tags: [TAG],
   summary: "Read one vault file",
   security: authSecurity,
   request: { query: z.object({ path: z.string().openapi({ description: "Path inside the vault" }) }) },
@@ -100,14 +118,15 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "put",
   path: "/v1/vault/file",
+  tags: [TAG],
   summary: "Create or update one vault file",
   description: "Send the blob sha you loaded (or null for a new file); a stale sha is a 409.",
   security: authSecurity,
   request: {
     body: openApiJsonRequestBody(z.object({
-      path: z.string(),
-      content: z.string().max(MAX_FILE_BYTES),
-      sha: blobSha.nullable().optional(),
+      path: z.string().openapi({ description: "Path inside the vault, ending in .md (no leading /, no . or .. parts)" }),
+      content: z.string().max(MAX_FILE_BYTES).openapi({ description: "The whole file, UTF-8, under 1 MB" }),
+      sha: blobSha.nullable().optional().openapi({ description: "The blob sha you loaded; null for a new file" }),
       message: z.string().optional().openapi({ description: "Commit message, prefixed with anurag.os:" }),
     })),
   },
@@ -120,9 +139,12 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/vault/capture",
+  tags: [TAG],
   summary: "Capture a line into the Inbox section of Dump.md",
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(z.object({ text: z.string().min(1).max(2000) })) },
+  request: { body: openApiJsonRequestBody(z.object({
+    text: z.string().min(1).max(2000).openapi({ description: "One line; line breaks become spaces" }),
+  })) },
   responses: {
     ...structuredOkResponses(z.object({ ok: z.boolean(), sha: z.string() })),
     ...vaultErrors,

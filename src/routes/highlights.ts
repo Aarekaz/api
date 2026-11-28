@@ -21,18 +21,26 @@ const app = appErrors(new Hono<{ Bindings: Env }>(), "Highlights request");
 // The apps use yellow, orange, green and blue; any short name is kept, as before.
 const Color = z.string().trim().max(20);
 
+// The descriptions are part of the Reading guide (routes/links.ts) agents read in /openapi.json.
+const NoteField = z.string().max(5_000).nullish().openapi({ description: "Your note on the passage; null clears it" });
+const ColorField = Color.nullish().openapi({ description: "yellow, orange, green or blue (what the apps show)" });
+
 const CreateHighlight = z.object({
-  document_id: z.string().trim().min(1).max(64),
-  text: z.string().max(5_000).refine((t) => t.trim().length > 0, "text is required"),
-  prefix: z.string().max(200).nullish(),
-  suffix: z.string().max(200).nullish(),
-  note: z.string().max(5_000).nullish(),
-  color: Color.nullish(),
+  document_id: z.string().trim().min(1).max(64).openapi({ description: "The document it is in: a saved link's id, or any note's" }),
+  text: z.string().max(5_000).refine((t) => t.trim().length > 0, "text is required").openapi({
+    description: "The passage exactly as it reads in the article",
+  }),
+  prefix: z.string().max(200).nullish().openapi({
+    description: "A few words just before the passage, so the app can find it again (a PDF's app writes its own pdf:… anchor here)",
+  }),
+  suffix: z.string().max(200).nullish().openapi({ description: "A few words just after the passage" }),
+  note: NoteField,
+  color: ColorField,
 });
 
 const UpdateHighlight = z.object({
-  note: z.string().max(5_000).nullish(),
-  color: Color.nullish(),
+  note: NoteField,
+  color: ColorField,
 });
 
 // OpenAPI registrations
@@ -57,6 +65,7 @@ const idParams = z.object({ id: z.string() });
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/highlights",
+  tags: ["Reading"],
   summary: "List highlights, newest first",
   security: authSecurity,
   request: {
@@ -74,6 +83,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/highlights",
+  tags: ["Reading"],
   summary: "Create highlight",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(CreateHighlight) },
@@ -83,6 +93,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/highlights/{id}",
+  tags: ["Reading"],
   summary: "Update a highlight's note or color",
   description: "Only the fields sent change; null clears.",
   security: authSecurity,
@@ -93,6 +104,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/highlights/{id}",
+  tags: ["Reading"],
   summary: "Delete highlight",
   security: authSecurity,
   request: { params: idParams },

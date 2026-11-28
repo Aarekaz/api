@@ -23,10 +23,13 @@ import {
 
 const app = new Hono<{ Bindings: Env }>();
 
+const SYSTEM_TAG = "System";
+
 // OpenAPI registration
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/export",
+  tags: [SYSTEM_TAG],
   summary: "Export all data",
   security: authSecurity,
   responses: okResponses(genericObjectSchema),

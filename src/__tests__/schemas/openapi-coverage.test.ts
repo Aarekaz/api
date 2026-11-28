@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { Hono } from "hono";
 
-type Operation = { security?: unknown[] };
-type DocumentShape = { paths: Record<string, Record<string, Operation>> };
+type Operation = { security?: unknown[]; tags?: string[] };
+type DocumentShape = { paths: Record<string, Record<string, Operation>>; tags?: { name: string; description: string }[] };
 
 // Served outside the API proper: the index, the badge and the docs themselves.
 const UNDOCUMENTED = new Set(["GET /", "GET /badge", "GET /openapi.json", "GET /docs"]);
@@ -87,5 +87,16 @@ describe("OpenAPI coverage", () => {
     const operation = document.paths[path]?.[method];
     expect(operation).toBeDefined();
     expect(operation?.security).toBeUndefined();
+  });
+
+  it("puts every operation under a tag that has a guide", () => {
+    const tags = document.tags ?? [];
+    expect(new Set(tags.map((t) => t.name)).size).toBe(tags.length);
+    for (const tag of tags) expect(tag.description.length, tag.name).toBeGreaterThan(200);
+    const guided = new Set(tags.map((t) => t.name));
+    const untagged = Object.entries(document.paths).flatMap(([path, methods]) => Object.entries(methods)
+      .filter(([, op]) => !op.tags?.length || op.tags.some((t) => !guided.has(t)))
+      .map(([method]) => `${method.toUpperCase()} ${path}`));
+    expect(untagged).toEqual([]);
   });
 });

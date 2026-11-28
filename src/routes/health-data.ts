@@ -5,7 +5,10 @@ import { readBody } from "../lib/site-http";
 import {
   appleHealthDailySchema,
 } from "../schemas/health";
+import { z } from "zod";
 import {
+  apiTags,
+  dateSchema,
   openApiRegistry,
   healthDailyRangeResponseSchema,
   healthDailyUpdateResponseSchema,
@@ -18,18 +21,46 @@ import {
 const app = new Hono<{ Bindings: Env }>();
 
 // OpenAPI registrations
+const TAG = "Health";
+apiTags.push({
+  name: TAG,
+  description: `Apple Health, one row of daily totals per date: steps, energy, heart, sleep, weight and the rest. \
+WHOOP's data is under the WHOOP tag. Private: nothing here is shown on anuragd.me, and the website's token can't read it. \
+It is health data, so keep it out of anything shared or published.
+
+**Reading.** GET /v1/health?start=&end= (dates, YYYY-MM-DD, inclusive) gives the days newest first. Without them it is the \
+30 days ending today (UTC). A day has only the fields something sent; the rest are null.
+
+**Who writes it.** The iPhone app reads HealthKit and posts the last 30 days (\`source\` "healthkit"), and iOS Shortcuts post \
+days too. Sync writes the data, so agents don't POST or change it unless the owner asks.
+
+**How a POST merges.** POST /v1/health { date, ... } adds to that date's row: a field you send replaces the stored value, and a \
+field you leave out keeps it. A field can't be cleared this way. There is no delete.
+
+**Not this.** GET /health is the API's up check, not health data.`,
+});
+
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/health",
+  tags: [TAG],
   summary: "Get daily health data",
   security: authSecurity,
+  request: {
+    query: z.object({
+      start: dateSchema.optional().openapi({ description: "First date, inclusive. Default 29 days before end" }),
+      end: dateSchema.optional().openapi({ description: "Last date, inclusive. Default today (UTC)" }),
+    }),
+  },
   responses: okResponses(healthDailyRangeResponseSchema),
 });
 
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/health",
+  tags: [TAG],
   summary: "Create/update daily health data",
+  description: "Merges into the date's row: fields sent replace, fields left out are kept. Written by the iPhone's HealthKit sync and iOS Shortcuts.",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(appleHealthDailySchema) },
   responses: createdResponses(healthDailyUpdateResponseSchema),

@@ -14,7 +14,9 @@ const app = new Hono<{ Bindings: Env }>();
 openApiRegistry.registerPath({
   method: "get",
   path: "/health",
+  tags: ["System"],
   summary: "Health check",
+  description: "Whether the API is up, and its version. Not health data: Apple Health is GET /v1/health (Health tag).",
   security: authSecurity,
   responses: okResponses(healthResponseSchema),
 });

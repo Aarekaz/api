@@ -24,6 +24,11 @@ const app = new Hono<{ Bindings: Env }>();
 
 /* ── OpenAPI ─────────────────────────────────────────────────────────── */
 
+// These paths share the Posts tag; its guide is pushed by routes/posts.ts, not here.
+const TAG = "Posts";
+const PUBLIC_AT_ONCE = "Stored in the public bucket: the url works for anyone straight away, before any post is published. "
+  + "A note's photos go to POST /v1/documents/photos instead (private).";
+
 const blogImageBody = {
   description: "PNG, JPEG or WebP image",
   content: {
@@ -36,8 +41,10 @@ const blogImageBody = {
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/blog-images/presign",
+  tags: [TAG],
   summary: "Create a presigned blog image upload token",
-  description: "X-Content-Type defaults to image/png. The token is valid for 5 minutes.",
+  description: "X-Content-Type defaults to image/png. The token is valid for 5 minutes and stores one file (up to 25 MB). "
+    + PUBLIC_AT_ONCE,
   security: authSecurity,
   request: { headers: presignHeadersSchema },
   responses: {
@@ -49,6 +56,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "put",
   path: "/v1/blog-images/upload-presigned",
+  tags: [TAG],
   summary: "Upload a blog image with a presigned token",
   description: "Authenticated by the X-Upload-Token header instead of the bearer token.",
   request: { headers: uploadTokenHeadersSchema, body: blogImageBody },
@@ -65,7 +73,9 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/blog-images/upload",
+  tags: [TAG],
   summary: "Upload a blog image to R2 (up to 5 MB)",
+  description: "The raw bytes as the body, with Content-Type image/png, image/jpeg or image/webp. " + PUBLIC_AT_ONCE,
   security: authSecurity,
   request: { body: blogImageBody },
   responses: {

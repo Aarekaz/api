@@ -2,6 +2,7 @@ import { Hono, type Context } from "hono";
 import type { Env } from "../types/env";
 import { z } from "zod";
 import {
+  apiTags,
   authSecurity,
   dateSchema,
   openApiJsonRequestBody,
@@ -28,6 +29,39 @@ export { cleanJourney, cleanSaved, cleanVisit, findTrips, TRAVEL_MODES, type Awa
 // and every GET carries an ETag from the "places" data version (304 when unchanged).
 // Anything a handler doesn't catch itself is a JSON 500 in the one shape.
 const app = appErrors(new Hono<{ Bindings: Env }>(), "Visits request");
+
+// The Places guide agents read in /openapi.json; routes/location.ts shares the tag.
+const TAG = "Places";
+apiTags.push({
+  name: TAG,
+  description: `Where you've been: visits (stops), journeys (the trips between them), place names, the places you define, \
+and the live location. Private: nothing here is shown on anuragd.me.
+
+**The iPhone app records this, not you.** It posts visits as they happen (\`source: "visit"\`), and imports from photos \
+(\`"photos"\`) and Google Timeline (\`"google-timeline"\`, visits and journeys). It also posts place names it looks up \
+(POST /v1/visits/names). Don't post visits, journeys or names with those sources: the app owns them.
+
+**What you may do by hand.**
+- Correct a visit: PATCH /v1/visits/{id} with \`hidden: true\` (it wasn't a visit), a \`note\`, or \`move_to\` (where you really were). \
+Visits are never deleted; hiding takes one out of every view.
+- Correct how a journey was travelled: PATCH /v1/visits/journeys/{id} { \`mode\` }, one of the listed modes.
+- Define a place (home, work, a gym): GET /v1/visits/saved first. If it is already there, PATCH it rather than adding a \
+second; if not, POST /v1/visits/saved. Visits inside its circle, in its months, count as it. \`kind: "hidden"\` marks somewhere that isn't \
+a place (a road, a car park): its time stops counting.
+- Add a visit the phone missed, only when asked: POST /v1/visits with your own \`source\` (not one of the app's) and a stable \
+\`source_key\`, so sending it again changes nothing.
+
+**Live location.** GET /v1/location/latest is where you are now (Today and the weather read it). The phone's live visits \
+add to it on their own, and an iOS Shortcut may POST /v1/location. Don't post points by hand or backfill history there: \
+past places are visits.
+
+**Order.** Read before you write: GET /v1/visits/day?date= or /v1/visits/at?key= to find the visit's \`id\`. Posting is safe to \
+repeat: a repeat (same \`source_key\`) is ignored, except that it can fill in a missing \`departed_at\`.
+
+**Avoid.** Writing rows straight into D1 (they skip \`local_date\` and the cache version). The \`offset\` query is deprecated: \
+days come from each row's \`local_date\`. A live visit (\`source: "visit"\`) from the last six hours also becomes the latest \
+location, so don't fake one. No uploads here.`,
+});
 
 // OpenAPI registrations. Posted visits and journeys are cleaned, not
 // validated: invalid items are skipped and counted in `valid`.
@@ -103,6 +137,7 @@ const batchResultSchema = z.object({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/visits",
+  tags: [TAG],
   summary: "List visits, newest first, with counts per source",
   security: authSecurity,
   request: {
@@ -123,21 +158,30 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/visits",
+  tags: [TAG],
   summary: "Add visits (up to 500 at a time; safe to repeat)",
   security: authSecurity,
   request: {
     body: openApiJsonRequestBody(z.object({
       visits: z.array(z.object({
-        latitude: z.number().min(-90).max(90),
-        longitude: z.number().min(-180).max(180),
-        arrived_at: z.string(),
-        departed_at: z.string().nullable().optional(),
-        place: z.string().max(300).nullable().optional(),
-        address: z.string().max(300).nullable().optional(),
+        latitude: z.number().min(-90).max(90).openapi({ description: "Where you were" }),
+        longitude: z.number().min(-180).max(180).openapi({ description: "Where you were" }),
+        arrived_at: z.string().openapi({ description: "ISO time you arrived" }),
+        departed_at: z.string().nullable().optional().openapi({
+          description: "ISO time you left; leave it out while still there. Sending the visit again with it fills it in",
+        }),
+        place: z.string().max(300).nullable().optional().openapi({ description: "The place's name, if known" }),
+        address: z.string().max(300).nullable().optional().openapi({ description: "Street address, if known" }),
         city: z.string().max(120).nullable().optional(),
         country: z.string().max(120).nullable().optional(),
-        source: z.string().max(40).openapi({ description: "\"visit\" for live visits from the phone" }),
-        source_key: z.string().max(200).nullable().optional(),
+        source: z.string().max(40).openapi({
+          description: "Where it came from. The app uses \"visit\" (live, from the phone), \"photos\" and \"google-timeline\"; "
+            + "anything added by hand uses its own word",
+        }),
+        source_key: z.string().max(200).nullable().optional().openapi({
+          description: "A stable id for this visit; a repeat with the same key is ignored. "
+            + "Without it the key is source, arrival and rough position",
+        }),
         utc_offset: z.number().int().min(-840).max(840).nullable().optional().openapi({ description: "Minutes from UTC where it happened" }),
       })).min(1).max(500),
     })),
@@ -148,6 +192,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/visits/places",
+  tags: [TAG],
   summary: "List places (grouped visits), most visited first",
   security: authSecurity,
   request: {
@@ -179,6 +224,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/visits/years",
+  tags: [TAG],
   summary: "Count visits and places per year",
   security: authSecurity,
   responses: structuredOkResponses(z.object({
@@ -189,6 +235,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/visits/months",
+  tags: [TAG],
   summary: "Count visits and places per month",
   security: authSecurity,
   request: { query: z.object({ offset }) },
@@ -200,6 +247,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/visits/at",
+  tags: [TAG],
   summary: "List one place's visits, newest first",
   security: authSecurity,
   request: { query: z.object({ key: placeKey }) },
@@ -213,6 +261,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/visits/on-this-day",
+  tags: [TAG],
   summary: "List visits on this month and day in every year",
   security: authSecurity,
   request: {
@@ -227,6 +276,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/visits/days",
+  tags: [TAG],
   summary: "List days that have visits, with counts",
   security: authSecurity,
   request: { query: z.object({ year: z.string().regex(/^\d{4}$/).optional(), offset }) },
@@ -238,6 +288,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/visits/day",
+  tags: [TAG],
   summary: "Get one local day's visits and the journeys between them",
   security: authSecurity,
   request: { query: z.object({ date: dateSchema.openapi({ example: "2024-05-01" }), offset }) },
@@ -258,6 +309,7 @@ const chapterPlace = z.object({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/visits/flights",
+  tags: [TAG],
   summary: "List every flight (journeys flown), oldest first",
   security: authSecurity,
   responses: structuredOkResponses(z.object({ flights: z.array(z.record(z.string(), z.unknown())) })),
@@ -266,6 +318,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/visits/chapters",
+  tags: [TAG],
   summary: "Your eras: where home was each stretch, where the days went, the places you kept going to, how you got around",
   security: authSecurity,
   responses: structuredOkResponses(z.object({
@@ -301,20 +354,23 @@ const savedPlace = z.object({
   updated_at: z.string(),
 });
 const savedPlaceInput = z.object({
-  name: z.string().min(1).max(120),
-  kind: z.enum(["home", "work", "school", "gym", "other", "hidden"]).optional(),
-  latitude: z.number().min(-90).max(90),
-  longitude: z.number().min(-180).max(180),
-  radius_m: z.number().int().min(25).max(2000).optional(),
+  name: z.string().min(1).max(120).openapi({ description: "What you call it: \"Home\", \"Mom's\"" }),
+  kind: z.enum(["home", "work", "school", "gym", "other", "hidden"]).optional().openapi({
+    description: "Default \"other\". \"hidden\" is somewhere that isn't a place (a road, a car park): its time doesn't count",
+  }),
+  latitude: z.number().min(-90).max(90).openapi({ description: "The centre" }),
+  longitude: z.number().min(-180).max(180).openapi({ description: "The centre" }),
+  radius_m: z.number().int().min(25).max(2000).optional().openapi({ description: "Metres around the centre that count as this place. Default 150" }),
   address: z.string().max(300).nullable().optional(),
-  starts_on: z.string().nullable().optional(),
-  ends_on: z.string().nullable().optional(),
-  note: z.string().max(500).nullable().optional(),
+  starts_on: z.string().nullable().optional().openapi({ description: "First month it applies, YYYY-MM; null for always (a home you moved into)" }),
+  ends_on: z.string().nullable().optional().openapi({ description: "Last month it applies, YYYY-MM; null for still" }),
+  note: z.string().max(500).nullable().optional().openapi({ description: "A line of context: \"Dad's office\"" }),
 });
 
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/visits/footprints",
+  tags: [TAG],
   summary: "Your footprints for a heat layer: time spent per ~50 m cell, and every ground journey's path",
   security: authSecurity,
   responses: structuredOkResponses(z.object({
@@ -326,6 +382,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/visits/saved",
+  tags: [TAG],
   summary: "List the places you defined (a centre, a radius, a name, the months it applies)",
   security: authSecurity,
   responses: structuredOkResponses(z.object({ places: z.array(savedPlace) })),
@@ -334,6 +391,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/visits/saved",
+  tags: [TAG],
   summary: "Save a place of your own: visits inside its circle, in its months, count as it",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(savedPlaceInput) },
@@ -343,11 +401,14 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/visits/journeys/{id}",
+  tags: [TAG],
   summary: "Correct how you travelled on a trip (a bus, not a car)",
   security: authSecurity,
   request: {
     params: z.object({ id: z.string() }),
-    body: openApiJsonRequestBody(z.object({ mode: z.string() })),
+    body: openApiJsonRequestBody(z.object({
+      mode: z.string().openapi({ description: `How you travelled, one of: ${TRAVEL_MODES.join(", ")}` }),
+    })),
   },
   responses: structuredOkResponses(z.record(z.string(), z.unknown())),
 });
@@ -355,14 +416,17 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/visits/{id}",
+  tags: [TAG],
   summary: "Correct a visit: hide it (it wasn't a visit), add a note, or move it to where you really were",
   security: authSecurity,
   request: {
     params: z.object({ id: z.string() }),
     body: openApiJsonRequestBody(z.object({
-      hidden: z.boolean().optional(),
-      note: z.string().max(500).nullable().optional(),
-      move_to: z.object({ latitude: z.number(), longitude: z.number() }).optional(),
+      hidden: z.boolean().optional().openapi({ description: "true: it wasn't a visit; it leaves every view but stays stored. false brings it back" }),
+      note: z.string().max(500).nullable().optional().openapi({ description: "Your note on the visit; null clears it" }),
+      move_to: z.object({ latitude: z.number(), longitude: z.number() }).optional().openapi({
+        description: "Where you really were; the old spot is kept as the guess",
+      }),
     })),
   },
   responses: structuredOkResponses(visitSchema),
@@ -371,6 +435,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/visits/saved/{id}",
+  tags: [TAG],
   summary: "Change a place you saved",
   security: authSecurity,
   request: { params: z.object({ id: z.string() }), body: openApiJsonRequestBody(savedPlaceInput.partial()) },
@@ -380,6 +445,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/visits/saved/{id}",
+  tags: [TAG],
   summary: "Remove a place you saved (the visits stay)",
   security: authSecurity,
   request: { params: z.object({ id: z.string() }) },
@@ -389,6 +455,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/visits/trips",
+  tags: [TAG],
   summary: "List trips: days roughly 100 km or more from home, grouped",
   security: authSecurity,
   request: { query: z.object({ offset }) },
@@ -416,6 +483,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/visits/names",
+  tags: [TAG],
   summary: "Save place names looked up on a device (up to 500)",
   description: "Missing fields keep what's already stored. Items with an invalid key are skipped.",
   security: authSecurity,
@@ -423,11 +491,11 @@ openApiRegistry.registerPath({
     body: openApiJsonRequestBody(z.object({
       names: z.array(z.object({
         key: placeKey,
-        name: z.string().max(200).nullable().optional(),
+        name: z.string().max(200).nullable().optional().openapi({ description: "The place's name; left out keeps the stored one" }),
         city: z.string().max(120).nullable().optional(),
         country: z.string().max(120).nullable().optional(),
-        category: z.string().max(80).nullable().optional(),
-        map_item_id: z.string().max(300).nullable().optional(),
+        category: z.string().max(80).nullable().optional().openapi({ description: "Apple Maps' point-of-interest category" }),
+        map_item_id: z.string().max(300).nullable().optional().openapi({ description: "Apple Maps' place ID" }),
       })).min(1).max(500),
     })),
   },
@@ -437,6 +505,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/visits/journeys",
+  tags: [TAG],
   summary: "Trips between visits in a time range (no raw path traces), oldest first",
   security: authSecurity,
   request: { query: z.object({ start: z.string().optional(), end: z.string().optional(), limit: z.coerce.number().int().optional(),
@@ -450,23 +519,26 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/visits/journeys",
+  tags: [TAG],
   summary: "Add journeys (up to 500 at a time; safe to repeat)",
   security: authSecurity,
   request: {
     body: openApiJsonRequestBody(z.object({
       journeys: z.array(z.object({
-        started_at: z.string(),
-        ended_at: z.string().nullable().optional(),
+        started_at: z.string().openapi({ description: "ISO time it began" }),
+        ended_at: z.string().nullable().optional().openapi({ description: "ISO time it ended" }),
         start_lat: z.number().nullable().optional(),
         start_lng: z.number().nullable().optional(),
         end_lat: z.number().nullable().optional(),
         end_lng: z.number().nullable().optional(),
-        distance_m: z.number().nullable().optional(),
-        mode: z.string().max(40).nullable().optional(),
+        distance_m: z.number().nullable().optional().openapi({ description: "Metres travelled" }),
+        mode: z.string().max(40).nullable().optional().openapi({ description: `How you travelled, lowercased: ${TRAVEL_MODES.join(", ")}` }),
         points: z.array(z.array(z.number()).min(2).max(3)).max(2000).nullable().optional()
           .openapi({ description: "[lat, lng] or [lat, lng, t] points" }),
-        source: z.string().max(40),
-        source_key: z.string().max(200).nullable().optional(),
+        source: z.string().max(40).openapi({ description: "Where it came from; the app's import uses \"google-timeline\"" }),
+        source_key: z.string().max(200).nullable().optional().openapi({
+          description: "A stable id; a repeat with the same key is ignored. Without it the key is source, start and mode",
+        }),
         utc_offset: z.number().int().min(-840).max(840).nullable().optional().openapi({ description: "Minutes from UTC where it happened" }),
       })).min(1).max(500),
     })),

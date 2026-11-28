@@ -27,7 +27,11 @@ import { enqueueReconciliation } from "../services/whoop/sync";
 import { whoopWebhookSchema } from "../schemas/whoop";
 import { limitBody } from "../middleware/body-limit";
 
-const syncOptionsSchema = z.object({ full_history: z.boolean().optional() }).strict();
+const syncOptionsSchema = z.object({
+  full_history: z.boolean().optional().openapi({
+    description: "Re-read everything WHOOP has, not just the last 14 days. Slow; only when the owner asks for a full re-sync",
+  }),
+}).strict();
 
 const WHOOP_AUTHORIZE_URL = "https://api.prod.whoop.com/oauth/oauth2/auth";
 const OAUTH_STATE_LIFETIME_MILLISECONDS = 10 * 60 * 1000;
@@ -433,10 +437,17 @@ export function createWhoopIntegrationRoute(dependencies: WhoopIntegrationDepend
   return app;
 }
 
+// The WHOOP tag's guide is in whoop-health.ts. These are the connection's plumbing:
+// agents read the status; connect, callback and webhook are WHOOP's, and
+// sync, disconnect and delete-data are the owner's.
+const TAG = "WHOOP";
+
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/integrations/whoop",
+  tags: [TAG],
   summary: "Get WHOOP connection and sync status",
+  description: "Safe for agents to read: whether WHOOP is connected, when it last synced, and recent sync runs.",
   security: authSecurity,
   responses: structuredOkResponses(whoopIntegrationStatusResponseSchema),
 });
@@ -449,7 +460,9 @@ const whoopWebhookHeadersSchema = z.object({
 openApiRegistry.registerPath({
   method: "post",
   path: "/integrations/whoop/webhook",
+  tags: [TAG],
   summary: "Receive a signed WHOOP webhook",
+  description: "Called by WHOOP only, signed with the app secret. Agents never call it.",
   request: {
     headers: whoopWebhookHeadersSchema,
     body: openApiJsonRequestBody(whoopWebhookSchema),
@@ -466,7 +479,9 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/integrations/whoop/connect",
+  tags: [TAG],
   summary: "Create a WHOOP authorization URL",
+  description: "The start of connecting WHOOP, done by the owner from the dashboard. Agents don't call it.",
   security: authSecurity,
   responses: structuredOkResponses(whoopAuthorizationUrlResponseSchema),
 });
@@ -474,7 +489,10 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/integrations/whoop/sync",
+  tags: [TAG],
   summary: "Queue WHOOP reconciliation",
+  description: "The dashboard's Sync button: re-reads the last 14 days from WHOOP. Call it only when the owner asks; "
+    + "webhooks and the hourly and nightly reconcile keep the data current without it.",
   request: { body: { ...openApiJsonRequestBody(syncOptionsSchema), required: false } },
   security: authSecurity,
   responses: {
@@ -483,14 +501,18 @@ openApiRegistry.registerPath({
   },
 });
 
-for (const [method, path, summary] of [
-  ["delete", "/v1/integrations/whoop", "Revoke WHOOP access and disconnect"],
-  ["delete", "/v1/integrations/whoop/data", "Delete disconnected local WHOOP data"],
+for (const [method, path, summary, description] of [
+  ["delete", "/v1/integrations/whoop", "Revoke WHOOP access and disconnect",
+    "The owner's, from the dashboard. Never an agent's."],
+  ["delete", "/v1/integrations/whoop/data", "Delete disconnected local WHOOP data",
+    "Deletes every WHOOP record copied here, for good, after a disconnect. The owner's, never an agent's."],
 ] as const) {
   openApiRegistry.registerPath({
     method,
     path,
+    tags: [TAG],
     summary,
+    description,
     security: authSecurity,
     responses: structuredOkResponses(okSchema),
   });
@@ -499,7 +521,9 @@ for (const [method, path, summary] of [
 openApiRegistry.registerPath({
   method: "get",
   path: "/integrations/whoop/callback",
+  tags: [TAG],
   summary: "Complete WHOOP OAuth authorization",
+  description: "WHOOP sends the browser here after sign-in. Agents never call it.",
   responses: {
     302: { description: "Fixed OS connection result redirect" },
   },

@@ -174,6 +174,27 @@ export function stoppedStatusFor(type: string, kind: "paused" | "dropped"): stri
   return shelfKind === "show" || shelfKind === "anime" ? "dropped" : null;
 }
 
+/**
+ * A copy of a request schema with OpenAPI descriptions on some fields, for the
+ * docs only (the routes validate with the plain schema). The project, post,
+ * uses, shelf and photo schemas here are also the base of the website's
+ * response schemas (schemas/responses.ts, frozen by the contract test), so
+ * their own fields stay undescribed. It calls .openapi() only when a route
+ * file calls it, after schemas/openapi.ts has extended zod; nothing here calls
+ * it at import.
+ */
+export type FieldDoc = string | { description: string; deprecated?: boolean };
+export function describedFields<T extends z.ZodRawShape>(
+  schema: z.ZodObject<T>,
+  docs: { [K in keyof T]?: FieldDoc }
+) {
+  const shape: z.ZodRawShape = {};
+  for (const [key, doc] of Object.entries(docs) as [keyof T & string, FieldDoc][]) {
+    shape[key] = schema.shape[key].openapi(typeof doc === "string" ? { description: doc } : doc);
+  }
+  return schema.extend(shape);
+}
+
 export const shelfItemBaseSchema = z.object({
   type: z.string().min(1),
   title: z.string().optional(),
@@ -238,13 +259,13 @@ export const shelfLogSchema = z.object({
 });
 
 /** Fixing a diary entry later: its date, rating, note or rewatch mark. */
-export const shelfLogPatchSchema = z
-  .object({
-    logged_at: dateString.optional(),
-    rating: z.number().min(0).max(10).nullable().optional(),
-    note: z.string().max(20000).nullable().optional(),
-    rewatch: z.boolean().optional(),
-  })
+export const shelfLogPatchObject = z.object({
+  logged_at: dateString.optional(),
+  rating: z.number().min(0).max(10).nullable().optional(),
+  note: z.string().max(20000).nullable().optional(),
+  rewatch: z.boolean().optional(),
+});
+export const shelfLogPatchSchema = shelfLogPatchObject
   .refine((data) => Object.keys(data).length > 0, { message: "At least one field must be provided" });
 
 export const photoSchema = z.object({

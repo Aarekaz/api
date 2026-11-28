@@ -26,10 +26,12 @@ const locationPatchSchema = locationSchema.partial().refine((data) => Object.key
   message: "At least one field must be provided",
 });
 
-// OpenAPI registrations
+// OpenAPI registrations. The Places guide (routes/visits.ts) covers these too.
+const TAG = "Places";
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/location",
+  tags: [TAG],
   summary: "List location history",
   security: authSecurity,
   request: {
@@ -56,6 +58,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/location/{id}",
+  tags: [TAG],
   summary: "Get location",
   security: authSecurity,
   responses: okResponses(genericObjectSchema),
@@ -64,7 +67,11 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/location",
+  tags: [TAG],
   summary: "Record location",
+  description: "A point of where you are (private). The latest point is the live location the apps show on Today. "
+    + "A live visit posted by the phone (POST /v1/visits, source \"visit\") also adds one, with source \"visit\"; "
+    + "an iOS Shortcut can post here directly. Don't post made-up points or backfill history here: past places are visits.",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(locationSchema) },
   responses: createdResponses(okCreatedSchema),
@@ -73,6 +80,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "put",
   path: "/v1/location/{id}",
+  tags: [TAG],
   summary: "Update location",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(locationSchema) },
@@ -82,6 +90,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/location/{id}",
+  tags: [TAG],
   summary: "Patch location",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(locationPatchSchema) },
@@ -91,6 +100,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/location/{id}",
+  tags: [TAG],
   summary: "Delete location",
   security: authSecurity,
   responses: okResponses(okDeletedSchema),
@@ -99,6 +109,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/location/latest",
+  tags: [TAG],
   summary: "Get latest location",
   security: authSecurity,
   responses: {

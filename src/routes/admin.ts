@@ -5,12 +5,27 @@ import { failWith, later, ok } from "../lib/http";
 import { backupStatus, backupTick, startBackup } from "../services/d1-backup";
 import { backfillJournalWords } from "../services/journal-words";
 import {
-  authSecurity, dateSchema, dateTimeSchema, openApiRegistry, openApiResponse, structuredErrorResponses, structuredOkResponses,
+  authSecurity, dateSchema, dateTimeSchema, apiTags, openApiRegistry, openApiResponse, structuredErrorResponses, structuredOkResponses,
 } from "../schemas/openapi";
 
 // /v1/admin: the owner's housekeeping. The monthly D1 backup runs from the
 // cron on the 1st; these start one now and say how the latest one is going.
 const app = new Hono<{ Bindings: Env }>();
+
+const SYSTEM_TAG = "System";
+apiTags.push({
+  name: SYSTEM_TAG,
+  description: `The API's own housekeeping: sign-in for the apps, refreshes, sync times, status, backups, export and traffic. \
+Private: nothing here is shown on anuragd.me.
+
+**Reading.** GET /v1/sync/status says when each source last synced. GET /v1/status has the latest Discord status and each \
+refresh job's health. GET /v1/export returns every table at once: use the area's own endpoints when you only need one.
+
+**Avoid.** Don't call POST /v1/refresh, POST /v1/status/refresh or POST /v1/admin/backup unless the owner asks: the \
+every-five-minutes cron refreshes sources, and a D1 backup runs on the 1st of each month. \
+/auth/app/* and POST /v1/app/signout are for the native apps' Sign in with GitHub; agents use their bearer token instead.`,
+});
+
 
 const runSchema = z.object({
   id: dateSchema.openapi({ description: "The run's UTC date, also its folder" }),
@@ -38,6 +53,7 @@ const statusSchema = z.object({ run: runSchema.nullable().openapi({ description:
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/admin/backup",
+  tags: [SYSTEM_TAG],
   summary: "Get the latest D1 backup's progress",
   security: authSecurity,
   responses: structuredOkResponses(statusSchema),
@@ -46,6 +62,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/admin/backup",
+  tags: [SYSTEM_TAG],
   summary: "Start a D1 backup to the private bucket now",
   description: "Copies every table to backups/YYYY-MM-DD/ in the private bucket over the next cron ticks. 409 when one is running or today's exists.",
   security: authSecurity,
@@ -60,6 +77,7 @@ const journalWordsSchema = z.object({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/admin/journal-words",
+  tags: [SYSTEM_TAG],
   summary: "Store word counts for up to 200 journal entries that lack a current one",
   description: "Fills journal_words (migration 0055) for /v1/journal/stats. Safe to repeat: it only writes counts, and a current count is never rewritten. Call until `more` is false.",
   security: authSecurity,

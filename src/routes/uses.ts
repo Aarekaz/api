@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Env } from "../types/env";
 import { nowIso } from "../utils/date";
 import { readBody, idParam, badId, notFound } from "../lib/site-http";
-import { usesItemSchema } from "../schemas/content";
+import { describedFields, usesItemSchema } from "../schemas/content";
 import { usesResponseSchema } from "../schemas/responses";
 import { listQuerySchema } from "../schemas/common";
 import {
@@ -15,6 +15,7 @@ import {
   okResponses,
   createdResponses,
   authSecurity,
+  apiTags,
 } from "../schemas/openapi";
 import {
   parseListQuery,
@@ -35,9 +36,40 @@ const usesPatchSchema = usesItemSchema.partial().refine((data) => Object.keys(da
 });
 
 // OpenAPI registrations
+const TAG = "Uses";
+apiTags.push({
+  name: TAG,
+  description: `The owner's gear and software, on anuragd.me/uses, grouped by \`category\`.
+
+**Public or private.** An item with \`published: true\` is on the site. \`published\` defaults to **true** when it is left \
+out, on POST and on PUT, so always send \`published: false\`. Agents add items hidden. Only the owner puts one on the \
+site, after a two-step confirm: show the item as it will appear, get a yes, then confirm once more.
+
+**Reading.** GET /v1/uses and GET /v1/uses/{id} return published items only; add \`include_unpublished=1\` to see hidden \
+ones. The website's token may only call GET /v1/uses, without that flag.
+
+**Order of calls.** 1. GET /v1/uses?include_unpublished=1 to see the categories in use and check the item isn't there. \
+2. POST /v1/uses with \`published: false\`, reusing an existing category's exact spelling. The reply has no id: find it \
+with GET /v1/uses?include_unpublished=1&search=<name>.
+
+**Uploads.** None. Items have no images.
+
+**Avoid.** PUT replaces every field, and a PUT without \`published\` publishes the item: use PATCH with only the fields \
+you change. DELETE removes the item for good.`,
+});
+// The request body with its field notes (usesItemSchema is also the base of the uses response, so the notes live here).
+const usesBodyDoc = describedFields(usesItemSchema, {
+  category: "The group it is listed under on the site. Reuse an existing category's exact spelling",
+  name: "The product's name, as its maker writes it",
+  url: "The product's page. Optional",
+  note: "A short line on what it is used for, in the owner's words",
+  published: "true puts the item on anuragd.me. Defaults to true when left out: agents always send false. Only the owner publishes",
+});
+
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/uses",
+  tags: [TAG],
   summary: "List uses items",
   security: authSecurity,
   request: { query: listQuerySchema },
@@ -47,6 +79,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/uses/{id}",
+  tags: [TAG],
   summary: "Get uses item",
   security: authSecurity,
   responses: okResponses(genericObjectSchema),
@@ -55,33 +88,37 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/uses",
+  tags: [TAG],
   summary: "Create uses item",
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(usesItemSchema) },
+  request: { body: openApiJsonRequestBody(usesBodyDoc) },
   responses: createdResponses(okCreatedSchema),
 });
 
 openApiRegistry.registerPath({
   method: "put",
   path: "/v1/uses/{id}",
+  tags: [TAG],
   summary: "Update uses item",
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(usesItemSchema) },
+  request: { body: openApiJsonRequestBody(usesBodyDoc) },
   responses: okResponses(okUpdatedSchema),
 });
 
 openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/uses/{id}",
+  tags: [TAG],
   summary: "Patch uses item",
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(usesPatchSchema) },
+  request: { body: openApiJsonRequestBody(usesBodyDoc.partial()) },
   responses: okResponses(okUpdatedSchema),
 });
 
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/uses/{id}",
+  tags: [TAG],
   summary: "Delete uses item",
   security: authSecurity,
   responses: okResponses(okDeletedSchema),

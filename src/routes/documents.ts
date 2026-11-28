@@ -30,6 +30,7 @@ import {
   structuredOkResponses,
   okSchema,
   openApiJsonRequestBody,
+  apiTags,
   openApiRegistry,
   openApiResponse,
 } from "../schemas/openapi";
@@ -47,6 +48,41 @@ import {
 const app = appErrors(new Hono<{ Bindings: Env }>(), "Documents request");
 
 // OpenAPI registrations
+const TAG = "Inbox";
+apiTags.push({
+  name: TAG,
+  description: `Notes and writing (documents), and the Inbox where anything shared or captured lands first. \
+Notes are sorted into folders: GET /v1/sections lists them as a tree, and POST, PATCH and DELETE /v1/sections \
+create, rename or move, and remove one (its notes move up, never deleted). Only notes live in folders. \
+Links have their own routes (Reading), and so do journal entries (Journal).
+
+**Capturing.** For something to keep (a thought, a screenshot, a shared image, a snippet), POST /v1/capture. \
+It makes a new note in the Inbox folder: the first line of \`text\` is the title, the rest the body. \
+A \`text\` that is only a URL is saved to Read later instead (no note). \
+Screenshots and shared images belong here as notes, never in Photography (/v1/photos holds only real photographs for the site).
+
+**Photos.** Upload each image first: POST /v1/documents/photos with the raw bytes as the body and its Content-Type \
+(image/jpeg, image/png, image/heic or image/webp; up to 15 MB). It is stored in the private bucket (R2_PRIVATE) and you get back \
+\`ref\` and \`url\`. Then either pass the refs as \`photos\` to POST /v1/capture (the photos follow any words), or put \
+\`![](url)\` in a note's \`body\`. A note's photos are private: \`url\` is this API's authenticated route, not a public link. \
+Don't use /v1/blog-images or /v1/photos for a note's images.
+
+**Order.** To find something first, GET /v1/search?q= (titles and bodies) or GET /v1/documents?folder=. \
+POST /v1/documents creates a note (\`kind\` note by default; folder "" is unsorted). \
+PUT /v1/documents/{id} saves: send the \`version\` you loaded; a 409 means it changed and carries \`latest\`. \
+Fields left out of a PUT keep their value. Every save keeps the previous version (GET …/versions). \
+DELETE is soft. Move a note to a folder by saving it with a new \`folder\`.
+
+**Visibility.** \`visibility\` is who a document is for: private (only the owner, the default), agents (the owner and their agents), \
+locked (journal entries; never shown to agents), public (published writing). The API doesn't enforce it, so respect it: \
+don't read out or quote private or locked documents unless the owner asks. Leave \`visibility\` out when you write.
+
+**What is public.** Notes are private: nothing in a note is shown on anuragd.me. Only writing (\`kind\` writing) can go on the site, \
+as a post: POST /v1/documents/{id}/publish copies it (and public copies of its photos) to /v1/posts. Writing is always created \
+as a draft. Agents never publish: only the owner publishes, after a two-step confirm. Saving a piece that is already published \
+updates the live post at once, so don't edit published writing unless asked. Deleting a published piece leaves its post up: \
+unpublish first.`,
+});
 const listedDocument = documentSummarySchema.extend({
   body: z.string().optional(),
   frontmatter: z.record(z.unknown()).optional(),
@@ -58,6 +94,7 @@ const notFound = { 404: openApiResponse(structuredErrorSchema, "Document not fou
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/documents",
+  tags: [TAG],
   summary: "List documents, most recently updated first",
   description: "Without include=body the items leave out body and frontmatter. "
     + "With include_deleted=1, deleted documents are included with their deleted_at.",
@@ -82,6 +119,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/documents/{id}",
+  tags: [TAG],
   summary: "Get document",
   security: authSecurity,
   request: { params: idParams },
@@ -91,6 +129,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/documents/{id}/versions",
+  tags: [TAG],
   summary: "List a document's saved versions (latest 100)",
   security: authSecurity,
   request: { params: idParams },
@@ -107,6 +146,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/documents",
+  tags: [TAG],
   summary: "Create document",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(documentInputSchema.omit({ version: true })) },
@@ -116,6 +156,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "put",
   path: "/v1/documents/{id}",
+  tags: [TAG],
   summary: "Save document",
   description: "Optimistic concurrency: send the version you loaded. A stale version is a 409 with the latest document.",
   security: authSecurity,
@@ -136,6 +177,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/documents/{id}",
+  tags: [TAG],
   summary: "Delete document (soft)",
   security: authSecurity,
   request: { params: idParams },
@@ -149,6 +191,7 @@ for (const [action, summary] of [
   openApiRegistry.registerPath({
     method: "post",
     path: `/v1/documents/{id}/${action}`,
+    tags: [TAG],
     summary,
     security: authSecurity,
     request: { params: idParams },
@@ -159,6 +202,7 @@ for (const [action, summary] of [
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/search",
+  tags: [TAG],
   summary: "Full-text search across document titles and bodies",
   security: authSecurity,
   request: {
@@ -185,6 +229,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/documents/photos",
+  tags: [TAG],
   summary: "Upload a private photo for a note (up to 15 MB)",
   description: "Kept in the private bucket. Put ![](url) in the note; publishing a piece of writing copies its photos to the public bucket for the site.",
   security: authSecurity,
@@ -206,6 +251,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/documents/photos/{name}",
+  tags: [TAG],
   summary: "Get a note photo",
   security: authSecurity,
   request: { params: z.object({ name: z.string().openapi({ description: "The ref without its notes/ prefix" }) }) },
@@ -218,12 +264,17 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/capture",
+  tags: [TAG],
   summary: "Capture text or photos to the Inbox (a bare URL is saved to Read later)",
   description: "Send text, photos or both. photos are refs from POST /v1/documents/photos; with photos it is always a note.",
   security: authSecurity,
   request: { body: openApiJsonRequestBody(z.object({
-    text: z.string().max(20000).optional(),
-    photos: z.array(z.string()).max(20).optional().openapi({ description: "Refs from POST /v1/documents/photos (notes/…)" }),
+    text: z.string().max(20000).optional().openapi({
+      description: "The words. The first line becomes the note's title. Only a URL: saved to Read later instead. Needed unless photos are sent",
+    }),
+    photos: z.array(z.string()).max(20).optional().openapi({
+      description: "Refs from POST /v1/documents/photos (notes/…), up to 20. With photos it is always a note",
+    }),
   })) },
   responses: structuredCreatedResponses(z.object({
     ok: z.boolean(),

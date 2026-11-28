@@ -9,6 +9,7 @@ import {
   cursorQuery,
   pageFields,
   openApiJsonRequestBody,
+  apiTags,
   openApiRegistry,
   structuredCreatedResponses,
   structuredOkResponses,
@@ -31,21 +32,27 @@ const STATES = ["unread", "read", "starred", "all", "inbox", "archived"] as cons
 const Tag = z.string().trim().max(40).transform((t) => t.replace(/^#+/, "").toLowerCase());
 
 const UpdateLink = z.object({
-  starred: z.boolean().optional(),
-  tags: z.array(Tag).max(30).optional(),
-  title: z.string().trim().min(1).max(300).optional(),
-  state: z.enum(["inbox", "archived"]).optional(),
-  note: z.string().max(20_000).nullable().optional(),
+  starred: z.boolean().optional().openapi({ description: "Star or unstar it" }),
+  tags: z.array(Tag).max(30).optional().openapi({
+    description: "Replaces the whole list. Lowercase words, no #. Reuse ones from GET /v1/links/tags",
+  }),
+  title: z.string().trim().min(1).max(300).optional().openapi({ description: "A better title than the page gave" }),
+  state: z.enum(["inbox", "archived"]).optional().openapi({
+    description: "archived when finished, inbox to bring it back (the same as POST …/archive and …/unarchive)",
+  }),
+  note: z.string().max(20_000).nullable().optional().openapi({ description: "Your note on the article; null clears it" }),
 });
 
 const Progress = z.object({
-  progress: z.number().min(0).max(1),
-  anchor: z.string().max(500).nullish(),
+  progress: z.number().min(0).max(1).openapi({ description: "How far through, 0 to 1" }),
+  anchor: z.string().max(500).nullish().openapi({ description: "Where in the text, as the app marks it" }),
   /** When you were there (the device's clock), for last-write-wins. Defaults to now. */
-  updated_at: z.string().datetime({ offset: true }).optional(),
-  device: z.string().trim().max(60).nullish(),
+  updated_at: z.string().datetime({ offset: true }).optional().openapi({
+    description: "When you were there (the device's clock), for last write wins. Defaults to now",
+  }),
+  device: z.string().trim().max(60).nullish().openapi({ description: "The device's name" }),
   /** The device's local date, so time read lands on the day you read it. */
-  day: z.string().regex(DAY).nullish(),
+  day: z.string().regex(DAY).nullish().openapi({ description: "The device's local date (YYYY-MM-DD)" }),
   seconds: z.number().min(0).max(86_400).nullish().openapi({
     description: "Active reading seconds since this device's last report. Credited to time read (at most the time since the previous progress plus 30 s, and 10 minutes a report), even when progress didn't move.",
   }),
@@ -68,18 +75,41 @@ const ReadingStats = z.object({
   })).optional().openapi({ description: "With ?day=: minutes per article read that day, in the order last read (the current one last)" }),
 });
 
-const SaveLink = z.object({ url: z.string().min(1).max(4000) });
+const SaveLink = z.object({ url: z.string().min(1).max(4000).openapi({ description: "The page to save. Saving one already saved returns it (and undeletes it)" }) });
 
 /** One error shape, { error: { code, message } } (lib/http.ts). */
 
 
 // OpenAPI registrations
+const TAG = "Reading";
+apiTags.push({
+  name: TAG,
+  description: `Read later (saved links, each kept as a Markdown article) and highlights (passages marked while reading, with notes). \
+Private: nothing here is shown on anuragd.me.
+
+**Saving a link.** POST /v1/links { url }. There is one link per URL: saving it again returns the one already saved \
+(and brings it back if it was deleted), so you don't need to look it up first. The article is read after the reply: \
+\`fetched_at\` is null until then; GET /v1/links/{id} has the \`body\` once it is in. \
+If \`fetch_error\` says the site turned the server away, fetch the page yourself and POST its HTML to /v1/links/{id}/page \
+as { html, url }. POST /v1/capture with only a URL saves it here too.
+
+**Sorting.** PATCH /v1/links/{id} sets \`starred\`, \`tags\` (the whole list), \`title\`, \`note\` or \`state\`. \
+Archive a link when it has been read (POST …/archive); …/unarchive brings it back. Delete is DELETE /v1/documents/{id} (soft).
+
+**Progress.** PUT /v1/links/{id}/progress is the apps' reading position and reading time. Don't write it unless you are a reader app: \
+\`seconds\` count as time read.
+
+**Highlights.** POST /v1/highlights with \`document_id\` (a saved link's id, or any document's), the exact \`text\`, and \
+\`prefix\` / \`suffix\` (a few words either side) so the app can find it again. GET /v1/highlights?document_id= first to \
+avoid marking the same passage twice. PATCH changes only \`note\` and \`color\`.`,
+});
 const idParams = z.object({ id: z.string().openapi({ description: "The link's document id" }) });
 const fullLink = linkSchema.required({ body: true });
 
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/links",
+  tags: [TAG],
   summary: "List saved links, newest first",
   security: authSecurity,
   request: {
@@ -98,6 +128,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/links/tags",
+  tags: [TAG],
   summary: "List link tags with how many links carry each",
   security: authSecurity,
   responses: structuredOkResponses(z.object({
@@ -112,6 +143,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/links",
+  tags: [TAG],
   summary: "Save a link to Read later",
   description: "Fetches the article once and keeps it as Markdown.",
   security: authSecurity,
@@ -122,6 +154,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/links/{id}",
+  tags: [TAG],
   summary: "Get a link with its article",
   security: authSecurity,
   request: { params: idParams },
@@ -131,6 +164,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/links/{id}",
+  tags: [TAG],
   summary: "Update a link (star, tags, title, state, note)",
   security: authSecurity,
   request: { params: idParams, body: openApiJsonRequestBody(UpdateLink) },
@@ -140,6 +174,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/links/{id}/progress",
+  tags: [TAG],
   summary: "Get reading progress",
   security: authSecurity,
   request: { params: idParams },
@@ -149,6 +184,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/links/stats",
+  tags: [TAG],
   summary: "Reading stats: minutes and articles per day, finished per month, favourite sites",
   security: authSecurity,
   request: { query: z.object({
@@ -162,6 +198,7 @@ for (const method of ["put", "post"] as const) {
   openApiRegistry.registerPath({
     method,
     path: "/v1/links/{id}/progress",
+    tags: [TAG],
     summary: method === "put" ? "Save reading progress (last write wins by updated_at)" : "Save reading progress (same as PUT)",
     security: authSecurity,
     request: { params: idParams, body: openApiJsonRequestBody(Progress) },
@@ -180,6 +217,7 @@ for (const [action, summary] of [
   openApiRegistry.registerPath({
     method: "post",
     path: `/v1/links/{id}/${action}`,
+    tags: [TAG],
     summary,
     security: authSecurity,
     request: { params: idParams },
@@ -190,6 +228,7 @@ for (const [action, summary] of [
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/links/{id}/page",
+  tags: [TAG],
   summary: "Read the article from a page the device fetched (for sites that block servers)",
   security: authSecurity,
   request: { params: idParams },
@@ -199,6 +238,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/links/{id}/refetch",
+  tags: [TAG],
   summary: "Fetch the article again",
   security: authSecurity,
   request: { params: idParams },

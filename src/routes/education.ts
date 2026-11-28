@@ -15,6 +15,7 @@ import {
   okResponses,
   createdResponses,
   authSecurity,
+  apiTags,
 } from "../schemas/openapi";
 import {
   parseListQuery,
@@ -37,10 +38,23 @@ const educationPatchSchema = educationSchema
   });
 
 // OpenAPI registrations
+const TAG = "Résumé"; // The guide is in routes/experience.ts.
+
+// Descriptions on a copy: educationSchema is also the base of the response schema, which stays as it is.
+const educationSchemaBody = educationSchema.extend({
+  institution: educationSchema.shape.institution.openapi({ description: "The school, as it should read on /resume" }),
+  degree: educationSchema.shape.degree.openapi({ description: "Like \"B.S.\"" }),
+  field: educationSchema.shape.field.openapi({ description: "What you studied" }),
+  start_date: educationSchema.shape.start_date.openapi({ description: "YYYY-MM-DD. The site shows month and year" }),
+  end_date: educationSchema.shape.end_date.openapi({ description: "YYYY-MM-DD, the expected end if still studying. Left out, the site shows \"Present\"" }),
+  description: educationSchema.shape.description.openapi({ description: "Optional notes, in plain words" }),
+  published: educationSchema.shape.published.openapi({ description: "Send false. The server publishes the row unless this is false; only the owner publishes, after a two-step confirm" }),
+});
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/education",
   summary: "List education",
+  tags: [TAG],
   security: authSecurity,
   request: { query: listQuerySchema },
   responses: okResponses(educationListResponseSchema),
@@ -50,6 +64,7 @@ openApiRegistry.registerPath({
   method: "get",
   path: "/v1/education/{id}",
   summary: "Get education",
+  tags: [TAG],
   security: authSecurity,
   responses: okResponses(genericObjectSchema),
 });
@@ -58,8 +73,9 @@ openApiRegistry.registerPath({
   method: "post",
   path: "/v1/education",
   summary: "Create education",
+  tags: [TAG],
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(educationSchema) },
+  request: { body: openApiJsonRequestBody(educationSchemaBody) },
   responses: createdResponses(okCreatedSchema),
 });
 
@@ -67,8 +83,9 @@ openApiRegistry.registerPath({
   method: "put",
   path: "/v1/education/{id}",
   summary: "Update education",
+  tags: [TAG],
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(educationSchema) },
+  request: { body: openApiJsonRequestBody(educationSchemaBody) },
   responses: okResponses(okUpdatedSchema),
 });
 
@@ -76,8 +93,9 @@ openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/education/{id}",
   summary: "Patch education",
+  tags: [TAG],
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(educationPatchSchema) },
+  request: { body: openApiJsonRequestBody(educationSchemaBody.partial()) },
   responses: okResponses(okUpdatedSchema),
 });
 
@@ -85,6 +103,7 @@ openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/education/{id}",
   summary: "Delete education",
+  tags: [TAG],
   security: authSecurity,
   responses: okResponses(okDeletedSchema),
 });

@@ -6,6 +6,8 @@ import { openApiRegistry, okResponses, authSecurity, dateSchema, dateTimeSchema 
 
 const app = new Hono<{ Bindings: Env }>();
 
+const SYSTEM_TAG = "System";
+
 const yearTrafficSchema = z.object({
   year: z.number(),
   site: z.object({
@@ -26,6 +28,7 @@ const yearTrafficSchema = z.object({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/traffic/{year}",
+  tags: [SYSTEM_TAG],
   summary: "Get a year of site page views and Transit MCP usage from Cloudflare",
   security: authSecurity,
   request: { params: z.object({ year: z.string() }) },

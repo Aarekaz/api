@@ -31,15 +31,27 @@ export const documentSchema = documentSummarySchema.extend({
   frontmatter: z.record(z.unknown()),
 });
 
+// Request only (POST and PUT /v1/documents): its descriptions are part of the Inbox guide.
 export const documentInputSchema = z.object({
   kind: documentKindSchema.optional().openapi({
-    description: "Defaults to note on create. On save, only note, journal and writing can change into each other",
+    description: "Defaults to note on create. On save, only note, journal and writing can change into each other. "
+      + "Use POST /v1/links for a link and POST /v1/journal for a journal entry rather than these kinds",
   }),
-  title: z.string().max(300).optional(),
-  body: z.string().max(1_000_000).optional(),
-  folder: z.string().max(200).optional(),
-  frontmatter: z.record(z.unknown()).optional(),
-  visibility: documentVisibilitySchema.optional().openapi({ description: "Journal entries are always locked" }),
+  title: z.string().max(300).optional().openapi({ description: "Defaults to \"Untitled\" (a journal entry: its date)" }),
+  body: z.string().max(1_000_000).optional().openapi({
+    description: "Markdown. Photos go in as ![](url) with the url from POST /v1/documents/photos",
+  }),
+  folder: z.string().max(200).optional().openapi({
+    description: "The folder's path, like \"Inbox\" or \"Library/Agent Skills\" (see GET /v1/sections). "
+      + "\"\" is unsorted. Writing defaults to \"Writing\"",
+  }),
+  frontmatter: z.record(z.unknown()).optional().openapi({
+    description: "Extra key/values kept with the document. On PUT, sending it replaces what is there (leave it out to keep it)",
+  }),
+  visibility: documentVisibilitySchema.optional().openapi({
+    description: "Who it is for: private (only me, the default), agents (me and my agents), locked (journal). "
+      + "Journal entries are always locked. Leave it out; public is set by publishing, never by hand",
+  }),
   version: z.number().int().optional().openapi({
     description: "Required on PUT: the version you loaded (optimistic concurrency)",
   }),

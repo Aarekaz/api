@@ -18,6 +18,7 @@ import {
   okResponses,
   createdResponses,
   authSecurity,
+  apiTags,
 } from "../schemas/openapi";
 import {
   parseListQuery,
@@ -38,10 +39,19 @@ const skillPatchSchema = skillSchema.partial().refine((data) => Object.keys(data
 });
 
 // OpenAPI registrations
+const TAG = "Résumé"; // The guide is in routes/experience.ts.
+
+// Descriptions on a copy: skillSchema is also the base of the response schema, which stays as it is.
+const skillSchemaBody = skillSchema.extend({
+  category: skillSchema.shape.category.openapi({ description: "The group name, like \"Languages\". One row per category: add to an existing category's items rather than making a second row" }),
+  items: skillSchema.shape.items.openapi({ description: "The skills in this category, one per item, in the order to show. PATCH and PUT replace the whole list" }),
+  published: skillSchema.shape.published.openapi({ description: "Send false. The server publishes the row unless this is false; only the owner publishes, after a two-step confirm" }),
+});
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/skills",
   summary: "List skills",
+  tags: [TAG],
   security: authSecurity,
   request: { query: listQuerySchema },
   responses: okResponses(skillsResponseSchema),
@@ -51,6 +61,7 @@ openApiRegistry.registerPath({
   method: "get",
   path: "/v1/skills/{id}",
   summary: "Get skill",
+  tags: [TAG],
   security: authSecurity,
   responses: okResponses(genericObjectSchema),
 });
@@ -59,8 +70,9 @@ openApiRegistry.registerPath({
   method: "post",
   path: "/v1/skills",
   summary: "Create skill",
+  tags: [TAG],
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(skillSchema) },
+  request: { body: openApiJsonRequestBody(skillSchemaBody) },
   responses: createdResponses(okCreatedSchema),
 });
 
@@ -68,8 +80,9 @@ openApiRegistry.registerPath({
   method: "put",
   path: "/v1/skills/{id}",
   summary: "Update skill",
+  tags: [TAG],
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(skillSchema) },
+  request: { body: openApiJsonRequestBody(skillSchemaBody) },
   responses: okResponses(okUpdatedSchema),
 });
 
@@ -77,8 +90,9 @@ openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/skills/{id}",
   summary: "Patch skill",
+  tags: [TAG],
   security: authSecurity,
-  request: { body: openApiJsonRequestBody(skillPatchSchema) },
+  request: { body: openApiJsonRequestBody(skillSchemaBody.partial()) },
   responses: okResponses(okUpdatedSchema),
 });
 
@@ -86,6 +100,7 @@ openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/skills/{id}",
   summary: "Delete skill",
+  tags: [TAG],
   security: authSecurity,
   responses: okResponses(okDeletedSchema),
 });

@@ -11,6 +11,7 @@ import {
   structuredOkResponses,
   okSchema,
   openApiJsonRequestBody,
+  apiTags,
   openApiRegistry,
   pageFields,
 } from "../schemas/openapi";
@@ -134,6 +135,32 @@ const present = (r: Record<string, unknown>) => ({
 
 // OpenAPI registrations. Input here is cleaned rather than validated: bad
 // values are clamped or dropped (see cleanExercises and cleanWeekdays).
+const TAG = "Training";
+apiTags.push({
+  name: TAG,
+  description: `The strength plan: routines (what to do and when), the sets ticked off each day, and bests and history worked out \
+from them. WHOOP tracks the effort; this is only the plan and the log. Private: nothing here is shown on anuragd.me.
+
+**Routines.** A routine with \`weekdays\` (1 Monday to 7 Sunday) is done on those days. A routine with no weekdays is in the \
+rotation: the rotation goes in \`position\` order and GET /v1/training/next says which one is up today. A routine with no \
+exercises is a rest day.
+
+**Order.** GET /v1/training/routines first and reuse the ids you find. PUT /v1/training/routines/{id} creates or replaces the whole \
+routine: send \`name\`, \`weekdays\`, every exercise and \`position\` each time, because a field left out is not kept \
+(no \`weekdays\` puts it in the rotation, no \`exercises\` makes it a rest day, no \`position\` is 0). For a new routine pick a \
+short id, like \`legs\`. DELETE archives a routine; its sets stay, and a PUT to the same id brings it back.
+
+**Sets.** POST /v1/training/sets ticks one set. A day, exercise name and \`set_number\` make one set, so posting the same three \
+again updates it. Use the exercise name exactly as the routine writes it: the previous time (GET /v1/training/day) and bests \
+(GET /v1/training/bests) are matched by that name. \`day\` is the phone's local date, not the UTC date. \
+DELETE /v1/training/sets with the same three unticks it.
+
+**Bodies are forgiving.** A field of the wrong type is dropped and numbers are clamped (sets 1–20, reps 1–200, rest 0–900 s) \
+instead of failing, so check the routine that comes back.
+
+**Avoid.** Log only sets that were really done, and only when asked. Don't change the plan or pick a day \
+(PUT /v1/training/pick) on the owner's behalf unless asked.`,
+});
 const day = dateSchema.openapi({ example: "2026-11-24" });
 
 const exerciseSchema = z.object({
@@ -174,6 +201,7 @@ const setRowSchema = z.object({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/training/routines",
+  tags: [TAG],
   summary: "List training routines",
   security: authSecurity,
   responses: structuredOkResponses(z.object({ routines: z.array(routineSchema) })),
@@ -182,6 +210,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/training/next",
+  tags: [TAG],
   summary: "Get today's workout in the rotation",
   security: authSecurity,
   request: { query: z.object({ today: day.openapi({ description: "The phone's local date" }) }) },
@@ -198,12 +227,13 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "put",
   path: "/v1/training/pick",
+  tags: [TAG],
   summary: "Pick today's workout (or rest) instead of the plan",
   security: authSecurity,
   request: {
     body: openApiJsonRequestBody(z.object({
       day: day.openapi({ description: "The phone's local date" }),
-      routine_id: z.string().max(64).nullable().openapi({ description: "null puts the day back on the plan" }),
+      routine_id: z.string().max(64).nullable().openapi({ description: "The routine to do that day (a rest day's id to rest). null puts the day back on the plan" }),
     })),
   },
   responses: structuredOkResponses(z.object({ ok: z.boolean(), day: day, routine_id: z.string().nullable() })),
@@ -212,16 +242,20 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "put",
   path: "/v1/training/routines/{id}",
+  tags: [TAG],
   summary: "Create or replace a routine",
   security: authSecurity,
   request: {
     params: z.object({ id: z.string().max(64) }),
     body: openApiJsonRequestBody(z.object({
-      name: z.string().min(1).max(120),
+      name: z.string().min(1).max(120).openapi({ description: "What the routine is called: \"Legs\", \"Push\", \"Rest\"" }),
       weekdays: z.union([z.array(z.number().int().min(1).max(7)), z.string()]).optional()
-        .openapi({ description: "1 (Monday) to 7, as a list or comma-separated" }),
-      exercises: z.array(exerciseSchema.partial().extend({ name: z.string() })).max(40).optional(),
-      position: z.number().optional(),
+        .openapi({ description: "1 (Monday) to 7, as a list or comma-separated. Empty or left out puts the routine in the rotation" }),
+      exercises: z.array(exerciseSchema.partial().extend({ name: z.string() })).max(40).optional().openapi({
+        description: "Every exercise, in order (up to 40); the list replaces the old one. Empty or left out makes a rest day. "
+          + "An exercise without a name is dropped",
+      }),
+      position: z.number().optional().openapi({ description: "Order among routines, and the rotation's order. Left out is 0, so send it on every PUT" }),
     })),
   },
   responses: structuredOkResponses(routineSchema),
@@ -230,6 +264,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/training/routines/{id}",
+  tags: [TAG],
   summary: "Archive a routine (history keeps it)",
   security: authSecurity,
   request: { params: z.object({ id: z.string() }) },
@@ -239,17 +274,18 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/training/sets",
+  tags: [TAG],
   summary: "Tick a set off (or update it)",
   security: authSecurity,
   request: {
     body: openApiJsonRequestBody(z.object({
-      routine_id: z.string().max(64).nullable().optional(),
-      day,
-      exercise: z.string().min(1).max(120),
-      set_number: z.number(),
-      reps: z.number().nullable().optional(),
-      weight: z.number().nullable().optional(),
-      unit: z.string().max(8).nullable().optional(),
+      routine_id: z.string().max(64).nullable().optional().openapi({ description: "The routine the set was done in; it is how the rotation knows what was done last" }),
+      day: day.openapi({ description: "The phone's local date" }),
+      exercise: z.string().min(1).max(120).openapi({ description: "The exercise's name, exactly as the routine writes it" }),
+      set_number: z.number().openapi({ description: "1 for the first set; rounded to a whole number" }),
+      reps: z.number().nullable().optional().openapi({ description: "Reps done (or seconds held, for a hold)" }),
+      weight: z.number().nullable().optional().openapi({ description: "In `unit`; leave it out for a bodyweight move" }),
+      unit: z.string().max(8).nullable().optional().openapi({ description: "\"kg\" or \"lb\"" }),
     })),
   },
   responses: structuredOkResponses(okSchema),
@@ -258,6 +294,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/training/sets",
+  tags: [TAG],
   summary: "Untick one set",
   security: authSecurity,
   request: {
@@ -273,6 +310,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/training/day",
+  tags: [TAG],
   summary: "Get one day's ticked sets and the previous time each exercise was done",
   security: authSecurity,
   request: { query: z.object({ day }) },
@@ -303,6 +341,7 @@ const bestSchema = z.object({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/training/bests",
+  tags: [TAG],
   summary: "Get your best set at each exercise",
   description: "The heaviest set (in kg), and the most reps at that weight; within 0.1 kg counts as the same weight. "
     + "Equal sets: the first one you did. A move with no weight is its most reps.",
@@ -316,6 +355,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/training/history",
+  tags: [TAG],
   summary: "List days you trained",
   security: authSecurity,
   request: {
