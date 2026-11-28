@@ -36,6 +36,20 @@ describe("list indexes (0052)", () => {
     expect(plan(sql, false)).toMatch(/TEMP B-TREE FOR ORDER BY/);
   });
 
+  it.each([
+    ["documents", "SELECT id, title FROM documents WHERE deleted_at IS NULL ORDER BY updated_at DESC, id DESC LIMIT 2001", /documents_updated_id/],
+    ["music history", "SELECT * FROM music_plays WHERE played_at < '9999' ORDER BY played_at DESC, id DESC LIMIT 1001", /music_plays_played_id/],
+  ])("%s sort ties by id in the index (0059)", (_, sql, index) => {
+    const { db } = testD1({ migrations: "all" });
+    const detail = () => (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>).map((r) => r.detail).join(" | ");
+    const withIndex = detail();
+    expect(withIndex).toMatch(index);
+    expect(withIndex).not.toMatch(/TEMP B-TREE/);
+    db.exec("DROP INDEX documents_updated_id; DROP INDEX music_plays_played_id");
+    expect(detail()).toMatch(/TEMP B-TREE FOR LAST TERM OF ORDER BY/);
+    db.close();
+  });
+
   it("flights seek by mode instead of scanning every journey", () => {
     const sql = "SELECT * FROM journeys WHERE mode = 'flying' ORDER BY started_at";
     expect(plan(sql, true)).toMatch(/SEARCH journeys USING INDEX journeys_mode_started \(mode=\?\)/);
