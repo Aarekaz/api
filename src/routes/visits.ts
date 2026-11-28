@@ -555,6 +555,7 @@ openApiRegistry.registerPath({
 // write, which the phone and the imports don't send.)
 
 const SHAPE = 3; // bump when a reply's shape changes without a data change
+const STRONG = /\/(footprints|places)$/;
 app.use("*", async (c, next) => {
   if (c.req.method !== "GET" && c.req.method !== "HEAD") return next();
   const url = new URL(c.req.url);
@@ -562,7 +563,10 @@ app.use("*", async (c, next) => {
   const version = await dataVersion(c.env, "places");
   if (version === null) return next();
   const query = [...url.searchParams.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join("&");
-  const tag = `W/"places-${version}-${shortHash(`${SHAPE}|${c.env.API_VERSION ?? ""}|${url.pathname}?${query}`)}"`;
+  // Footprints (kept in derived_cache) and places are the same bytes for the same version and query,
+  // so their tag is strong; the rest stay weak.
+  const weak = STRONG.test(url.pathname) ? "" : "W/";
+  const tag = `${weak}"places-${version}-${shortHash(`${SHAPE}|${c.env.API_VERSION ?? ""}|${url.pathname}?${query}`)}"`;
   tagged.add(c.req.raw);
   const unchanged = notModified(c, tag);
   if (unchanged) return unchanged;

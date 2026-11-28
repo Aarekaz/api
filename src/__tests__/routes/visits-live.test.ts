@@ -128,7 +128,7 @@ describe("conditional GETs", () => {
     await post([stop("2026-11-24T16:37:32Z")]);
     const first = await get(places);
     const tag = first.headers.get("ETag")!;
-    expect(tag).toMatch(/^W\/"places-1-/);
+    expect(tag).toMatch(/^"places-1-/); // strong: the same bytes for the same version and query
     expect(first.headers.get("Cache-Control")).toBe("private, no-cache");
     const again = await get(places, { "If-None-Match": tag });
     expect(again.status).toBe(304);
@@ -140,6 +140,19 @@ describe("conditional GETs", () => {
     const changed = await get(places, { "If-None-Match": tag });
     expect(changed.status).toBe(200);
     expect(changed.headers.get("ETag")).not.toBe(tag);
+  });
+
+  it("tags footprints strongly and the other reads weakly", async () => {
+    const { post, get } = setup();
+    await post([stop("2026-11-24T16:37:32Z")]);
+    const first = await get("/v1/visits/footprints");
+    const tag = first.headers.get("ETag")!;
+    expect(tag).toMatch(/^"places-1-/);
+    const again = await get("/v1/visits/footprints", { "If-None-Match": tag });
+    expect(again.status).toBe(304);
+    // An edge that weakens the tag (W/) still gets its 304.
+    expect((await get("/v1/visits/footprints", { "If-None-Match": `W/${tag}` })).status).toBe(304);
+    expect((await get("/v1/visits/years")).headers.get("ETag")).toMatch(/^W\/"places-1-/);
   });
 
   it("gives each query its own tag", async () => {

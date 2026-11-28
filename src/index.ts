@@ -3,6 +3,7 @@ import type { Env } from "./types/env";
 import { nowIso } from "./utils/date";
 import { requireAuth } from "./middleware/auth";
 import { requestLogger } from "./middleware/request-logger";
+import { bodyEtag } from "./middleware/body-etag";
 import { getOpenApiDocument } from "./schemas/openapi";
 import { getSwaggerUiHtml } from "./utils/swagger";
 import { handleScheduled } from "./scheduled";
@@ -159,6 +160,8 @@ app.route("/health", healthRoute);
 app.use("/v1/*", requireAuth);
 // After writes the website shows, refresh those pages on anuragd.me.
 app.use("/v1/*", siteRefresh);
+// Strong ETags (304s) on the big lists the apps read at launch (middleware/body-etag.ts).
+app.use("/v1/*", bodyEtag);
 app.route("/", whoopIntegrationRoute);
 app.route("/", spotifyIntegrationRoute);
 app.route("/v1/profile", profileRoute);
