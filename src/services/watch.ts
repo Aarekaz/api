@@ -725,10 +725,14 @@ export async function recordPick(env: Env, itemId: number, outcome: (typeof PICK
   return { id: row?.id ?? null, item_id: itemId, outcome, picked_at: at };
 }
 
-/** Recent picks, so the picker can leave out what it offered lately. */
-export async function recentPicks(env: Env, limit = 30) {
-  const { results } = await env.DB.prepare("SELECT id, item_id, outcome, picked_at FROM media_picks ORDER BY picked_at DESC, id DESC LIMIT ?")
-    .bind(limit).all<{ id: number; item_id: number; outcome: string; picked_at: string }>();
+/** Recent picks, so the picker can leave out what it offered lately (or what you passed on, with `outcome`). */
+export async function recentPicks(env: Env, options: { limit?: number; outcome?: string; days?: number } = {}) {
+  const since = options.days ? new Date(Date.now() - options.days * DAY_MS).toISOString() : "";
+  const { results } = await env.DB.prepare(
+    `SELECT id, item_id, outcome, picked_at FROM media_picks
+     WHERE picked_at >= ? AND (? IS NULL OR outcome = ?) ORDER BY picked_at DESC, id DESC LIMIT ?`,
+  ).bind(since, options.outcome ?? null, options.outcome ?? null, options.limit ?? 30)
+    .all<{ id: number; item_id: number; outcome: string; picked_at: string }>();
   return results ?? [];
 }
 

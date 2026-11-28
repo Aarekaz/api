@@ -92,8 +92,13 @@ app.get("/search", async (c) => {
   return list(c, found.flat().sort((a, b) => b.score - a.score), null);
 });
 
-register("get", "/v1/watch/picks", "What the picker offered lately");
-app.get("/picks", async (c) => list(c, await recentPicks(c.env), null));
+const picksQuery = z.object({
+  outcome: z.enum(PICK_OUTCOMES).optional(),
+  days: z.coerce.number().int().min(1).max(365).optional().openapi({ description: "Only the last N days" }),
+  limit: z.coerce.number().int().min(1).max(500).default(30),
+});
+register("get", "/v1/watch/picks", "What the picker offered lately (or what you passed on: outcome=not_tonight)", { query: picksQuery });
+app.get("/picks", async (c) => list(c, await recentPicks(c.env, parse(picksQuery, c.req.query())), null));
 
 // ---- Writes
 

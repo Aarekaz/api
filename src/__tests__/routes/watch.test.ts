@@ -197,6 +197,10 @@ describe("watch: stats and picks", () => {
     expect((await send("POST", "/v1/watch/picks", { item_id: film, outcome: "not_tonight" })).status).toBe(201);
     expect((await send("POST", "/v1/watch/picks", { item_id: film, outcome: "maybe" })).status).toBe(400);
     expect((await read(await call("/v1/watch/picks"))).items[0]).toMatchObject({ item_id: film, outcome: "not_tonight" });
+    await send("POST", "/v1/watch/picks", { item_id: film, outcome: "picked" });
+    const passes = await read(await call("/v1/watch/picks?outcome=not_tonight&days=14"));
+    expect(passes.items.map((p: Json) => p.outcome)).toEqual(["not_tonight"]);
+    expect((await call("/v1/watch/picks?days=999")).status).toBe(400);
   });
 
   it("leaves the website's shelf reply alone (published only, same fields)", async () => {
