@@ -159,7 +159,7 @@ export async function getTmdbTvDetails(env: Env, tmdbId: number): Promise<TmdbTv
   };
 }
 
-async function tmdbFetch<T>(url: URL, env: Env): Promise<T> {
+async function tmdbFetch<T>(url: URL, env: Env, options: { notFound?: boolean } = {}): Promise<T> {
   const headers = new Headers({ accept: "application/json" });
   if (env.TMDB_ACCESS_TOKEN) {
     headers.set("Authorization", `Bearer ${env.TMDB_ACCESS_TOKEN}`);
@@ -170,6 +170,8 @@ async function tmdbFetch<T>(url: URL, env: Env): Promise<T> {
   }
 
   const response = await fetch(url, { headers });
+  // Only the watch tracker asks to tell "no such title" from "TMDB is down".
+  if (options.notFound && response.status === 404) throw new TmdbNotFound("TMDB has no such title");
   if (!response.ok) {
     const body = await response.text().catch(() => "");
     console.error("[tmdb] request failed", {
@@ -247,3 +249,173 @@ function dateYear(value: string | undefined): string | null {
   const match = /^(\d{4})/.exec(value ?? "");
   return match ? match[1] : null;
 }
+
+// ---- Full details for the watch tracker (services/watch.ts) ----
+
+export type TmdbEpisodeRef = { season_number: number; episode_number: number; air_date?: string; name?: string };
+
+/** Everything media_titles keeps about a film or show. */
+export type TmdbTitle = {
+  media_type: TmdbMediaType;
+  tmdb_id: number;
+  title: string;
+  original_title?: string;
+  year?: string;
+  release_date?: string;
+  runtime?: number;
+  genres: string[];
+  overview?: string;
+  poster_path?: string;
+  backdrop_path?: string;
+  status?: string;
+  seasons: TmdbTvSeason[];
+  next_episode?: TmdbEpisodeRef;
+  last_air_date?: string;
+  imdb_id?: string;
+  tvdb_id?: number;
+};
+
+export type TmdbEpisode = {
+  season: number;
+  episode: number;
+  name?: string;
+  air_date?: string;
+  runtime?: number;
+  still_path?: string;
+  overview?: string;
+};
+
+/** A film's or show's details in one call (with its outside ids), or null when TMDB has no such title. */
+export async function getTmdbTitle(env: Env, type: TmdbMediaType, tmdbId: number): Promise<TmdbTitle | null> {
+  const url = new URL(`${TMDB_API_BASE_URL}/${type}/${tmdbId}`);
+  url.searchParams.set("language", "en-US");
+  url.searchParams.set("append_to_response", "external_ids");
+  applyApiKey(url, env);
+
+  type Raw = {
+    id?: number;
+    title?: string;
+    name?: string;
+    original_title?: string;
+    original_name?: string;
+    release_date?: string;
+    first_air_date?: string;
+    runtime?: number | null;
+    episode_run_time?: number[];
+    genres?: { name?: string }[];
+    overview?: string;
+    poster_path?: string | null;
+    backdrop_path?: string | null;
+    status?: string;
+    imdb_id?: string | null;
+    seasons?: { season_number?: number; episode_count?: number; name?: string; air_date?: string | null }[];
+    next_episode_to_air?: { season_number?: number; episode_number?: number; air_date?: string | null; name?: string } | null;
+    last_air_date?: string | null;
+    external_ids?: { imdb_id?: string | null; tvdb_id?: number | null };
+  };
+  let raw: Raw;
+  try {
+    raw = await tmdbFetch<Raw>(url, env, { notFound: true });
+  } catch (error) {
+    if (error instanceof TmdbNotFound) return null;
+    throw error;
+  }
+  if (!raw?.id) return null;
+  const release = raw.release_date || raw.first_air_date || undefined;
+  const runtime = raw.runtime ?? raw.episode_run_time?.find((minutes) => minutes > 0) ?? undefined;
+  const seasons = (raw.seasons ?? [])
+    .filter((season) => Number(season.season_number) > 0 && Number(season.episode_count) > 0)
+    .map((season) => ({
+      season_number: Number(season.season_number),
+      episode_count: Number(season.episode_count),
+      ...(season.name ? { name: season.name } : {}),
+      ...(season.air_date ? { air_date: season.air_date } : {}),
+    }))
+    .sort((left, right) => left.season_number - right.season_number);
+  const next = raw.next_episode_to_air;
+  const imdb = raw.imdb_id || raw.external_ids?.imdb_id || undefined;
+  const tvdb = raw.external_ids?.tvdb_id || undefined;
+  return {
+    media_type: type,
+    tmdb_id: raw.id,
+    title: raw.title ?? raw.name ?? "Untitled",
+    ...(raw.original_title || raw.original_name ? { original_title: raw.original_title ?? raw.original_name } : {}),
+    ...(release ? { year: release.slice(0, 4), release_date: release } : {}),
+    ...(runtime ? { runtime } : {}),
+    genres: (raw.genres ?? []).map((genre) => genre.name ?? "").filter(Boolean),
+    ...(raw.overview ? { overview: raw.overview } : {}),
+    ...(raw.poster_path ? { poster_path: raw.poster_path } : {}),
+    ...(raw.backdrop_path ? { backdrop_path: raw.backdrop_path } : {}),
+    ...(raw.status ? { status: raw.status } : {}),
+    seasons,
+    ...(next && next.season_number && next.episode_number
+      ? {
+          next_episode: {
+            season_number: next.season_number,
+            episode_number: next.episode_number,
+            ...(next.air_date ? { air_date: next.air_date } : {}),
+            ...(next.name ? { name: next.name } : {}),
+          },
+        }
+      : {}),
+    ...(raw.last_air_date ? { last_air_date: raw.last_air_date } : {}),
+    ...(imdb ? { imdb_id: imdb } : {}),
+    ...(tvdb ? { tvdb_id: tvdb } : {}),
+  };
+}
+
+/** One season's episodes. */
+export async function getTmdbSeason(env: Env, tvId: number, season: number): Promise<TmdbEpisode[]> {
+  const url = new URL(`${TMDB_API_BASE_URL}/tv/${tvId}/season/${season}`);
+  url.searchParams.set("language", "en-US");
+  applyApiKey(url, env);
+  type Raw = {
+    episodes?: {
+      season_number?: number;
+      episode_number?: number;
+      name?: string;
+      air_date?: string | null;
+      runtime?: number | null;
+      still_path?: string | null;
+      overview?: string;
+    }[];
+  };
+  let raw: Raw;
+  try {
+    raw = await tmdbFetch<Raw>(url, env, { notFound: true });
+  } catch (error) {
+    if (error instanceof TmdbNotFound) return [];
+    throw error;
+  }
+  return (raw.episodes ?? [])
+    .filter((episode) => Number(episode.episode_number) > 0)
+    .map((episode) => ({
+      season: Number(episode.season_number ?? season),
+      episode: Number(episode.episode_number),
+      ...(episode.name ? { name: episode.name } : {}),
+      ...(episode.air_date ? { air_date: episode.air_date } : {}),
+      ...(episode.runtime ? { runtime: episode.runtime } : {}),
+      ...(episode.still_path ? { still_path: episode.still_path } : {}),
+      ...(episode.overview ? { overview: episode.overview } : {}),
+    }));
+}
+
+/** A title from an outside id (TheTVDB, which TV Time used, or IMDb). */
+export async function findTmdbByExternalId(
+  env: Env,
+  source: "tvdb_id" | "imdb_id",
+  id: string,
+): Promise<{ media_type: TmdbMediaType; tmdb_id: number } | null> {
+  const url = new URL(`${TMDB_API_BASE_URL}/find/${encodeURIComponent(id)}`);
+  url.searchParams.set("external_source", source);
+  applyApiKey(url, env);
+  const raw = await tmdbFetch<{ tv_results?: { id?: number }[]; movie_results?: { id?: number }[] }>(url, env);
+  const tv = raw.tv_results?.find((result) => result.id);
+  if (tv?.id) return { media_type: "tv", tmdb_id: tv.id };
+  const movie = raw.movie_results?.find((result) => result.id);
+  if (movie?.id) return { media_type: "movie", tmdb_id: movie.id };
+  return null;
+}
+
+/** TMDB said there's no such title (a 404), as opposed to TMDB being down. */
+export class TmdbNotFound extends Error {}

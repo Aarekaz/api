@@ -1,3 +1,4 @@
+import { refreshStaleTitles } from "./services/watch";
 import type { Env } from "./types/env";
 import type { JsonRecord } from "./types/common";
 import { dateOnly, addDays } from "./utils/date";
@@ -51,6 +52,7 @@ interface ScheduledRefreshJobs {
   lanyard: () => Promise<void>;
   wakatime: () => Promise<void>;
   github: () => Promise<void>;
+  watchTitles?: () => Promise<void>;
 }
 
 export interface ScheduledDependencies {
@@ -78,9 +80,15 @@ export async function handleScheduled(
     { name: "whoop-retention", task: () => pruneWhoopOperations(env, dependencies) },
   ];
 
-  const results = await Promise.allSettled(
-    jobs.map((job) => runRefreshJob(env, job.name, job.task))
-  );
+  // TMDB's details for films and shows. Kept out of refresh_health: /v1/status
+  // lists those rows and the website reads it, so a new job would change its body.
+  const watchTitles = (dependencies.refreshJobs?.watchTitles ?? (() => refreshStaleTitles(env).then(() => undefined)))()
+    .catch((error) => console.error("Scheduled refresh failed: watch-titles", error));
+
+  const [results] = await Promise.all([
+    Promise.allSettled(jobs.map((job) => runRefreshJob(env, job.name, job.task))),
+    watchTitles,
+  ]);
 
   results.forEach((result, index) => {
     if (result.status === "rejected") {

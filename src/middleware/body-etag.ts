@@ -18,7 +18,7 @@ import type { Context, Next } from "hono";
  * has an older server_time, which is the safe direction for a sync cursor.
  */
 export const BODY_ETAG_PREFIXES = [
-  "/v1/documents", "/v1/links", "/v1/journal", "/v1/shelf", "/v1/posts", "/v1/wrapped/summary",
+  "/v1/documents", "/v1/links", "/v1/journal", "/v1/shelf", "/v1/posts", "/v1/wrapped/summary", "/v1/watch",
 ] as const;
 
 const CACHE_CONTROL = "private, no-cache";
