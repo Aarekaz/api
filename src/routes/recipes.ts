@@ -12,6 +12,7 @@ import {
   imageUploadSchema,
   okSchema,
   openApiJsonRequestBody,
+  apiTags,
   openApiRegistry,
   openApiResponse,
   structuredCreatedResponses,
@@ -45,27 +46,45 @@ const WANT_TAG = "want to cook";
 const Minutes = z.number().int().min(0).max(100_000).nullish();
 const Url = z.string().trim().max(2000).refine((s) => /^https?:\/\//i.test(s), "must be an http(s) link");
 
+// The descriptions are the guide agents read in /openapi.json (with the Cookbook tag's).
 const Fields = {
-  title: z.string().trim().min(1).max(200),
-  summary: z.string().max(1000).nullish(),
-  source_url: Url.nullish().or(z.literal("")),
-  source_name: z.string().max(80).nullish(),
+  title: z.string().trim().min(1).max(200).openapi({ description: "The recipe's name as the source gives it" }),
+  summary: z.string().max(1000).nullish().openapi({ description: "A sentence or two about the dish. Optional" }),
+  source_url: Url.nullish().or(z.literal("")).openapi({
+    description: "The page, video or post the recipe came from. Set it whenever there is one: it is how the recipe links back to where it was found",
+  }),
+  source_name: z.string().max(80).nullish().openapi({ description: "Who or where it's from, short: \"NYT Cooking\", \"@chef\"" }),
   author: z.string().max(120).nullish(),
-  image_url: Url.nullish().or(z.literal("")),
-  servings: z.number().positive().max(999).nullish(),
-  yield_text: z.string().max(80).nullish(),
-  prep_minutes: Minutes,
-  cook_minutes: Minutes,
-  total_minutes: Minutes,
-  ingredients: z.array(Line).max(200).optional(),
-  steps: z.array(StepLine).max(120).optional(),
-  tags: z.array(z.string().trim().min(1).max(32)).max(20).optional(),
-  notes: z.string().max(20_000).nullish(),
-  favorite: z.boolean().optional(),
-  // The one save: "I want to make this" (migration 0058). `favorite` is kept for old clients.
-  want_to_cook: z.boolean().optional(),
-  // The caption, transcript or scanned page the recipe was read from (migration 0057).
-  source_text: z.string().max(20_000).nullish(),
+  image_url: Url.nullish().or(z.literal("")).openapi({
+    description: "A photo of the dish. Give a public image link (it is copied into this API's storage when saved), "
+      + "or upload the image to POST /v1/recipes/photo and pass the url it returns",
+  }),
+  servings: z.number().positive().max(999).nullish().openapi({ description: "How many it serves; the app scales amounts from it" }),
+  yield_text: z.string().max(80).nullish().openapi({ description: "When it makes an amount rather than portions: \"1 kg\", \"24 cookies\"" }),
+  prep_minutes: Minutes.openapi({ description: "Whole minutes" }),
+  cook_minutes: Minutes.openapi({ description: "Whole minutes" }),
+  total_minutes: Minutes.openapi({ description: "Whole minutes" }),
+  ingredients: z.array(Line).max(200).optional().openapi({
+    description: "One ingredient per line, as the source writes it, amount first: \"3 tbsp + 1 tsp oil\", \"1 ½ cups (190 g) flour, sifted\". "
+      + "The server reads the amount, unit and item, so don't split them yourself. "
+      + "A line ending in \":\" (\"For the gravy:\") starts a group, or send { text, group }",
+  }),
+  steps: z.array(StepLine).max(120).optional().openapi({
+    description: "One step per item, in order, as the source writes it. Don't number them (a leading \"1.\" is removed). "
+      + "Keep times in the words (\"simmer for 10 minutes\", \"marinate 20–30 minutes\"): Cook mode makes its timers from them, so there is no timer field. "
+      + "A short line ending in \":\" starts a group. `uses` (ingredient indexes) is optional: leave it out and the app works it out",
+  }),
+  tags: z.array(z.string().trim().min(1).max(32)).max(20).optional().openapi({
+    description: "Collections, like \"Weeknight\" or \"Indian\". Reuse ones from GET /v1/recipes/tags rather than making near-duplicates",
+  }),
+  notes: z.string().max(20_000).nullish().openapi({ description: "Your own notes: what you changed, what to try next time" }),
+  favorite: z.boolean().optional().openapi({ description: "The heart: a recipe you love. The app's one save" }),
+  // Migration 0058; the app went back to the heart, so nothing reads it now.
+  want_to_cook: z.boolean().optional().openapi({ description: "Not used by the app; leave it out", deprecated: true }),
+  // Migration 0057.
+  source_text: z.string().max(20_000).nullish().openapi({
+    description: "The caption, transcript or scanned page the recipe was read from, when it came from a video, post or photo rather than a recipe page",
+  }),
 };
 
 const CreateRecipe = z.object(Fields);
@@ -190,6 +209,28 @@ async function keepImage(env: Env, url: string | null): Promise<string | null> {
 }
 
 // OpenAPI registrations
+const TAG = "Cookbook";
+apiTags.push({
+  name: TAG,
+  description: `Recipes saved to keep, each linking back to where it came from. Private: nothing here is shown on anuragd.me.
+
+**From a recipe page.** POST /v1/recipes/import { url } reads the page and returns a draft without saving it. If \`existing\` is set, \
+that link is already saved: PATCH that recipe rather than saving a copy. Then POST /v1/recipes with the draft, keeping \`source_url\`. \
+If the site turns the server away (502), fetch the page yourself and send it as \`html\` along with the \`url\`.
+
+**From a video, post, photo or by hand.** POST /v1/recipes with title, ingredients and steps. Set \`source_url\` to the video or post, \
+and put its caption or transcript in \`source_text\`.
+
+**Photos.** Give every recipe a photo when the source has one. Pass a public image link as \`image_url\` (on create or update it is \
+copied into this API's storage, so it survives the site changing), or POST the image bytes to /v1/recipes/photo with its \
+Content-Type (image/jpeg, image/png, …) and set \`image_url\` to the url it returns. Import fills \`image_url\` from the page.
+
+**Ingredients and steps.** Send lines as the source writes them (see the fields of POST /v1/recipes). The server reads each \
+amount, so servings scale. Times written in a step become Cook mode's timers.
+
+**Saved and cooked.** \`favorite\` is the heart. Log a cook (POST /v1/recipes/{id}/log) only when it was really cooked. \
+Delete is soft: POST /v1/recipes/{id}/restore brings a recipe back.`,
+});
 const ingredientSchema = z.object({
   text: z.string(),
   quantity: z.number().nullable(),
@@ -234,8 +275,8 @@ const recipeLogSchema = z.object({
 const recipeSchema = recipeDraftSchema.extend({
   id: z.string(),
   notes: z.string().nullable(),
-  favorite: z.boolean().openapi({ description: "Kept for old clients; the app uses want_to_cook" }),
-  want_to_cook: z.boolean(),
+  favorite: z.boolean().openapi({ description: "The heart: a recipe you love" }),
+  want_to_cook: z.boolean().openapi({ description: "Not used by the app", deprecated: true }),
   cooked_count: z.number().int(),
   last_cooked_on: dateSchema.nullable(),
   rating: z.number().nullable().openapi({ description: "Average log rating, one decimal" }),
@@ -251,14 +292,15 @@ const recipeParams = z.object({ id: z.string() });
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/recipes",
+  tags: [TAG],
   summary: "List recipes, most recently changed first",
   security: authSecurity,
   request: {
     query: z.object({
       q: z.string().optional(),
       tag: z.string().optional(),
-      favorite: z.enum(["1"]).optional(),
-      want: z.enum(["1"]).optional().openapi({ description: "Only recipes marked Want to Cook" }),
+      favorite: z.enum(["1"]).optional().openapi({ description: "Only hearted recipes" }),
+      want: z.enum(["1"]).optional().openapi({ description: "Only want_to_cook (not used by the app)", deprecated: true }),
       limit: z.coerce.number().int().min(1).max(2000).optional().openapi({ description: "Default 1000" }),
       cursor: cursorQuery,
     }),
@@ -269,6 +311,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/recipes/tags",
+  tags: [TAG],
   summary: "List recipe collections with how many recipes are in each",
   security: authSecurity,
   responses: structuredOkResponses(z.object({ items: z.array(z.object({ tag: z.string(), count: z.number().int() })) })),
@@ -277,6 +320,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/recipes/tags/rename",
+  tags: [TAG],
   summary: "Rename a tag on every recipe that has it",
   description: "Case is ignored. If `to` is already a tag on a recipe, the two become one.",
   security: authSecurity,
@@ -287,6 +331,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/recipes/tags/{tag}",
+  tags: [TAG],
   summary: "Take a tag off every recipe (the recipes stay)",
   security: authSecurity,
   request: { params: z.object({ tag: z.string() }) },
@@ -296,6 +341,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/recipes/log",
+  tags: [TAG],
   summary: "List what you cooked, newest first, across every recipe",
   security: authSecurity,
   request: {
@@ -310,6 +356,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/recipes/import",
+  tags: [TAG],
   summary: "Read a recipe from a web page without saving it",
   description: "found: schema (schema.org Recipe), page (read from the markup) or basic (title and photo only). "
     + "existing is the id of a recipe already saved from that link. Send html when the site refuses the server.",
@@ -329,6 +376,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/recipes/photo",
+  tags: [TAG],
   summary: "Store a recipe photo (up to 15 MB) and return its link",
   security: authSecurity,
   request: {
@@ -348,6 +396,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "get",
   path: "/v1/recipes/{id}",
+  tags: [TAG],
   summary: "Get a recipe with its cooking log",
   security: authSecurity,
   request: { params: recipeParams },
@@ -357,6 +406,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/recipes",
+  tags: [TAG],
   summary: "Create recipe",
   description: "Ingredients and steps are lines (\"2 cups flour\") or { text, group }. A remote image_url is copied to R2.",
   security: authSecurity,
@@ -367,6 +417,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "patch",
   path: "/v1/recipes/{id}",
+  tags: [TAG],
   summary: "Update recipe (only the fields sent change)",
   security: authSecurity,
   request: { params: recipeParams, body: openApiJsonRequestBody(UpdateRecipe) },
@@ -376,6 +427,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/recipes/{id}",
+  tags: [TAG],
   summary: "Delete recipe (soft; its log stays)",
   security: authSecurity,
   request: { params: recipeParams },
@@ -385,6 +437,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/recipes/{id}/restore",
+  tags: [TAG],
   summary: "Restore a deleted recipe",
   security: authSecurity,
   request: { params: recipeParams },
@@ -394,6 +447,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "post",
   path: "/v1/recipes/{id}/log",
+  tags: [TAG],
   summary: "Log that you cooked a recipe",
   description: "cooked_on defaults to today (UTC). Returns the recipe.",
   security: authSecurity,
@@ -404,6 +458,7 @@ openApiRegistry.registerPath({
 openApiRegistry.registerPath({
   method: "delete",
   path: "/v1/recipes/{id}/log/{logId}",
+  tags: [TAG],
   summary: "Remove one line from a recipe's log",
   security: authSecurity,
   request: { params: z.object({ id: z.string(), logId: z.coerce.number().int() }) },

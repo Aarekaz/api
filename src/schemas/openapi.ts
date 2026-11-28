@@ -480,6 +480,13 @@ openApiRegistry.registerComponent("securitySchemes", "bearerAuth", {
 
 export const authSecurity = [{ bearerAuth: [] as string[] }];
 
+/**
+ * Groups of endpoints, each with a guide for whoever calls them (people and agents):
+ * what the area is for and how to store things in it well. A route file adds its
+ * own (`apiTags.push(...)`) and puts `tags: [name]` on its paths.
+ */
+export const apiTags: { name: string; description: string }[] = [];
+
 // OpenAPI document generator
 export function getOpenApiDocument(version: string, baseUrl?: string) {
   const generator = new OpenApiGeneratorV3(openApiRegistry.definitions);
@@ -494,8 +501,10 @@ export function getOpenApiDocument(version: string, baseUrl?: string) {
     info: {
       version,
       title: "Personal API",
-      description: "Personal API for tracking activities, health data, and more",
+      description: "Personal API for tracking activities, health data, and more. "
+        + "Each tag below starts with a guide to that area: read it before writing to it.",
     },
     servers,
+    tags: apiTags,
   });
 }
