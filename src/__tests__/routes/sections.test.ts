@@ -145,6 +145,17 @@ describe("/v1/sections", () => {
     expect((await tree()).items.map((s) => s.path)).toEqual(["Library", "Library/Claude"]);
   });
 
+  it("deletes a deep folder (over D1's 50-byte LIKE limit) and matches its path literally", async () => {
+    const { send, note, folderOf } = setup();
+    const deep = "Work/Wealth Architect/projectio_labs/math_breakdown";
+    const inside = await note("01 System Map", deep);
+    const lookalike = await note("Not inside", "Work/Wealth Architect/projectioXlabs/mathXbreakdown");
+    const res = await send("/v1/sections", "DELETE", { path: deep });
+    expect(res.status).toBe(200);
+    expect(folderOf(inside.id)).toBe("Work/Wealth Architect/projectio_labs");
+    expect(folderOf(lookalike.id)).toBe("Work/Wealth Architect/projectioXlabs/mathXbreakdown");
+  });
+
   it("deleting a top folder sends its pages to Unsorted, by ?path= too", async () => {
     const { send, note, tree, folderOf } = setup();
     const n = await note("N", "Inbox");

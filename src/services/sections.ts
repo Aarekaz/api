@@ -61,7 +61,6 @@ export function rebase(path: string, from: string, to: string): string {
   return join(to, path.slice(from.length + 1));
 }
 
-const likePrefix = (folder: string) => folder.replace(/[\\%_]/g, (c) => "\\" + c) + "/%";
 
 async function noteFolders(env: Env) {
   const { results } = await env.DB.prepare(
@@ -166,11 +165,16 @@ function subtree(all: SectionRow[], folder: string): SectionRow[] {
   return all.filter((r) => !r.deleted_at && isInside(r.path, folder)).sort((a, b) => a.path.length - b.path.length);
 }
 
-/** Every note in a folder or below it, with where it should go next. */
+/**
+ * Every note in a folder or below it, with where it should go next. A prefix
+ * compare, not LIKE: D1 refuses LIKE patterns over 50 bytes ("LIKE or GLOB
+ * pattern too complex"), which a deep folder's path passes easily.
+ */
 async function notesInside(env: Env, folder: string) {
+  const prefix = `${folder}/`;
   const { results } = await env.DB.prepare(
-    "SELECT id, folder FROM documents WHERE deleted_at IS NULL AND kind = 'note' AND (folder = ? OR folder LIKE ? ESCAPE '\\')",
-  ).bind(folder, likePrefix(folder)).all<{ id: string; folder: string }>();
+    "SELECT id, folder FROM documents WHERE deleted_at IS NULL AND kind = 'note' AND (folder = ? OR substr(folder, 1, ?) = ?)",
+  ).bind(folder, prefix.length, prefix).all<{ id: string; folder: string }>();
   return results;
 }
 
