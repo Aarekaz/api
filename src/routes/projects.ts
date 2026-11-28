@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import type { Env } from "../types/env";
 import type { JsonRecord } from "../types/common";
 import { nowIso } from "../utils/date";
@@ -139,7 +140,45 @@ openApiRegistry.registerPath({
   responses: okResponses(okDeletedSchema),
 });
 
+/** The whole list's order in one write: each project's new sort_order (the list shows highest first). */
+const projectOrderSchema = z.object({
+  order: z.array(z.object({
+    id: z.number().int().positive(),
+    sort_order: z.number().int(),
+  })).min(1).max(500).refine((rows) => new Set(rows.map((row) => row.id)).size === rows.length, { message: "Each id once" }),
+});
+
+openApiRegistry.registerPath({
+  method: "patch",
+  path: "/v1/projects/order",
+  tags: [TAG],
+  summary: "Reorder projects in one write",
+  description: "Sets sort_order on every listed project in one transaction: all of them change or none do. "
+    + "A missing id is a 404 and nothing changes.",
+  security: authSecurity,
+  request: { body: openApiJsonRequestBody(projectOrderSchema) },
+  responses: okResponses(z.object({ ok: z.literal(true), updated: z.number().int(), updated_at: z.string() })),
+});
+
 // Route handlers
+app.patch("/order", async (c) => {
+  const validation = await readBody(c, projectOrderSchema);
+  if (!validation.ok) return validation.response;
+  const { order } = validation.data;
+  const ids = order.map((row) => row.id);
+  const found = await c.env.DB.prepare(`SELECT id FROM projects WHERE id IN (${ids.map(() => "?").join(", ")})`)
+    .bind(...ids).all<{ id: number }>();
+  const known = new Set((found.results ?? []).map((row) => Number(row.id)));
+  const missing = ids.filter((id) => !known.has(id));
+  if (missing.length) return c.json({ error: "Project not found", details: { missing } }, 404);
+
+  const updatedAt = nowIso();
+  const update = c.env.DB.prepare("UPDATE projects SET sort_order = ?, updated_at = ? WHERE id = ?");
+  // One batch is one transaction: a reorder never lands half done.
+  await c.env.DB.batch(order.map((row) => update.bind(row.sort_order, updatedAt, row.id)));
+  return c.json({ ok: true, updated: order.length, updated_at: updatedAt });
+});
+
 app.get("/", async (c) => {
   const query = c.req.query();
   const { limit, offset, search, sort, tags, start, end } = parseListQuery(query);
