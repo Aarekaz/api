@@ -231,7 +231,8 @@ type Progress = {
 function progressOf(seasons: TmdbTvSeason[], nextToAir: TmdbEpisodeRef | null, watches: WatchRow[]): Progress {
   const episodes = watches.filter((watch) => watch.season != null && watch.episode != null);
   const run = episodes.reduce((max, watch) => Math.max(max, watch.run), 0);
-  const current = episodes.filter((watch) => watch.run === run);
+  // Specials (season 0) are kept but don't count towards where you are.
+  const current = episodes.filter((watch) => watch.run === run && (watch.season ?? 0) > 0);
   const seen = new Set(current.map((watch) => `${watch.season}:${watch.episode}`));
   const skipped = new Set(current.filter((watch) => watch.skipped).map((watch) => `${watch.season}:${watch.episode}`));
   const total = seasons.length ? seasons.reduce((sum, season) => sum + season.episode_count, 0) : null;
