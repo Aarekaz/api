@@ -13,7 +13,8 @@ export type Ingredient = {
   group: string | null;
 };
 
-export type Step = { text: string; group: string | null };
+/** A step, and the ingredients it uses as indexes into the recipe's list (set in the app; absent when not linked). */
+export type Step = { text: string; group: string | null; uses?: number[] };
 
 export type RecipeDraft = {
   title: string;
@@ -67,6 +68,30 @@ const round = (n: number) => Math.round(n * 1000) / 1000;
 const AMOUNT = String.raw`(\d+\s+\d+\/\d+|\d+\/\d+|\d+(?:[.,]\d+)?)`;
 const LEAD = new RegExp(String.raw`^${AMOUNT}(?:\s*(?:-|–|—|to)\s*${AMOUNT})?\s*`, "i");
 
+/** How big a unit is within its kind of measure (volume in teaspoons, weight in grams), to add "3 tbsp + 1 tsp". */
+const MEASURE: Record<string, [string, number]> = {
+  tsp: ["volume", 1], teaspoon: ["volume", 1], teaspoons: ["volume", 1],
+  tbsp: ["volume", 3], tbs: ["volume", 3], tablespoon: ["volume", 3], tablespoons: ["volume", 3],
+  cup: ["volume", 48], cups: ["volume", 48], c: ["volume", 48],
+  ml: ["metric volume", 1], milliliter: ["metric volume", 1], milliliters: ["metric volume", 1], millilitre: ["metric volume", 1], millilitres: ["metric volume", 1],
+  l: ["metric volume", 1000], liter: ["metric volume", 1000], liters: ["metric volume", 1000], litre: ["metric volume", 1000], litres: ["metric volume", 1000],
+  g: ["weight", 1], gram: ["weight", 1], grams: ["weight", 1], kg: ["weight", 1000], kilogram: ["weight", 1000], kilograms: ["weight", 1000],
+};
+
+const measureOf = (unit: string | null) =>
+  unit === null ? undefined : unit === "T" ? MEASURE.tbsp : unit === "t" ? MEASURE.tsp : MEASURE[unit.toLowerCase()];
+
+/** The unit at the start of `rest` ("cups flour" → "cups", "flour"), if there is one. */
+function readUnit(rest: string): { unit: string | null; rest: string } {
+  for (const u of UNITS) {
+    const caseSensitive = u === "T" || u === "t";
+    const head = rest.slice(0, u.length);
+    const same = caseSensitive ? head === u : head.toLowerCase() === u.toLowerCase();
+    if (same && /^(\.|\s|$|,)/.test(rest.slice(u.length))) return { unit: u, rest: rest.slice(u.length).replace(/^\./, "") };
+  }
+  return { unit: null, rest };
+}
+
 /** "1 ½ cups (190 g) flour, sifted" → 1.5, "cups", "(190 g) flour, sifted". The line itself is kept as written. */
 export function parseIngredient(line: string, group: string | null = null): Ingredient {
   const text = clean(line).slice(0, 500);
@@ -82,14 +107,17 @@ export function parseIngredient(line: string, group: string | null = null): Ingr
   }
   let unit: string | null = null;
   if (quantity !== null) {
-    for (const u of UNITS) {
-      const caseSensitive = u === "T" || u === "t";
-      const head = rest.slice(0, u.length);
-      const same = caseSensitive ? head === u : head.toLowerCase() === u.toLowerCase();
-      if (same && /^(\.|\s|$|,)/.test(rest.slice(u.length))) {
-        unit = u;
-        rest = rest.slice(u.length).replace(/^\./, "");
-        break;
+    ({ unit, rest } = readUnit(rest));
+    // "3 tbsp + 1 tsp oil": a second amount in the same kind of measure is added to the first.
+    const plus = unit ? rest.match(new RegExp(String.raw`^\s*\+\s*${AMOUNT}\s*`)) : null;
+    const extra = plus ? toNumber(plus[1]) : null;
+    if (plus && extra !== null && unit) {
+      const second = readUnit(rest.slice(plus[0].length));
+      const a = measureOf(unit), b = measureOf(second.unit);
+      if (a && b && a[0] === b[0]) {
+        quantity += (extra * b[1]) / a[1];
+        if (max !== null) max += (extra * b[1]) / a[1];
+        rest = second.rest;
       }
     }
   }
@@ -124,6 +152,17 @@ export function cleanIngredients(input: unknown): Ingredient[] {
   return out;
 }
 
+/** Ingredient indexes, deduplicated and in order; undefined when not a list. An empty list is kept: "uses nothing". */
+function usesOf(value: unknown): number[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return [...new Set(value.filter((n): n is number => Number.isInteger(n) && n >= 0 && n < 200))].sort((a, b) => a - b);
+}
+
+/** Drops links to ingredients a recipe doesn't have (after its list got shorter). */
+export function linkSteps(steps: Step[], ingredientCount: number): Step[] {
+  return steps.map((s) => (s.uses ? { ...s, uses: s.uses.filter((i) => i < ingredientCount) } : s));
+}
+
 /** Step lines (strings or {text, group}) with headings folded into groups. */
 export function cleanSteps(input: unknown): Step[] {
   if (!Array.isArray(input)) return [];
@@ -136,7 +175,8 @@ export function cleanSteps(input: unknown): Step[] {
     if (!line) continue;
     if (typeof raw === "string" && isHeading(line) && line.split(" ").length <= 6) { group = line.replace(/:\s*$/, ""); continue; }
     const own = typeof raw === "object" && raw && typeof (raw as { group?: unknown }).group === "string" ? String((raw as { group: string }).group).trim().slice(0, 80) : null;
-    out.push({ text: line, group: own || group });
+    const uses = typeof raw === "object" && raw ? usesOf((raw as { uses?: unknown }).uses) : undefined;
+    out.push(uses ? { text: line, group: own || group, uses } : { text: line, group: own || group });
   }
   return out;
 }

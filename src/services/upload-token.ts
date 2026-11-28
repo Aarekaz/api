@@ -20,6 +20,9 @@ export const UPLOAD_LIMITS = {
   photosPresigned: 50 * MIB,
   blogDirect: 5 * MIB,
   blogPresigned: 25 * MIB,
+  // A recipe's photo: a camera shot of the dish, or a picture saved from a post.
+  recipeDirect: 15 * MIB,
+  recipePresigned: 50 * MIB,
 } as const;
 
 /**
@@ -28,7 +31,7 @@ export const UPLOAD_LIMITS = {
  */
 export const RASTER_IMAGE_TYPES = ["image/jpeg", "image/png", "image/heic", "image/heif", "image/webp", "image/gif", "image/avif"] as const;
 
-export type UploadKind = "photo" | "blog";
+export type UploadKind = "photo" | "blog" | "recipe";
 
 /** What each kind of upload may store, and where. */
 export const UPLOAD_KINDS: Record<UploadKind, {
@@ -44,6 +47,8 @@ export const UPLOAD_KINDS: Record<UploadKind, {
   photo: { route: "/v1/photos", prefix: "photos/", types: RASTER_IMAGE_TYPES, defaultType: "image/jpeg", directMax: UPLOAD_LIMITS.photosDirect, presignedMax: UPLOAD_LIMITS.photosPresigned },
   // Blog images are embedded in posts, so only what every browser shows.
   blog: { route: "/v1/blog-images", prefix: "blog/", types: ["image/png", "image/jpeg", "image/webp"], defaultType: "image/png", directMax: UPLOAD_LIMITS.blogDirect, presignedMax: UPLOAD_LIMITS.blogPresigned },
+  // Recipe photos answer in the recipes route's own shape (routes/recipes.ts); only the rules are shared.
+  recipe: { route: "/v1/recipes", prefix: "recipes/", types: RASTER_IMAGE_TYPES, defaultType: "image/jpeg", directMax: UPLOAD_LIMITS.recipeDirect, presignedMax: UPLOAD_LIMITS.recipePresigned },
 };
 
 /** A Content-Type header as one of `allowed` (parameters dropped, lower case, image/jpg read as image/jpeg), or null. */

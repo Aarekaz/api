@@ -12,6 +12,7 @@ function d1(): D1Database {
   const { db, DB } = testD1();
   db.exec(readFileSync("migrations/0034_recipes.sql", "utf8"));
   db.exec(readFileSync("migrations/0057_recipe_source_text.sql", "utf8"));
+  db.exec(readFileSync("migrations/0058_recipe_want_to_cook.sql", "utf8"));
   return DB;
 }
 
@@ -26,7 +27,7 @@ const send = (method: string, body?: unknown) => ({ method, body: body === undef
 type Recipe = {
   id: string; title: string; servings: number | null; favorite: boolean; tags: string[]; image_url: string | null;
   ingredients: Array<{ text: string; quantity: number | null; unit: string | null; item: string; group: string | null }>;
-  steps: Array<{ text: string; group: string | null }>;
+  steps: Array<{ text: string; group: string | null; uses?: number[] }>;
   cooked_count: number; last_cooked_on: string | null; rating: number | null;
   log?: Array<{ id: number; cooked_on: string; rating: number | null; note: string | null }>;
 };
@@ -46,6 +47,19 @@ describe("reading ingredients", () => {
     expect(parseIngredient("Salt, to taste")).toMatchObject({ quantity: null, unit: null, item: "Salt, to taste" });
     expect(parseIngredient("1 cup onion ((fine chopped))").item).toBe("onion (fine chopped)");
     expect(parseIngredient("1 garlic bulb")).toMatchObject({ unit: null, item: "garlic bulb" });  // "g" must be a whole word
+  });
+
+  it("adds a second amount in the same measure: 3 tbsp + 1 tsp", () => {
+    expect(parseIngredient("3 tbsp + 1 tsp ginger-garlic paste")).toMatchObject({ quantity: 3.333, unit: "tbsp", item: "ginger-garlic paste" });
+    expect(parseIngredient("1 cup + 2 tbsp milk")).toMatchObject({ quantity: 1.125, unit: "cup", item: "milk" });
+    expect(parseIngredient("1 kg + 200 g chicken")).toMatchObject({ quantity: 1.2, unit: "kg", item: "chicken" });
+    // Different kinds of measure stay as written.
+    expect(parseIngredient("1 cup + 50 g sugar")).toMatchObject({ quantity: 1, unit: "cup", item: "+ 50 g sugar" });
+  });
+
+  it("keeps a step's ingredient links, deduplicated and in order", () => {
+    expect(cleanSteps([{ text: "Marinate.", uses: [3, 1, 1, 0] }, "Cook.", { text: "Rest.", uses: [] }]))
+      .toEqual([{ text: "Marinate.", group: null, uses: [0, 1, 3] }, { text: "Cook.", group: null }, { text: "Rest.", group: null, uses: [] }]);
   });
 
   it("folds heading lines into groups", () => {
@@ -231,5 +245,58 @@ describe("recipes routes", () => {
     const recipe = await (await app().request("/v1/recipes", send("POST", { title: "Cake", image_url: "https://site.example/cake.jpg" }), env)).json() as Recipe;
     expect(stored).toHaveLength(1);
     expect(recipe.image_url).toBe(`https://media.example.com/${stored[0]}`);
+  });
+
+  it("keeps one save, Want to Cook, and folds the old tag and heart into it", async () => {
+    const { db, DB } = testD1();
+    db.exec(readFileSync("migrations/0034_recipes.sql", "utf8"));
+    db.exec(readFileSync("migrations/0057_recipe_source_text.sql", "utf8"));
+    const now = "2026-11-01T00:00:00.000Z";
+    db.exec(`INSERT INTO recipes (id, title, tags_json, favorite, created_at, updated_at) VALUES
+      ('a', 'Hearted', '[]', 1, '${now}', '${now}'), ('b', 'Tagged', '["Want to cook","Curry"]', 0, '${now}', '${now}'), ('c', 'Plain', '[]', 0, '${now}', '${now}')`);
+    db.exec(readFileSync("migrations/0058_recipe_want_to_cook.sql", "utf8"));
+    const env = { DB } as Env;
+    const root = app();
+    const list = await (await root.request("/v1/recipes?want=1", {}, env)).json() as { items: Array<Recipe & { want_to_cook: boolean }> };
+    expect(list.items.map((r) => r.id).sort()).toEqual(["a", "b"]);
+    const tagged = list.items.find((r) => r.id === "b")!;
+    expect(tagged.tags).toEqual(["Curry"]);
+    expect(tagged.favorite).toBe(false);
+    const tags = await (await root.request("/v1/recipes/tags", {}, env)).json() as { items: Array<{ tag: string }> };
+    expect(tags.items.map((t) => t.tag)).toEqual(["Curry"]);
+
+    const off = await (await root.request("/v1/recipes/a", send("PATCH", { want_to_cook: false }), env)).json() as Recipe & { want_to_cook: boolean };
+    expect(off).toMatchObject({ want_to_cook: false, favorite: true });
+    const on = await (await root.request("/v1/recipes/c", send("PATCH", { tags: ["Want to Cook", "Dal"] }), env)).json() as Recipe & { want_to_cook: boolean };
+    expect(on).toMatchObject({ want_to_cook: true, tags: ["Dal"] });
+  });
+
+  it("drops a step's links to ingredients the recipe no longer has", async () => {
+    const env = { DB: d1() } as Env;
+    const root = app();
+    const created = await (await root.request("/v1/recipes", send("POST", {
+      title: "Afghani chicken", ingredients: ["Marinade:", "1 kg chicken", "1 cup curd", "Gravy:", "1 cup milk"],
+      steps: [{ text: "Marinate.", uses: [0, 1, 7] }, { text: "Add the milk.", uses: [2] }],
+    }), env)).json() as Recipe;
+    expect(created.steps.map((s) => s.uses)).toEqual([[0, 1], [2]]);
+    const shorter = await (await root.request(`/v1/recipes/${created.id}`, send("PATCH", { ingredients: ["1 kg chicken", "1 cup curd"] }), env)).json() as typeof created;
+    expect(shorter.steps.map((s) => s.uses)).toEqual([[0, 1], []]);
+  });
+
+  it("renames and removes a tag across recipes", async () => {
+    const env = { DB: d1() } as Env;
+    const root = app();
+    await root.request("/v1/recipes", send("POST", { title: "Dal", tags: ["dinner", "Quick"] }), env);
+    await root.request("/v1/recipes", send("POST", { title: "Rice", tags: ["Weeknight", "Dinner"] }), env);
+    await root.request("/v1/recipes", send("POST", { title: "Cake", tags: ["Baking"] }), env);
+    const renamed = await (await root.request("/v1/recipes/tags/rename", send("POST", { from: "DINNER", to: "Weeknight" }), env)).json();
+    expect(renamed).toEqual({ changed: 2 });
+    const all = await (await root.request("/v1/recipes", {}, env)).json() as { items: Recipe[] };
+    expect(Object.fromEntries(all.items.map((r) => [r.title, r.tags]))).toEqual({ Dal: ["Weeknight", "Quick"], Rice: ["Weeknight"], Cake: ["Baking"] });
+    expect((await root.request("/v1/recipes/tags/rename", send("POST", { from: "Quick", to: "want to cook" }), env)).status).toBe(400);
+    expect(await (await root.request("/v1/recipes/tags/Weeknight", send("DELETE"), env)).json()).toEqual({ changed: 2 });
+    const after = await (await root.request("/v1/recipes", {}, env)).json() as { items: Recipe[] };
+    expect(after.items).toHaveLength(3);
+    expect(after.items.flatMap((r) => r.tags).sort()).toEqual(["Baking", "Quick"]);
   });
 });
