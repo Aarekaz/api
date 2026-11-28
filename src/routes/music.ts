@@ -19,11 +19,16 @@ export function createMusicRoute(dependencies: MusicNowDependencies = {}) {
       const before = c.req.query("before");
       const until = before && !Number.isNaN(Date.parse(before)) ? new Date(before).toISOString() : "9999";
       const after = cursorFrom(c, 2);
-      const { results } = await c.env.DB.prepare(
-        `SELECT * FROM music_plays WHERE played_at < ?${after ? " AND (played_at < ? OR (played_at = ? AND id < ?))" : ""}
-         ORDER BY played_at DESC, id DESC LIMIT ?`,
-      ).bind(until, ...(after ? [after[0], after[0], after[1]] : []), limit + 1).all<{ id: number; played_at: string }>();
-      const total = await c.env.DB.prepare("SELECT COUNT(*) AS n, MIN(played_at) AS since FROM music_plays").first();
+      // The page and the total don't depend on each other: one round trip (ADR 0012).
+      const [plays, totals] = await c.env.DB.batch([
+        c.env.DB.prepare(
+          `SELECT * FROM music_plays WHERE played_at < ?${after ? " AND (played_at < ? OR (played_at = ? AND id < ?))" : ""}
+           ORDER BY played_at DESC, id DESC LIMIT ?`,
+        ).bind(until, ...(after ? [after[0], after[0], after[1]] : []), limit + 1),
+        c.env.DB.prepare("SELECT COUNT(*) AS n, MIN(played_at) AS since FROM music_plays"),
+      ]);
+      const results = (plays.results ?? []) as Array<{ id: number; played_at: string }>;
+      const total = (totals.results?.[0] ?? null) as Record<string, unknown> | null;
       const { items, next_cursor } = page(results, limit, (p) => [p.played_at, p.id]);
       return list(c, items, next_cursor, { total });
     } catch (error) {

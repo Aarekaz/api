@@ -385,12 +385,17 @@ app.get("/routines", async (c) => {
 app.get("/next", async (c) => {
   const today = c.req.query("today");
   if (!isDay(today)) return fail(c, 400, "today must look like 2026-11-24");
-  const { results } = await c.env.DB.prepare("SELECT * FROM training_routines WHERE archived = 0 ORDER BY position, created_at").all();
-  const routines = (results as Record<string, unknown>[]).map(present) as unknown as RotationRoutine[];
-  const last = await c.env.DB.prepare(
-    "SELECT day, routine_id FROM training_sets WHERE routine_id IS NOT NULL AND day <= ? ORDER BY day DESC, done_at DESC LIMIT 1",
-  ).bind(today).first<{ day: string; routine_id: string }>();
-  const pick = await c.env.DB.prepare("SELECT routine_id FROM training_picks WHERE day = ?").bind(today).first<{ routine_id: string }>();
+  // Three independent reads, one round trip (ADR 0012).
+  const [routineRows, lastRows, pickRows] = await c.env.DB.batch([
+    c.env.DB.prepare("SELECT * FROM training_routines WHERE archived = 0 ORDER BY position, created_at"),
+    c.env.DB.prepare(
+      "SELECT day, routine_id FROM training_sets WHERE routine_id IS NOT NULL AND day <= ? ORDER BY day DESC, done_at DESC LIMIT 1",
+    ).bind(today),
+    c.env.DB.prepare("SELECT routine_id FROM training_picks WHERE day = ?").bind(today),
+  ]);
+  const routines = ((routineRows.results ?? []) as Record<string, unknown>[]).map(present) as unknown as RotationRoutine[];
+  const last = (lastRows.results?.[0] ?? null) as { day: string; routine_id: string } | null;
+  const pick = (pickRows.results?.[0] ?? null) as { routine_id: string } | null;
   const planned = nextInRotation(routines, last ?? null, today);
   return c.json({ ...withPick(planned, routines, pick?.routine_id ?? null), last_day: last?.day ?? null, last_routine_id: last?.routine_id ?? null });
 });
@@ -457,13 +462,15 @@ app.delete("/sets", async (c) => {
 app.get("/day", async (c) => {
   const day = c.req.query("day");
   if (!isDay(day)) return fail(c, 400, "day must look like 2026-11-24");
-  const sets = await c.env.DB.prepare("SELECT * FROM training_sets WHERE day = ? ORDER BY exercise, set_number").bind(day).all();
-  const last = await c.env.DB.prepare(
-    `SELECT s.exercise, s.day, s.set_number, s.reps, s.weight, s.unit FROM training_sets AS s
-     JOIN (SELECT exercise, MAX(day) AS day FROM training_sets WHERE day < ? GROUP BY exercise) AS l
-       ON l.exercise = s.exercise AND l.day = s.day ORDER BY s.exercise, s.set_number`,
-  ).bind(day).all();
-  return c.json({ day, sets: sets.results, last: last.results });
+  const [sets, last] = await c.env.DB.batch([
+    c.env.DB.prepare("SELECT * FROM training_sets WHERE day = ? ORDER BY exercise, set_number").bind(day),
+    c.env.DB.prepare(
+      `SELECT s.exercise, s.day, s.set_number, s.reps, s.weight, s.unit FROM training_sets AS s
+       JOIN (SELECT exercise, MAX(day) AS day FROM training_sets WHERE day < ? GROUP BY exercise) AS l
+         ON l.exercise = s.exercise AND l.day = s.day ORDER BY s.exercise, s.set_number`,
+    ).bind(day),
+  ]);
+  return c.json({ day, sets: sets.results ?? [], last: last.results ?? [] });
 });
 
 /**
