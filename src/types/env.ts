@@ -3,6 +3,8 @@ export interface Env {
   R2_BUCKET: R2Bucket;
   /** Private bucket (no public domain): journal photos, note photos (notes/), backups. */
   R2_PRIVATE?: R2Bucket;
+  /** Optional Cloudflare Images binding: Photography thumbnails on upload (services/photo-thumbs.ts). */
+  IMAGES?: ImagesBinding;
   API_TOKEN: string;
   /** Optional read-only token for the website: GETs of the routes it reads only (lib/site-reads.ts). */
   SITE_TOKEN?: string;

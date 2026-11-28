@@ -44,6 +44,7 @@ import { directUpload, presign, presignedPut } from "../lib/uploads";
 import { UPLOAD_KINDS } from "../services/upload-token";
 import { applyPhotoVisibility, isPhotoFileName, photoFileName } from "../services/photo-privacy";
 import { photoResponse } from "../lib/private-photos";
+import { ensureThumb } from "../services/photo-thumbs";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -235,6 +236,18 @@ openApiRegistry.registerPath({
   responses: okResponses(genericObjectSchema),
 });
 
+openApiRegistry.registerPath({
+  method: "post",
+  path: "/v1/photos/thumbs",
+  tags: [TAG],
+  summary: "Make thumbnails for photos that have none",
+  description: "For photos uploaded before thumbnails, or with thumb_url left out: makes an 800 px WebP beside each original "
+    + "(same bucket, so a hidden photo's thumbnail is private) and sets thumb_url. Lists what has none; ?apply=1 makes up to "
+    + "?limit= of them (default 20, at most 50). Needs the IMAGES binding; without it nothing is made.",
+  security: authSecurity,
+  responses: okResponses(genericObjectSchema),
+});
+
 // Route handlers
 app.get("/", async (c) => {
   const query = c.req.query();
@@ -321,6 +334,11 @@ app.post("/", async (c) => {
     .run();
 
   const id = Number(inserted.meta.last_row_id);
+  // A thumbnail made on upload is picked up when the client didn't send one.
+  if (id && validation.data.thumb_url == null) {
+    const thumb = await ensureThumb(c.env, validation.data.url, false);
+    if (thumb) await c.env.DB.prepare("UPDATE photos SET thumb_url = ? WHERE id = ?").bind(thumb, id).run();
+  }
   if (id) await applyPhotoVisibility(c.env, id);
   return c.json({ ok: true, created_at: createdAt }, 201);
 });
@@ -357,6 +375,30 @@ app.post("/privacy", async (c) => {
   return c.json({ ok: true, applied: apply, checked: rows.results?.length ?? 0, moves, unmovable });
 });
 app.put("/upload-presigned", presignedPut("photo"));
+
+/** POST /v1/photos/thumbs (?apply=1&limit=20): thumbnails for photos without one (services/photo-thumbs.ts). */
+app.post("/thumbs", async (c) => {
+  const apply = c.req.query("apply") === "1";
+  const limit = Math.min(Math.max(Number(c.req.query("limit")) || 20, 1), 50);
+  const rows = await c.env.DB.prepare(
+    "SELECT id, url FROM photos WHERE thumb_url IS NULL OR thumb_url = '' OR thumb_url = url ORDER BY id",
+  ).all<{ id: number; url: string | null }>();
+  const missing = rows.results ?? [];
+  if (!c.env.IMAGES) return c.json({ ok: true, applied: false, available: false, missing: missing.length, made: [] });
+  const made: Array<{ id: number; thumb_url: string }> = [];
+  const failed: number[] = [];
+  if (apply) {
+    for (const row of missing.slice(0, limit)) {
+      const thumb = await ensureThumb(c.env, row.url);
+      if (!thumb) { failed.push(row.id); continue; }
+      await c.env.DB.prepare("UPDATE photos SET thumb_url = ? WHERE id = ?").bind(thumb, row.id).run();
+      await applyPhotoVisibility(c.env, row.id);
+      const after = await c.env.DB.prepare("SELECT thumb_url FROM photos WHERE id = ?").bind(row.id).first<{ thumb_url: string }>();
+      made.push({ id: row.id, thumb_url: after?.thumb_url ?? thumb });
+    }
+  }
+  return c.json({ ok: true, applied: apply, available: true, missing: missing.length - made.length, made, failed });
+});
 
 app.put("/:id", async (c) => {
   const id = idParam(c);

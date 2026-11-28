@@ -46,6 +46,12 @@ bucket_name = "api-media"
 binding = "R2_PRIVATE"
 bucket_name = "api-private"
 
+# Photography thumbnails on upload (services/photo-thumbs.ts). Off until the
+# account's Cloudflare Images plan is confirmed; uncomment to turn it on, then
+# POST /v1/photos/thumbs?apply=1 makes them for older photos.
+# [images]
+# binding = "IMAGES"
+
 [[queues.producers]]
 binding = "WHOOP_SYNC_QUEUE"
 queue = "whoop-health-sync"

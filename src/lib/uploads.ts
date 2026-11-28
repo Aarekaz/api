@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import type { Env } from "../types/env";
 import { fileExtensionForContentType } from "../utils/content-type";
 import { privatePhotoUrl } from "../services/photo-privacy";
+import { makeThumb } from "../services/photo-thumbs";
 import {
   UPLOAD_KINDS,
   imageType,
@@ -37,8 +38,17 @@ const target = (env: Env, kind: UploadKind): { bucket: R2Bucket; url: (key: stri
     ? { bucket: env.R2_PRIVATE, url: (key) => privatePhotoUrl(env, key.slice(UPLOAD_KINDS.photo.prefix.length)) }
     : { bucket: env.R2_BUCKET, url: (key) => publicUrl(env, key) };
 
-const stored = (c: Ctx, kind: UploadKind, key: string, contentType: string) =>
-  c.json({ ok: true, key, url: target(c.env, kind).url(key), content_type: contentType }, 201);
+/**
+ * The reply to a stored upload. A photo also gets its thumbnail when the Images
+ * binding is there (`thumb_key`, `thumb_url`, in the same bucket as the photo);
+ * without it the reply is as it always was.
+ */
+const stored = async (c: Ctx, kind: UploadKind, key: string, contentType: string) => {
+  const where = target(c.env, kind);
+  const thumbKey = kind === "photo" ? await makeThumb(c.env, where.bucket, key) : null;
+  const thumb = thumbKey ? { thumb_key: thumbKey, thumb_url: where.url(thumbKey) } : {};
+  return c.json({ ok: true, key, url: where.url(key), content_type: contentType, ...thumb }, 201);
+};
 
 const newKey = (kind: UploadKind, contentType: string) =>
   `${UPLOAD_KINDS[kind].prefix}${crypto.randomUUID()}.${fileExtensionForContentType(contentType)}`;
