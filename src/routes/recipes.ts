@@ -473,7 +473,7 @@ app.post("/tags/rename", async (c) => {
 
 /** DELETE /v1/recipes/tags/:tag : takes a tag off every recipe. The recipes stay. */
 app.delete("/tags/:tag", async (c) => {
-  const tag = decodeURIComponent(c.req.param("tag")).trim();
+  const tag = c.req.param("tag").trim();  // Hono has already decoded it
   if (!tag) throw new RecipeError("No tag given", 400);
   return c.json({ changed: await retag(c.env, tag, null) });
 });
